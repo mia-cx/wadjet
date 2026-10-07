@@ -25,7 +25,7 @@ _Avoid_: Screencast, video capture
 ### Customisation
 
 **Workflow**:
-A named, hotkey-bound recipe: a Capture Mode, then After-Capture Steps, then an optional Destination, then After-Upload Steps.
+A named, hotkey-bound recipe: a Capture Mode, then an ordered list of After-Capture Steps, an optional Destination, and an ordered list of After-Upload Steps.
 _Avoid_: Profile, preset, task
 
 **Step**:

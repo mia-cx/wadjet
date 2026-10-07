@@ -1,0 +1,22 @@
+# wadjet
+
+wadjet is a macOS-native capture tool in the spirit of ShareX, built for Mia's own capture and upload workflows.
+It starts as a private Swift app for macOS 26+.
+
+## Current effort
+
+The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
+The research is complete. The Workflow model is the next decision.
+There is no app implementation yet.
+
+## Direction
+
+- Capture the cursor and select regions on a Freeze Frame.
+- Use Workflows to control capture, local outputs, upload, and post-upload behavior.
+- Mia chooses the order of Steps separately after capture and after upload.
+- Import custom Destinations from ShareX's `.sxcu` format.
+- Include screenshot capture, MP4 and GIF Recording, capture history, OCR, Pin, and Color Picker in v1.
+- Keep settings in a human-readable config file and secrets in the Keychain.
+
+Scrolling capture, an annotation editor, and public release are later efforts.
+Use [CONTEXT.md](CONTEXT.md) for the glossary and the map's linked tickets for decision details.
