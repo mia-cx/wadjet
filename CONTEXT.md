@@ -25,11 +25,12 @@ _Avoid_: Screencast, video capture
 ### Customisation
 
 **Workflow**:
-A named, hotkey-bound recipe: a Capture Mode, then an ordered list of After-Capture Steps, an optional Destination, and an ordered list of After-Upload Steps.
+A named recipe with an optional hotkey: a Capture Mode, then an ordered list of After-Capture Steps, an optional Destination, and an ordered list of After-Upload Steps.
 _Avoid_: Profile, preset, task
 
 **Step**:
-One action in a Workflow's pipeline, e.g. save to disk, copy image, copy link, show toast. Steps run either after capture or after upload.
+One configured action in a Workflow's pipeline, run after capture or after upload, e.g. save to disk or copy image.
+A Workflow can repeat an action as separate Steps, each with its own options.
 _Avoid_: Action, task, hook
 
 **Destination**:
