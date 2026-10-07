@@ -14,6 +14,8 @@ There is no app implementation yet.
 - Capture the cursor and select regions on a Freeze Frame.
 - Use Workflows to control capture, local outputs, upload, and post-upload behavior.
 - Mia chooses the order of Steps separately after capture and after upload.
+- Use built-in Steps in v1. Custom command and script Steps are deferred.
+- After-capture Steps are Save file, Copy image, Copy file, Open in an app, and Show toast.
 - Import custom Destinations from ShareX's `.sxcu` format.
 - Include screenshot capture, MP4 and GIF Recording, capture history, OCR, Pin, and Color Picker in v1.
 - Keep settings in a human-readable config file and secrets in the Keychain.
