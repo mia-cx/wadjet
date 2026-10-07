@@ -16,6 +16,8 @@ There is no app implementation yet.
 - Mia chooses the order of Steps separately after capture and after upload.
 - Use built-in Steps in v1. Custom command and script Steps are deferred.
 - After-capture Steps are Save file, Copy image, Copy file, Open in an app, and Show toast.
+- After-upload Steps retain that catalogue and add Copy link, Copy image + link in one clipboard item, and Open link.
+- Order Copy image before Copy link for the image-then-link sequence.
 - Import custom Destinations from ShareX's `.sxcu` format.
 - Include screenshot capture, MP4 and GIF Recording, capture history, OCR, Pin, and Color Picker in v1.
 - Keep settings in a human-readable config file and secrets in the Keychain.
