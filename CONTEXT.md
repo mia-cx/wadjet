@@ -7,17 +7,22 @@ A macOS-native screenshot and screen-recording utility where every capture runs 
 ### Capturing
 
 **Capture**:
-One screenshot or recording produced by running a Workflow, together with its file and any upload result.
+One Screenshot or Recording made with a Capture or Record Tool and processed by a Workflow, together with its file and any upload result.
 The file is temporary and wadjet clears it after a while, unless a Save file Step keeps a permanent copy.
 _Avoid_: Shot, grab, snip
 
-**Capture Mode**:
-What a Workflow captures and how the user picks it: region, window, or full screen, as a still image or a recording.
-_Avoid_: Capture type
-
 **Freeze Frame**:
-A still of the screen, cursor included, taken the moment a capture starts; interactive selection happens on the Freeze Frame instead of the live screen.
+A still of every screen, cursor included, taken the moment a Shortcut or the menu opens a Tool; every Tool works on the Freeze Frame instead of the live screen.
 _Avoid_: Frozen screen, snapshot
+
+**Tool**:
+One thing to do on the Freeze Frame, picked from the toolbar: Capture region, window, or screen; Record region, window, or screen; Pick colour; Copy text; or Measure.
+Capture and Record Tools produce a Capture for a Workflow. The other Tools put their result on the clipboard and run no Workflow.
+_Avoid_: Capture Mode, mode
+
+**Screenshot**:
+A Capture that is a still image.
+_Avoid_: Snap, still
 
 **Recording**:
 A Capture that is a video or GIF rather than a still image.
@@ -25,8 +30,13 @@ _Avoid_: Screencast, video capture
 
 ### Customisation
 
+**Shortcut**:
+A hotkey that opens the Freeze Frame on one Tool with set options, and can name the Workflow that processes the Capture.
+_Avoid_: Hotkey binding, keybind
+
 **Workflow**:
-A named recipe with an optional hotkey: a Capture Mode, then an ordered list of After-Capture Steps, an optional Destination, and an ordered list of After-Upload Steps.
+A named recipe for either Screenshots or Recordings: an ordered list of After-Capture Steps, an optional Destination, and an ordered list of After-Upload Steps.
+Screenshots and Recordings each have a default Workflow, which a Shortcut or the toolbar can override.
 _Avoid_: Profile, preset, task
 
 **Step**:
