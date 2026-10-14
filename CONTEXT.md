@@ -8,6 +8,7 @@ A macOS-native screenshot and screen-recording utility where every capture runs 
 
 **Capture**:
 One screenshot or recording produced by running a Workflow, together with its file and any upload result.
+The file is temporary and wadjet clears it after a while, unless a Save file Step keeps a permanent copy.
 _Avoid_: Shot, grab, snip
 
 **Capture Mode**:
