@@ -49,5 +49,5 @@ Where a Workflow uploads a Capture: a Wadjet Server, Google Drive, Dropbox, OneD
 _Avoid_: Uploader, host, service
 
 **Wadjet Server**:
-Any server that speaks wadjet's own upload protocol: upload, list, and delete, with an API key or OAuth. i.mia.cx is one.
-_Avoid_: Backend, i.mia.cx (when meaning any such server)
+Any server that speaks wadjet's own upload protocol: upload, list, and delete, with an API key or OAuth. wadjet ships one, and w.mia.cx will run it.
+_Avoid_: Backend, i.mia.cx

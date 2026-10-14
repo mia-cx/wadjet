@@ -6,7 +6,7 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
-The research, the Workflow model, the Tools, upload behavior, Recording UX, and capture history are settled.
+The research, the Workflow model, the Tools, upload behavior, Recording UX, capture history, and the Wadjet Server are settled.
 There is no app implementation yet.
 
 ## Direction
@@ -42,6 +42,11 @@ There is no app implementation yet.
 - A Recording goes straight to its Workflow. An optional Trim video Step opens a trim window first.
 - v1 Destinations are Wadjet Servers, Google Drive, Dropbox, OneDrive, S3-compatible storage, WebDAV, SFTP, and Custom `.sxcu` imports. Imgur and FTP are out.
 - A Wadjet Server supports upload, list, and delete, so history can span several Macs. It authenticates with an API key or OAuth, through its own OAuth server or an external IdP.
+- The protocol starts at `/.well-known/wadjet`, uploads large files in resumable parts, takes a wadjet-made thumbnail per file, and serves short links.
+- wadjet ships a Wadjet Server like Caelestis's backend: one Hono codebase for Cloudflare (Worker, R2, D1), Docker (filesystem or S3, SQLite or Postgres), and a Helm chart.
+- v1 server auth is an API key plus an external IdP (Hecate). It serves a `.sxcu` and single-file deletion links so ShareX on Windows can share it.
+- The repo is a Turborepo: the macOS app and the server live under `apps/`, shared code under `packages/`.
+- i.mia.cx stays as it is. w.mia.cx runs the Wadjet Server once it can replace iShare.
 - S3, WebDAV, and SFTP links come from a public URL prefix the user sets. Cloud drives create an anyone-with-the-link share.
 - Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.
 - Failed uploads retry 3 times on network and server errors, then offer Retry. Offline uploads fail at once instead of queueing.
