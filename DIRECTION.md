@@ -6,7 +6,7 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
-The research, the Workflow model, and the Tools are settled.
+The research, the Workflow model, the Tools, and upload behavior are settled.
 There is no app implementation yet.
 
 ## Direction
@@ -32,7 +32,12 @@ There is no app implementation yet.
 - Every Capture has a file. It is temporary unless a Save file Step keeps a permanent copy.
 - Steps have no conditions. A failed Step is skipped, the rest still run, and the error shows in the toast and history.
 - A new Capture can start while earlier Captures still run their Steps or upload. Only one Freeze Frame or Recording is on screen at a time.
-- Import custom Destinations from ShareX's `.sxcu` format.
+- v1 Destinations are Wadjet Servers, Google Drive, Dropbox, OneDrive, S3-compatible storage, WebDAV, SFTP, and Custom `.sxcu` imports. Imgur and FTP are out.
+- A Wadjet Server supports upload, list, and delete, so history can span several Macs. It authenticates with an API key or OAuth, through its own OAuth server or an external IdP.
+- S3, WebDAV, and SFTP links come from a public URL prefix the user sets. Cloud drives create an anyone-with-the-link share.
+- Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.
+- Failed uploads retry 3 times on network and server errors, then offer Retry. Offline uploads fail at once instead of queueing.
+- The toast shows upload progress and Cancel. Known size limits are checked before uploading.
 - Include Screenshots, MP4 and GIF Recording, capture history, and every Tool above in v1.
 - Keep settings in a human-readable config file and secrets in the Keychain.
 
@@ -44,4 +49,5 @@ Upload starts disabled. wadjet ships no Shortcuts, like iShare, and flags a hotk
 ## Later efforts
 
 Scrolling capture, an annotation editor, and public release are later efforts.
+A free public Wadjet Server with 30-day storage may come with public release.
 Use [CONTEXT.md](CONTEXT.md) for the glossary and the map's linked tickets for decision details.

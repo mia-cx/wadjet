@@ -45,5 +45,9 @@ A Workflow can repeat an action as separate Steps, each with its own options.
 _Avoid_: Action, task, hook
 
 **Destination**:
-Where a Workflow uploads a Capture. Custom Destinations are defined in ShareX's `.sxcu` format.
+Where a Workflow uploads a Capture: a Wadjet Server, Google Drive, Dropbox, OneDrive, S3-compatible storage, WebDAV, SFTP, or a Custom Destination defined in ShareX's `.sxcu` format.
 _Avoid_: Uploader, host, service
+
+**Wadjet Server**:
+Any server that speaks wadjet's own upload protocol: upload, list, and delete, with an API key or OAuth. i.mia.cx is one.
+_Avoid_: Backend, i.mia.cx (when meaning any such server)
