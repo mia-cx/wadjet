@@ -6,7 +6,7 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
-The research, the Workflow model, the Tools, and upload behavior are settled.
+The research, the Workflow model, the Tools, upload behavior, and Recording UX are settled.
 There is no app implementation yet.
 
 ## Direction
@@ -32,6 +32,14 @@ There is no app implementation yet.
 - Every Capture has a file. It is temporary unless a Save file Step keeps a permanent copy.
 - Steps have no conditions. A failed Step is skipped, the rest still run, and the error shows in the toast and history.
 - A new Capture can start while earlier Captures still run their Steps or upload. Only one Freeze Frame or Recording is on screen at a time.
+- Recordings can pause, so wadjet writes them with its own `AVAssetWriter` instead of ScreenCaptureKit's file recorder.
+- Recording controls (time, Pause, Stop) sit in the notch toolbar or on the menu bar icon, set per Recording or by Shortcut. The Shortcut again stops.
+- Record Tool options: countdown, system audio, microphone, cursor, click circles. All off except the cursor by default.
+- A resized window is scaled into the Recording's starting size, with bars where the shape changes.
+- MP4 resolution and fps are configurable (1920 px, 30 fps by default) with no length limit.
+- GIFs default to 960 px, 15 fps, a 60 s max, 128 colours, and ordered dithering, all configurable.
+- wadjet bundles an LGPL ffmpeg build. v1 encodes GIFs with it; a ditherette GPU encoder replaces it later.
+- A Recording goes straight to its Workflow. An optional Trim video Step opens a trim window first.
 - v1 Destinations are Wadjet Servers, Google Drive, Dropbox, OneDrive, S3-compatible storage, WebDAV, SFTP, and Custom `.sxcu` imports. Imgur and FTP are out.
 - A Wadjet Server supports upload, list, and delete, so history can span several Macs. It authenticates with an API key or OAuth, through its own OAuth server or an external IdP.
 - S3, WebDAV, and SFTP links come from a public URL prefix the user sets. Cloud drives create an anyone-with-the-link share.
