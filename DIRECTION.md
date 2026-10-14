@@ -6,7 +6,7 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
-The research, the Workflow model, the Tools, upload behavior, and Recording UX are settled.
+The research, the Workflow model, the Tools, upload behavior, Recording UX, and capture history are settled.
 There is no app implementation yet.
 
 ## Direction
@@ -46,6 +46,8 @@ There is no app implementation yet.
 - Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.
 - Failed uploads retry 3 times on network and server errors, then offer Retry. Offline uploads fail at once instead of queueing.
 - The toast shows upload progress and Cancel. Known size limits are checked before uploading.
+- History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default.
+- History searches the text inside Screenshots, filters by kind, Destination, and date, and merges Wadjet Server listings from other Macs.
 - Include Screenshots, MP4 and GIF Recording, capture history, and every Tool above in v1.
 - Keep settings in a human-readable config file and secrets in the Keychain.
 
