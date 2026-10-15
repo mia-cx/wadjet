@@ -1619,7 +1619,8 @@ struct StateHUDView: View {
         }
         .font(.system(size: 10, design: .monospaced))
         .padding(8)
-        .background(Color(nsColor: NSColor(calibratedWhite: 1, alpha: 0.94)))
+        .foregroundStyle(.white)
+        .background(Color.black.opacity(0.8))
         .overlay(RoundedRectangle(cornerRadius: 8).stroke(.orange, style: StrokeStyle(lineWidth: 1, dash: [4])))
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .frame(width: 320, alignment: .leading)
