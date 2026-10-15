@@ -57,7 +57,7 @@ final class ProtoState: ObservableObject {
     @Published var islandMode = false        // prototype: island even with notch
     @Published var uploadMode = 0            // 0 succeed, 1 fail, 2 offline
     @Published var stepErrorNext = false
-    @Published var showStateHUD = true
+    @Published var showStateHUD = false
     var workflows: [String] {
         guard let tool else { return [] }
         switch tool.kind {
@@ -526,7 +526,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.level = .floating; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
         p.collectionBehavior = [.canJoinAllSpaces]; p.ignoresMouseEvents = true
-        h.frame.origin = .zero; p.contentView = h; p.orderFront(nil)
+        h.frame.origin = .zero; p.contentView = h; if ProtoState.shared.showStateHUD { p.orderFront(nil) }
         hudPanel = p
     }
 }
