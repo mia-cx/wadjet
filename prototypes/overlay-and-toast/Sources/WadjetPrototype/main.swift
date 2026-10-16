@@ -42,7 +42,7 @@ final class ProtoState: ObservableObject {
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
     @Published var colourFmt = "Hex" // Hex, rgb(), hsl(), oklch(), lab(), SwiftUI
-    @Published var measureMode = "Region" // Region, Line, Edges X, Edges Y, Edges X+Y
+    @Published var measureMode = "Spacing" // Bounds, Spacing, Horizontal, Vertical
     @Published var countdown = "Off" // Off 3 5 10
     @Published var sysAudio = false
     @Published var mic = false
@@ -97,6 +97,14 @@ final class Freeze {
         let y = min(max(0, Int((f.screen.frame.height - pt.y) * sy)), f.bitmapHeight - 1)
         let i = (y * f.bitmapWidth + x) * 4
         return (bm[i + 1], bm[i + 2], bm[i + 3]) // ARGB -> RGB
+    }
+    // direct read in bitmap-pixel coords (x right, y down from the top)
+    func pixelXY(_ x: Int, _ yTop: Int, on d: Int) -> (UInt8, UInt8, UInt8) {
+        guard d < displays.count, let bm = displays[d].bitmap else { return (0, 0, 0) }
+        let f = displays[d]
+        let x = min(max(0, x), f.bitmapWidth - 1), y = min(max(0, yTop), f.bitmapHeight - 1)
+        let i = (y * f.bitmapWidth + x) * 4
+        return (bm[i + 1], bm[i + 2], bm[i + 3])
     }
     func crop(rect: CGRect, on d: Int, hdr: Bool = false) -> CGImage? {
         guard d < displays.count else { return nil }
@@ -513,8 +521,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: Esc hotkey (registered only while something cancellable is active;
     // a Recording never counts, so Esc reaches the app being recorded)
     var escRef: EventHotKeyRef?
+    var measureRefs: [EventHotKeyRef?] = []
     var escRegistered = false
     var escHandlerInstalled = false
+    func setMeasureMode(_ i: Int) {
+        let modes = ["Bounds", "Spacing", "Horizontal", "Vertical"]
+        guard ProtoState.shared.tool == .measure, modes.indices.contains(i) else { return }
+        ProtoState.shared.measureMode = modes[i]
+        ProtoLog.line("measure mode -> \(modes[i])")
+        for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
+    }
     func updateEscHotkey() {
         let s = ProtoState.shared
         let active = s.phase == .frozen || s.phase == .countdown
@@ -526,9 +542,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 InstallEventHandler(GetApplicationEventTarget(), { _, ev, _ -> OSStatus in
                     var id = EventHotKeyID()
                     GetEventParameter(ev, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
-                    guard id.id == 10 else { return OSStatus(eventNotHandledErr) }
-                    DispatchQueue.main.async { AppDelegate.shared?.handleEsc() }
-                    return noErr
+                    if id.id == 10 { DispatchQueue.main.async { AppDelegate.shared?.handleEsc() }; return noErr }
+                    if (20...23).contains(id.id) { // Ctrl+1..4 = Measure modes
+                        DispatchQueue.main.async { AppDelegate.shared?.setMeasureMode(Int(id.id) - 20) }
+                        return noErr
+                    }
+                    return OSStatus(eventNotHandledErr)
                 }, 1, &type, nil, nil)
             }
             var ref: EventHotKeyRef?
@@ -536,8 +555,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                                           GetApplicationEventTarget(), 0, &ref)
             escRef = ref; escRegistered = (err == noErr && ref != nil)
             ProtoLog.line("esc hotkey registered (err=\(err))")
+            // Ctrl+1..4 while anything is up (cheap to keep registered; only the
+            // Measure tool acts on them)
+            for (i, vk) in [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4].enumerated() {
+                var r: EventHotKeyRef?
+                RegisterEventHotKey(UInt32(vk), UInt32(controlKey), EventHotKeyID(signature: OSType(0x77646A74), id: UInt32(20 + i)),
+                                    GetApplicationEventTarget(), 0, &r)
+                measureRefs.append(r)
+            }
         } else if !active && escRegistered {
             if let r = escRef { UnregisterEventHotKey(r) }
+            for r in measureRefs { if let r { UnregisterEventHotKey(r) } }
+            measureRefs = []
             escRef = nil; escRegistered = false
             ProtoLog.line("esc hotkey unregistered")
         }
@@ -651,6 +680,7 @@ final class OverlayController {
     var toolbarPanel: NSPanel?
     var menuPanel: NSPanel?
     var menuMonitor: Any?
+    var keyMonitor: Any?
     init(app: AppDelegate) { self.app = app }
 
     // the *visible* toolbar shape in screen coords — the click-through panel is
@@ -794,6 +824,16 @@ final class OverlayController {
             p.makeFirstResponder(ov)
             panels.append(p)
         }
+        // borderless nonactivating panels can't be key windows, so keyDown on
+        // the view never fires — route keys through a local monitor instead
+        keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+            guard let self else { return e }
+            for p in self.panels {
+                if let ov = p.contentView?.subviews.compactMap({ $0 as? OverlayNSView }).first,
+                   ov.handleKey(e) { return nil }
+            }
+            return e
+        }
         showToolbar()
         app?.updateEscHotkey()
     }
@@ -834,10 +874,11 @@ final class OverlayController {
         if p == .frozen || (p == .recording && ProtoState.shared.showIslandWhileRecording) { showToolbar(onDisplay: forced) }
     }
     func closeAllPanelsOnly() {
-        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.measurePop?.close() }; $0.close() }
+        panels.forEach { $0.close() }
         panels = []
         hideMenu()
         if ProtoState.shared.openMenu != nil { ProtoState.shared.openMenu = nil }
+        if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanel?.close(); toolbarPanel = nil
     }
@@ -857,11 +898,14 @@ final class OverlayController {
 final class OverlayNSView: NSView {
     let di: Int
     weak var ctrl: OverlayController?
-    var dragStart: CGPoint?, sel: CGRect?, moving = false, lastPt = CGPoint.zero
+    var dragStart: CGPoint?, sel: CGRect?
     var hoverWin: CGRect?, hoverPt = CGPoint.zero
-    var guideLines: [(axis: Int, a: CGFloat, b: CGFloat, c: CGFloat)] = []
-    var measureCopy: String?
-    var measurePop: NSPanel?
+    // Screen Ruler state: found edges in view points around the pointer
+    var rulerX: (lo: CGFloat, hi: CGFloat)?
+    var rulerY: (lo: CGFloat, hi: CGFloat)?
+    var tolerance = 30
+    var tolShownUntil = Date.distantPast
+    var boundsBoxes: [CGRect] = [] // Bounds boxes kept on screen via Shift
     init(frame f: NSRect, displayIndex: Int, controller: OverlayController) {
         di = displayIndex; ctrl = controller
         super.init(frame: f)
@@ -881,8 +925,8 @@ final class OverlayNSView: NSView {
     override func draw(_ r: NSRect) {
         let ctx = NSGraphicsContext.current!.cgContext
         ctx.clear(bounds) // the frozen frame is drawn by the layer beneath
-        let t = tool, mm = measureMode
-        if t == .capRegion || t == .recRegion || t == .copyText || (t == .measure && mm == "Region") {
+        let t = tool
+        if t == .capRegion || t == .recRegion || t == .copyText {
             if let s = sel {
                 // dim everything except the selection; inside stays untouched
                 let dim = NSColor.black.withAlphaComponent(0.35)
@@ -904,30 +948,49 @@ final class OverlayNSView: NSView {
             NSColor.systemBlue.withAlphaComponent(0.28).setFill()
             NSBezierPath(roundedRect: w, xRadius: 10, yRadius: 10).fill()
         }
-        if t == .measure && mm == "Line", let st = dragStart {
-            let p = NSBezierPath(); NSColor.systemBlue.setStroke(); p.lineWidth = 1.5
-            p.move(to: st); p.line(to: lastPt); p.stroke()
-        }
-        for g in guideLines {
-            let p = NSBezierPath(); NSColor.systemRed.setStroke(); p.lineWidth = 1.5
-            if g.axis == 0 { p.move(to: CGPoint(x: g.a, y: g.c)); p.line(to: CGPoint(x: g.b, y: g.c)) }
-            else { p.move(to: CGPoint(x: g.c, y: g.a)); p.line(to: CGPoint(x: g.c, y: g.b)) }
-            p.stroke()
-            let ticks: [(CGFloat, CGFloat)] = g.axis == 0
-                ? [(g.a, g.c), (g.b, g.c)]
-                : [(g.c, g.a), (g.c, g.b)]
-            for (x, y) in ticks {
-                p.move(to: CGPoint(x: x - 5, y: y)); p.line(to: CGPoint(x: x + 5, y: y))
-                p.move(to: CGPoint(x: x, y: y - 5)); p.line(to: CGPoint(x: x, y: y + 5))
-            }
-            p.stroke()
-        }
-        if !overToolbar { drawLoupe(ctx) }
+        if t == .measure { drawMeasure() }
+        if !overToolbar && t != .measure { drawLoupe(ctx) }
         if let s = sel, t == .capRegion || t == .recRegion {
             let str = "\(Int(s.width)) × \(Int(s.height))"
             let at = CGPoint(x: min(bounds.width - 90, s.maxX + 8), y: min(bounds.height - 26, s.maxY + 8))
             drawBadge(str, at: at)
         }
+    }
+    var rulerOrange: NSColor { NSColor(srgbRed: 1, green: 69.0 / 255, blue: 0, alpha: 1) } // #FF4500
+    func drawMeasure() {
+        let pt = hoverPt
+        rulerOrange.setStroke()
+        // Bounds: dashed outline boxes; pill at the box's bottom-right outside corner
+        for box in boundsBoxes + (measureMode == "Bounds" ? [sel].compactMap { $0 } : []) {
+            let p = NSBezierPath(rect: box); p.lineWidth = 1; p.setLineDash([4, 3], count: 2, phase: 0); p.stroke()
+            drawBadge(fmtDim(box.width) + " × " + fmtDim(box.height),
+                      at: CGPoint(x: min(bounds.width - 90, box.maxX + 6), y: max(4, box.minY - 26)))
+        }
+        guard measureMode != "Bounds" else { return }
+        // crisp 1-pt lines with ~8pt perpendicular feet at each edge
+        if let x = rulerX {
+            let p = NSBezierPath(); p.lineWidth = 1
+            p.move(to: CGPoint(x: x.lo, y: pt.y)); p.line(to: CGPoint(x: x.hi, y: pt.y))
+            for e in [x.lo, x.hi] { p.move(to: CGPoint(x: e, y: pt.y - 4)); p.line(to: CGPoint(x: e, y: pt.y + 4)) }
+            p.stroke()
+        }
+        if let y = rulerY {
+            let p = NSBezierPath(); p.lineWidth = 1
+            p.move(to: CGPoint(x: pt.x, y: y.lo)); p.line(to: CGPoint(x: pt.x, y: y.hi))
+            for e in [y.lo, y.hi] { p.move(to: CGPoint(x: pt.x - 4, y: e)); p.line(to: CGPoint(x: pt.x + 4, y: e)) }
+            p.stroke()
+        }
+        var label = ""
+        if let x = rulerX, let y = rulerY { label = "\(fmtDim(x.hi - x.lo)) × \(fmtDim(y.hi - y.lo))" }
+        else if let x = rulerX { label = fmtDim(x.hi - x.lo) }
+        else if let y = rulerY { label = fmtDim(y.hi - y.lo) }
+        if Date() < tolShownUntil { label += "   tolerance \(tolerance)" }
+        if !label.isEmpty {
+            drawBadge(label, at: CGPoint(x: min(bounds.width - 130, pt.x + 18), y: min(bounds.height - 30, pt.y + 18)))
+        }
+    }
+    func fmtDim(_ v: CGFloat) -> String {
+        v == v.rounded() ? "\(Int(v))" : String(format: "%.1f", v)
     }
     func drawBadge(_ s: String, at p: CGPoint) {
         let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 12), .foregroundColor: NSColor.white]
@@ -1010,7 +1073,22 @@ final class OverlayNSView: NSView {
         } else {
             hoverWin = nil
         }
-        if tool == .measure && measureMode.hasPrefix("Edges") { scanEdges(at: pt) }
+        if tool == .measure {
+            NSCursor.crosshair.set()
+            if measureMode != "Bounds" { scanRuler(at: pt) }
+        } else {
+            NSCursor.arrow.set()
+        }
+        needsDisplay = true
+    }
+    // scroll changes the edge tolerance: +15 up, -15 down, clamped 0...255
+    override func scrollWheel(with e: NSEvent) {
+        guard tool == .measure, measureMode != "Bounds" else { return }
+        let d = e.scrollingDeltaY
+        guard d != 0 else { return }
+        tolerance = min(255, max(0, tolerance + (d > 0 ? 15 : -15)))
+        tolShownUntil = Date().addingTimeInterval(1.2)
+        scanRuler(at: hoverPt)
         needsDisplay = true
     }
     override func mouseDown(with e: NSEvent) {
@@ -1026,54 +1104,58 @@ final class OverlayNSView: NSView {
             let s = fmtColour(c, fmt: ProtoState.shared.colourFmt)
             clipboard(s); showHUD("Copied \(s)", swatch: hexString(c))
             ctrl?.closeAll()
-        case .measure where measureMode.hasPrefix("Edges"):
-            copyMeasure()
+        case .measure where measureMode != "Bounds":
+            if let v = rulerLabel() { copyMeasureAndClose(v) }
         default:
-            dragStart = pt; sel = CGRect(origin: pt, size: .zero); lastPt = pt; moving = false
+            dragStart = pt; sel = CGRect(origin: pt, size: .zero)
         }
         needsDisplay = true
     }
     override func mouseDragged(with e: NSEvent) {
         guard let st = dragStart else { return }
         let pt = convert(e.locationInWindow, from: nil)
-        if true {
-            if e.modifierFlags.contains(.option) {
-                sel = CGRect(x: st.x - abs(pt.x - st.x), y: st.y - abs(pt.y - st.y), width: 2 * abs(pt.x - st.x), height: 2 * abs(pt.y - st.y))
-            } else if e.modifierFlags.contains(.shift) {
-                if tool == .measure && measureMode == "Line" {
-                    let dx = pt.x - st.x, dy = pt.y - st.y, len = max(abs(dx), abs(dy))
-                    let sx2: CGFloat = dx >= 0 ? 1 : -1, sy2: CGFloat = dy >= 0 ? 1 : -1
-                    if abs(dx) < 0.41 * len { lastPt = CGPoint(x: st.x, y: st.y + sy2 * len) }
-                    else if abs(dy) < 0.41 * len { lastPt = CGPoint(x: st.x + sx2 * len, y: st.y) }
-                    else { lastPt = CGPoint(x: st.x + sx2 * len, y: st.y + sy2 * len) }
-                    sel = CGRect(origin: st, size: .zero)
-                } else {
-                    let w = pt.x - st.x, h = pt.y - st.y, m = max(abs(w), abs(h))
-                    sel = rectNorm(st, CGPoint(x: st.x + (w >= 0 ? m : -m), y: st.y + (h >= 0 ? m : -m)))
-                }
-            } else if tool == .measure && measureMode == "Line" {
-                lastPt = pt; sel = CGRect(origin: st, size: .zero)
-            } else {
-                sel = rectNorm(st, pt)
-            }
+        // Bounds ignores Option/Shift: Shift means "keep this box" at mouseUp
+        if tool == .measure && measureMode == "Bounds" {
+            sel = rectNorm(st, pt)
+        } else if e.modifierFlags.contains(.option) {
+            sel = CGRect(x: st.x - abs(pt.x - st.x), y: st.y - abs(pt.y - st.y), width: 2 * abs(pt.x - st.x), height: 2 * abs(pt.y - st.y))
+        } else if e.modifierFlags.contains(.shift) {
+            let w = pt.x - st.x, h = pt.y - st.y, m = max(abs(w), abs(h))
+            sel = rectNorm(st, CGPoint(x: st.x + (w >= 0 ? m : -m), y: st.y + (h >= 0 ? m : -m)))
+        } else {
+            sel = rectNorm(st, pt)
         }
-        if tool == .measure { showMeasurePopover() }
         needsDisplay = true
     }
     override func mouseUp(with e: NSEvent) {
         defer { needsDisplay = true }
         ProtoLog.line("mouseUp \(tool.title) sel=\(sel.debugDescription)")
-        if tool == .measure && (measureMode == "Region" || measureMode == "Line") { showMeasurePopover(); dragStart = nil; return }
+        if tool == .measure, measureMode == "Bounds", let s = sel, dragStart != nil, s.width > 4 && s.height > 4 {
+            dragStart = nil
+            copyMeasure(fmtDim(s.width) + " × " + fmtDim(s.height))
+            if e.modifierFlags.contains(.shift) { boundsBoxes.append(s); sel = nil } // keep the box, stay open
+            else { ctrl?.closeAll() }
+            return
+        }
         guard let s = sel, dragStart != nil else { return }
         dragStart = nil
         if tool == .copyText { copyText(in: s); ctrl?.closeAll(); return }
         if (tool == .capRegion || tool == .recRegion) && s.width > 4 && s.height > 4 { app?.didSelect(s, on: di); return }
         sel = nil
     }
-    override func keyDown(with e: NSEvent) {
-        if e.keyCode == 53 { ctrl?.closeAll() }
-        else if e.keyCode == 36 && tool == .measure { copyMeasure() }
+    // called from the local key monitor (nonactivating panels don't get keyDown)
+    @discardableResult
+    func handleKey(_ e: NSEvent) -> Bool {
+        if e.keyCode == 53 { ctrl?.closeAll(); return true }
+        // Ctrl+1..4 switch Measure modes while the overlay is open
+        if tool == .measure, e.modifierFlags.contains(.control),
+           let i = [18, 19, 20, 21].firstIndex(of: Int(e.keyCode)) {
+            app?.setMeasureMode(i)
+            return true
+        }
+        return false
     }
+    override func keyDown(with e: NSEvent) { _ = handleKey(e) }
     func rectNorm(_ a: CGPoint, _ b: CGPoint) -> CGRect {
         CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(a.x - b.x), height: abs(a.y - b.y))
     }
@@ -1100,95 +1182,49 @@ final class OverlayNSView: NSView {
         }
     }
 
-    // measure
-    func displayPPI() -> CGFloat {
-        let f = fd.screen
-        // per-display: use this screen's displayID
-        guard let num = f.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return 254 }
-        let mm = CGDisplayScreenSize(num)
-        let pxW = CGFloat(CGDisplayPixelsWide(num))
-        return mm.width > 0 ? pxW / (mm.width / 25.4) : 254
+    // Screen Ruler: walk the Freeze Frame bitmap outward from the pointer pixel
+    // until a pixel differs from it by more than `tolerance` (sum of |ΔRGB|)
+    func scanRuler(at pt: CGPoint) {
+        let f = fd
+        let sx = CGFloat(f.bitmapWidth) / bounds.width, sy = CGFloat(f.bitmapHeight) / bounds.height
+        let px = min(max(0, Int(pt.x * sx)), f.bitmapWidth - 1)
+        let py = min(max(0, Int((bounds.height - pt.y) * sy)), f.bitmapHeight - 1) // bitmap rows are top-down
+        let c0 = Freeze.shared.pixelXY(px, py, on: di)
+        func diff(_ x: Int, _ y: Int) -> Bool {
+            let c = Freeze.shared.pixelXY(x, y, on: di)
+            return abs(Int(c.0) - Int(c0.0)) + abs(Int(c.1) - Int(c0.1)) + abs(Int(c.2) - Int(c0.2)) > tolerance
+        }
+        rulerX = nil; rulerY = nil
+        if measureMode != "Vertical" { // Spacing + Horizontal
+            var l = px, r = px
+            while l > 0 && !diff(l - 1, py) { l -= 1 }
+            while r < f.bitmapWidth - 1 && !diff(r + 1, py) { r += 1 }
+            rulerX = (CGFloat(l) / sx, CGFloat(r + 1) / sx) // r is the last matching pixel, so the run ends at r + 1
+        }
+        if measureMode != "Horizontal" { // Spacing + Vertical
+            var t = py, b = py
+            while t > 0 && !diff(px, t - 1) { t -= 1 }
+            while b < f.bitmapHeight - 1 && !diff(px, b + 1) { b += 1 }
+            // bitmap y is top-down; view y is bottom-up
+            rulerY = (bounds.height - CGFloat(b + 1) / sy, bounds.height - CGFloat(t) / sy)
+        }
     }
-    func showMeasurePopover() {
-        let ppi = displayPPI()
-        var html: String; var copy: String; var near: CGPoint
-        if measureMode == "Region" {
-            guard let s = sel else { return }
-            let px = s.width * CGFloat(fd.image.width) / bounds.width, py = s.height * CGFloat(fd.image.height) / bounds.height
-            html = String(format: "%.0f × %.0f pt\n%.0f × %.0f px\n%.2f × %.2f in\n%.2f × %.2f cm",
-                          s.width, s.height, px, py, px / ppi, py / ppi, px / ppi * 2.54, py / ppi * 2.54)
-            copy = String(format: "%.0f × %.0f pt", s.width, s.height)
-            near = CGPoint(x: s.maxX + 12, y: s.maxY + 12)
-        } else {
-            guard let a = dragStart else { return }
-            let dx = lastPt.x - a.x, dy = lastPt.y - a.y
-            let len = hypot(dx, dy), ang = atan2(-dy, dx) * 180 / .pi
-            let px = len * CGFloat(fd.image.width) / bounds.width
-            html = String(format: "%.0f pt ∠ %.1f°\n%.0f px\n%.2f in\n%.2f cm", len, ang, px, px / ppi, px / ppi * 2.54)
-            copy = String(format: "%.0f pt ∠ %.1f°", len, ang)
-            near = CGPoint(x: lastPt.x + 12, y: lastPt.y + 12)
-        }
-        measureCopy = copy
-        showPop(html, near: near)
-    }
-    func showPop(_ s: String, near pt: CGPoint) {
-        if measurePop == nil {
-            let p = NSPanel(contentRect: .zero, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            p.level = .screenSaver + 2; p.isOpaque = false; p.hasShadow = false
-            p.collectionBehavior = [.canJoinAllSpaces]; p.ignoresMouseEvents = true
-            measurePop = p
-        }
-        let lines = s.components(separatedBy: "\n")
-        let h = NSHostingView(rootView: VStack(alignment: .leading, spacing: 1) {
-            ForEach(Array(lines.enumerated()), id: \.offset) { i, l in
-                Text(l).font(i == 0 ? .system(size: 13, weight: .bold) : .system(size: 12))
-            }
-        }.font(.system(size: 11, design: .monospaced)).foregroundStyle(.white)
-         .padding(10).background(Color.black.opacity(0.85)).clipShape(RoundedRectangle(cornerRadius: 8)))
-        h.frame.size = h.fittingSize
-        measurePop?.contentView = h
-        var f = NSRect(origin: .zero, size: h.fittingSize)
-        let screen = fd.screen.frame
-        f.origin = CGPoint(x: min(screen.maxX - f.width - 4, screen.origin.x + pt.x),
-                           y: screen.origin.y + pt.y)
-        measurePop?.setFrame(f, display: true); measurePop?.orderFront(nil)
-    }
-    let ETHR = 28
-    func scanEdges(at pt: CGPoint) {
-        func diff(_ x: CGFloat, _ y: CGFloat) -> Bool {
-            let c0 = Freeze.shared.pixel(at: pt, on: di)
-            let c1 = Freeze.shared.pixel(at: CGPoint(x: x, y: y), on: di)
-            return abs(Int(c1.0) - Int(c0.0)) + abs(Int(c1.1) - Int(c0.1)) + abs(Int(c1.2) - Int(c0.2)) > ETHR
-        }
-        guideLines = []
-        var copy = ""
-        if measureMode != "Edges Y" {
-            var l = pt.x, r = pt.x
-            while l > 0 && !diff(l - 1, pt.y) { l -= 1 }
-            while r < bounds.width - 1 && !diff(r + 1, pt.y) { r += 1 }
-            guideLines.append((0, l, r, pt.y))
-            copy += "\(Int(r - l)) pt wide"
-        }
-        if measureMode != "Edges X" {
-            var t = pt.y, b = pt.y
-            while t > 0 && !diff(pt.x, t - 1) { t -= 1 }
-            while b < bounds.height - 1 && !diff(pt.x, b + 1) { b += 1 }
-            guideLines.append((1, t, b, pt.x))
-            copy += copy.isEmpty ? "\(Int(b - t)) pt tall" : ""
-        }
-        if measureMode == "Edges X+Y", guideLines.count == 2 {
-            let w = guideLines[0].b - guideLines[0].a, h = guideLines[1].b - guideLines[1].a
-            copy = String(format: "%.0f × %.0f pt", w, h)
-        }
-        measureCopy = copy
-        if !copy.isEmpty { showPop(copy + " — click or Enter to copy", near: CGPoint(x: pt.x + 20, y: pt.y + 20)) }
+    func rescanRuler() {
+        if measureMode != "Bounds" { scanRuler(at: hoverPt) }
         needsDisplay = true
     }
-    func copyMeasure() {
-        guard let c = measureCopy else { return }
+    // the label a click would copy, matching what drawMeasure shows
+    func rulerLabel() -> String? {
+        if let x = rulerX, let y = rulerY { return "\(fmtDim(x.hi - x.lo)) × \(fmtDim(y.hi - y.lo))" }
+        if let x = rulerX { return fmtDim(x.hi - x.lo) }
+        if let y = rulerY { return fmtDim(y.hi - y.lo) }
+        return nil
+    }
+    func copyMeasure(_ c: String) {
         clipboard(c); showHUD("Copied \(c)", swatch: nil)
-        measurePop?.close(); measurePop = nil; guideLines = []
-        ctrl?.closeAll()
+    }
+    func copyMeasureAndClose(_ c: String) {
+        copyMeasure(c); ctrl?.closeAll()
     }
     func showHUD(_ text: String, swatch: String?) {
         ToastController.shared?.flash(text, swatch: swatch)
@@ -1252,6 +1288,7 @@ struct ToolbarView: View {
     // is sized from the *measured* row — never a hand-coded width — so the
     // buttons can never be clipped.
     @State var rowSize = CGSize(width: 520, height: 66)
+    @State var glassD: CGFloat = 72 // measured glass button diameter
     // Notched display: the row clears the notch. Island: the row hugs the shape
     // with the same margin on every side, leaving no empty band over the menu bar.
     var rowInset: CGFloat { 10 }
@@ -1365,24 +1402,28 @@ struct ToolbarView: View {
         // button, not clipped onto the label
         let selected = s.tool == t
         // selected: a filled light disc drawn plainly (glass clips its own
-        // overlays); unselected: the standard glass circle
+        // overlays) sized to the measured glass diameter; unselected: the
+        // standard glass circle
         let btn = Button { btnClicked(t) } label: {
             ZStack {
                 if selected { Circle().fill(.white.opacity(0.92)) }
                 Image(systemName: t.symbol).font(.system(size: 22))
                     .foregroundStyle(selected ? Color.black : Color.white)
             }
-            .frame(width: 52, height: 52)
+            .frame(width: selected ? glassD : 52, height: selected ? glassD : 52)
             .overlay(alignment: .bottomTrailing) {
                 if t.hasMenu && selected {
                     Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.8)).offset(x: 5, y: 4)
+                        .foregroundStyle(.black.opacity(0.8)).offset(x: -glassD * 0.08, y: -glassD * 0.08)
                 }
             }
         }
         return Group {
             if selected { btn.buttonStyle(.plain) }
-            else { btn.buttonStyle(.glass).controlSize(.extraLarge).buttonBorderShape(.circle) }
+            else {
+                btn.buttonStyle(.glass).controlSize(.extraLarge).buttonBorderShape(.circle)
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs(glassD - $0) > 1 { glassD = $0 } }
+            }
         }
         .overlay(RightClickCatcher {
             guard t.hasMenu else { return }
@@ -1498,7 +1539,7 @@ struct ToolMenuView: View {
             case .util where tool == .pickColour:
                 section("Copy as", picks: ["Hex", "rgb()", "hsl()", "oklch()", "lab()", "SwiftUI"], current: s.colourFmt) { s.colourFmt = $0 }
             case .util where tool == .measure:
-                section("", picks: ["Region", "Line", "Edges X", "Edges Y", "Edges X+Y"], current: s.measureMode) { s.measureMode = $0 }
+                section("", picks: ["Bounds", "Spacing", "Horizontal", "Vertical"], current: s.measureMode) { s.measureMode = $0 }
             default: EmptyView()
             }
         }
