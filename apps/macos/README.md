@@ -15,12 +15,31 @@ arguments are forwarded to xcodebuild (`./run.sh SWIFT_TREAT_WARNINGS_AS_ERRORS=
 `WADJET_NO_OPEN=1 ./run.sh` builds and signs without launching — that is what CI
 does.
 
+The app runs in the App Sandbox, so its data (Captures, log) lives in its
+container: `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/`.
+
+`WADJET_CLEAR_GLASS=0 ./run.sh` builds the store variant without the private
+clear-glass lens patch (the lens then sits behind the toolbar icons with
+regular glass).
+
 `cd WadjetKit && swift test` runs the UI-free tests (colour formats, Measure
 edge finding) without building the app.
 
 Screen Recording permission is required for Freeze Frame; grant it in
 System Settings > Privacy & Security > Screen & System Audio Recording (the
 permission alert has a shortcut to that pane) and trigger again.
+
+## Store build
+
+    xcodebuild archive -project Wadjet.xcodeproj -scheme Wadjet -configuration Release \
+        -destination 'generic/platform=macOS' -archivePath build/Wadjet.xcarchive \
+        CODE_SIGN_IDENTITY="Apple Development"
+    xcodebuild -exportArchive -archivePath build/Wadjet.xcarchive \
+        -exportOptionsPlist ExportOptions.plist -exportPath build/export
+
+The archive builds without CLEAR_GLASS_PATCH, so the private lens patch is
+compiled out. Export needs Apple Distribution and Mac Installer Distribution
+certificates and a Mac App Store provisioning profile for `cx.mia.wadjet`.
 
 ## Hotkeys
 
@@ -34,7 +53,7 @@ permission alert has a shortcut to that pane) and trigger again.
 
 `tools/cmd.sh <command>` posts a DistributedNotificationCenter command so the app is
 driveable without coordinate clicking. Every command is logged as `cmd: …` in
-`~/Library/Application Support/wadjet/app.log`.
+`~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/app.log`.
 
     tools/cmd.sh open "Measure"          # open overlay on a Tool (as if its hotkey fired)
     tools/cmd.sh tool "Pick Colour"      # switch Tool while frozen

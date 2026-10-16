@@ -6,12 +6,12 @@
 - `Sources/Wadjet` is a folder-synced group: add Swift files on disk and never edit `project.pbxproj` for them.
 - `swift test` in `apps/macos/WadjetKit` tests the UI-free code (colour formats, Measure edge finding) without the app.
 - Local builds use the Xcode beta (`run.sh` sets `DEVELOPER_DIR`); CI builds with the runner's stable Xcode 26 and warnings as errors. Keep the code compiling on both.
-- Drive the running app with `apps/macos/tools/cmd.sh` and read the result in `~/Library/Application Support/wadjet/app.log`, because the overlay can't be inspected while you sit outside it.
+- Drive the running app with `apps/macos/tools/cmd.sh` and read the result in `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/app.log`, because the overlay can't be inspected while you sit outside it.
 - Get Mia's go-ahead before any screenshot, screen recording, or synthetic mouse input: her screens show work.
 
 ## Code gotchas
 
-- The selection lens strips Liquid Glass blur and tint by swizzling the private `CABackdropLayer.setFilters:` (`ClearGlassPatch` in `main.swift`). SwiftUI offers no public control for it, so keep the patch and recheck it after each macOS update.
+- The selection lens strips Liquid Glass blur and tint by swizzling the private `CABackdropLayer.setFilters:` (`ClearGlassPatch` in `main.swift`). SwiftUI offers no public control for it, so keep the patch and recheck it after each macOS update. It compiles only with the `CLEAR_GLASS_PATCH` condition, which run.sh sets and store builds leave off (`WADJET_CLEAR_GLASS=0 ./run.sh`).
 - Each display has its own Freeze Frame panel. Convert `NSEvent.mouseLocation` with `window.convertPoint(fromScreen:)` before using it in a view, because raw screen coordinates are only correct on the display at origin 0,0.
 
 ## Agent skills

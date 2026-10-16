@@ -19,9 +19,14 @@ if [[ -z "$IDENTITY" ]]; then
 fi
 IDENTITY="${IDENTITY:--}"
 
+# the private clear-glass lens patch; WADJET_CLEAR_GLASS=0 builds the store variant without it
+CONDITIONS='$(inherited)'
+[[ "${WADJET_CLEAR_GLASS:-1}" == "1" ]] && CONDITIONS+=' CLEAR_GLASS_PATCH'
+
 xcodebuild -project Wadjet.xcodeproj -scheme Wadjet -configuration Release \
     -derivedDataPath build/DerivedData -destination "platform=macOS,arch=$(uname -m)" \
-    ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY="$IDENTITY" -quiet "$@" build
+    ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY="$IDENTITY" \
+    SWIFT_ACTIVE_COMPILATION_CONDITIONS="$CONDITIONS" -quiet "$@" build
 
 rm -rf "$APP"
 ditto build/DerivedData/Build/Products/Release/Wadjet.app "$APP"
