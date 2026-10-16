@@ -1468,7 +1468,9 @@ struct ToolbarView: View {
     }
 
     var shape: UnevenRoundedRectangle {
-        let bottom: CGFloat = expanded ? 18 : (hasNotch ? 13 : pillH / 2)
+        // expanded: fully rounded ends (radius = half the shape's height) —
+        // all four corners on the island, bottom two under a notch
+        let bottom: CGFloat = expanded ? shapeH / 2 : (hasNotch ? 13 : pillH / 2)
         let top: CGFloat = hasNotch ? 0 : bottom
         return UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
                                       bottomTrailingRadius: bottom, topTrailingRadius: top)
@@ -1495,22 +1497,28 @@ struct ToolbarView: View {
         .animation(.spring(duration: 0.35), value: expanded)
     }
 
-    // black island contents, one item in each ear: current Tool icon and an
-    // expand chevron, or the recording dot and elapsed time
+    // island contents, Dynamic-Island-style: one leading item concentric with
+    // the rounded end cap (its centre pillH/2 from the edge). Frozen: the
+    // current Tool's icon only. Recording: red dot leading, elapsed trailing.
+    // island: items sit concentric with the end caps; notch: centred in the ears
+    var islandSlot: CGFloat { hasNotch ? earW : pillH }
     var islandContent: some View {
         HStack(spacing: 0) {
             if recording {
                 Circle().fill(.red).frame(width: 8, height: 8)
-                Spacer(minLength: 0)
-                Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
+                    .frame(width: islandSlot, height: pillH)
             } else {
-                Image(systemName: (s.tool ?? .capRegion).symbol).font(.system(size: 13))
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.6)
+                Image(systemName: (s.tool ?? .capRegion).symbol)
+                    .font(.system(size: min(pillH * 0.62, islandSlot - 10)))
+                    .frame(width: islandSlot, height: pillH)
+            }
+            Spacer(minLength: 0)
+            if recording {
+                Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
+                    .frame(width: islandSlot, height: pillH)
             }
         }
         .foregroundStyle(.white)
-        .padding(.horizontal, hasNotch ? 7 : 12)
         .frame(width: islandW, height: pillH)
     }
 
@@ -1530,16 +1538,19 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
-    // tab-bar state: cell centres measured in row space, blob x in row space
+    let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size; lens = ×1.15
+    // tab-bar state: cell centres measured in row space, capsule centre same
     @State var cellCentres: [Tool: CGPoint] = [:]
     @State var blobX: CGFloat = 0
     @State var blobY: CGFloat = 0
+    @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
     @State var pressX: CGFloat = 0
     @State var pressTool: Tool?
     @State var pressActive = false
     @State var menuByHold = false
     @State var holdTask: Task<Void, Never>?
+    var lensActive: Bool { pressing || dragging }
 
     func openToolMenu(_ t: Tool) {
         guard t.hasMenu else { return }
@@ -1555,17 +1566,26 @@ struct ToolbarView: View {
         let xs = cellCentres.values.map(\.x)
         return (xs.min() ?? 0, xs.max() ?? 0)
     }
+    // the icon strip once, for the accent-tint mask — same layout as the row
+    func iconCell(_ t: Tool) -> some View {
+        Image(systemName: t.symbol).font(.system(size: 22))
+            .frame(width: toolD, height: toolD)
+    }
 
-    // one cell of the tab bar: plain icon, no per-cell glass
+    // one cell of the tab bar: plain white icon; the accent tint comes from the
+    // masked overlay row, the lens magnifies whichever cell it covers
     func cell(_ t: Tool) -> some View {
         let selected = s.tool == t
+        let underLens = lensActive && abs((cellCentres[t]?.x ?? 0) - blobX) < selW * 1.15 / 2
         return Image(systemName: t.symbol).font(.system(size: 22))
-            .foregroundStyle(selected && !dragging ? Color.black : Color.white.opacity(0.75))
+            .foregroundStyle(.white)
+            .scaleEffect(underLens ? 1.1 : 1)
             .frame(width: toolD, height: toolD)
             .overlay(alignment: .bottomTrailing) {
-                // the menu droplet budding off the selected cell — hidden while
-                // dragging; a high-priority tap so the row's drag can't take it
-                if t.hasMenu && selected && !dragging {
+                // the menu droplet budding off the rest capsule's corner —
+                // hidden while pressing/dragging; high-priority tap so the
+                // row's drag can't take it
+                if t.hasMenu && selected && !lensActive {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
@@ -1575,14 +1595,14 @@ struct ToolbarView: View {
                         .highPriorityGesture(TapGesture().onEnded { openToolMenu(t) })
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect = $0 }
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        .offset(x: 9, y: 9) // centre ~4 pt inside the cell's corner
+                        .offset(x: 6, y: -8) // ~4 pt inside the capsule's corner
                 }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + toolD / 2)
-                if !dragging, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + toolD / 2 }
+                if !lensActive, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + toolD / 2 }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
                 ToolbarBtnFrames.rects[t] = $0
@@ -1590,7 +1610,7 @@ struct ToolbarView: View {
     }
 
     var toolRow: some View {
-        // the blob lives in the HStack's .background — inside a
+        // the capsule/lens lives in the HStack's .background — inside a
         // GlassEffectContainer the glass composites above sibling views, so a
         // ZStack would put it over the icons
         HStack(spacing: 8) {
@@ -1600,36 +1620,71 @@ struct ToolbarView: View {
             Spacer().frame(width: 8)
             ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: cell)
         }
-        .padding(10)
+        // 20 pt horizontal inset so the lens can't poke through the rounded ends
+        .padding(.horizontal, 20).padding(.vertical, 10)
         .coordinateSpace(name: "row")
         .background {
             GlassEffectContainer(spacing: 8) {
-                Circle().fill(.white.opacity(dragging ? 0.15 : 0.92))
-                    .frame(width: toolD, height: toolD)
-                    .scaleEffect(dragging ? 1.12 : 1)
-                    .glassEffect(.regular.interactive(), in: .circle)
-                    .glassEffectID("selection", in: ns)
-                    .position(x: blobX, y: blobY)
+                ZStack {
+                    // rest: subtle translucent capsule (no glass)
+                    Capsule().fill(.white.opacity(0.10))
+                        .frame(width: selW, height: selH)
+                        .opacity(lensActive ? 0 : 1)
+                        .position(x: blobX, y: blobY)
+                    // pressed/dragging: a clear lens, ~1.15×
+                    if lensActive {
+                        Capsule().fill(.clear)
+                            .frame(width: selW * 1.15, height: selH * 1.15) // sized, not scaled, so the glass grows too
+                            .glassEffect(.clear.interactive(), in: .capsule)
+                            .glassEffectID("lens", in: ns)
+                            .position(x: blobX, y: blobY)
+                            .transition(.scale(scale: 0.6).combined(with: .opacity))
+                    }
+                }
             }
         }
+        // the accent tint follows the lens, clipped to its shape — the icon row
+        // is drawn a second time in accent, masked to a capsule at blobX
+        .overlay {
+            ZStack {
+                HStack(spacing: 8) {
+                    ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: iconCell)
+                    Spacer().frame(width: 8)
+                    ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: iconCell)
+                    Spacer().frame(width: 8)
+                    ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
+                }
+                .padding(.horizontal, 20).padding(.vertical, 10)
+            }
+            .mask(Capsule().frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+                      .position(x: blobX, y: blobY))
+            .foregroundStyle(Color.accentColor)
+            .allowsHitTesting(false)
+        }
         .fixedSize()
-        .animation(.smooth(duration: 0.15), value: dragging) // lens on/off
+        .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
         .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
-        // click = tap on a cell, flick = drag the blob, hold = menu
+        // press = lens pops in under the finger, flick = drag it, hold = menu
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
             .onChanged { v in
-                if !pressActive { // first event of the press
-                    pressActive = true
+                if !pressActive { // first event of the press: lens in at once
+                    pressActive = true; pressing = true
                     pressX = v.startLocation.x
                     pressTool = tool(atRowX: v.startLocation.x)
+                    // it slides to the pressed cell with the click spring
+                    if let t = pressTool, let c = cellCentres[t], c.x != blobX {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x }
+                    }
                     holdTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(400))
-                        if !Task.isCancelled, let t = pressTool, !dragging { menuByHold = true; openToolMenu(t) }
+                        if !Task.isCancelled, let t = pressTool, !dragging {
+                            menuByHold = true; pressing = false // lens back to rest
+                            openToolMenu(t)
+                        }
                     }
                 }
                 if !dragging, abs(v.location.x - pressX) > 4 {
                     dragging = true; holdTask?.cancel(); TipPanel.hide()
-                    if let t = pressTool, t != s.tool { AppDelegate.shared?.trigger(t) }
                 }
                 if dragging {
                     let (lo, hi) = rowEnds
@@ -1638,11 +1693,13 @@ struct ToolbarView: View {
             }
             .onEnded { v in
                 holdTask?.cancel()
-                if dragging {
-                    dragging = false
+                let wasDragging = dragging
+                pressing = false; dragging = false
+                if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
-                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { blobX = cellCentres[n]?.x ?? blobX }
+                        // shrink back to the rest capsule on the chosen cell
+                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { blobX = cellCentres[n]?.x ?? blobX }
                     }
                 } else if !menuByHold, let t = tool(atRowX: v.location.x), t != s.tool {
                     AppDelegate.shared?.trigger(t)
