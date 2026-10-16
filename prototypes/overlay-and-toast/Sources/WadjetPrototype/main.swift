@@ -7,6 +7,7 @@ import ScreenCaptureKit
 import Carbon
 import Vision
 import UniformTypeIdentifiers
+import ObjectiveC
 
 // MARK: - Model
 
@@ -131,6 +132,48 @@ final class Freeze {
     }
 }
 
+// SwiftUI `Glass` has no knob for "refraction only" — `.clear` still carries a
+// blur fill and a tinted face. SwiftUI drives glass via a private `CAFilter`
+// (type "glassBackground") re-set through `CABackdropLayer.setFilters:` every
+// animation frame, so hooking that setter zeroes blur/fill/face on every frame,
+// including transitions. Private API — fine for private use, not App Store.
+enum ClearGlassPatch {
+    static let identityFill = CGColor(red: 1, green: 1, blue: 1, alpha: 0)
+    static func install() {
+        guard let cls = NSClassFromString("CABackdropLayer") else { return }
+        let sel = NSSelectorFromString("setFilters:")
+        guard let orig = class_getInstanceMethod(CALayer.self, sel) else { return }
+        typealias Fn = @convention(c) (AnyObject, Selector, NSArray?) -> Void
+        let origFn = unsafeBitCast(method_getImplementation(orig), to: Fn.self)
+        let block: @convention(block) (AnyObject, NSArray?) -> Void = { me, arr in
+            for f0 in arr ?? [] {
+                guard let f = f0 as? NSObject,
+                      (f.value(forKey: "type") as? String) == "glassBackground",
+                      // clear-glass signature; a regular glass only reaches
+                      // bfd == 0 on the first identity->glass frame, where the
+                      // values below already are identity's — a no-op
+                      (f.value(forKey: "inputBlurFillDarkenOpacity") as? NSNumber)?.doubleValue == 0
+                else { continue }
+                for k in ["inputBlurRadius", "inputBlurOpacity0", "inputBlurOpacity1",
+                          "inputBlurOpacity2", "inputBlurOpacity3",
+                          "inputBlurFillNormalOpacity", "inputBlurFillLightenOpacity",
+                          "inputBlurFillDarkenOpacity"] { f.setValue(0, forKey: k) }
+                f.setValue(1, forKey: "inputFaceColorMatrixWhite")
+                f.setValue(0, forKey: "inputFaceColorMatrixBlack")
+                f.setValue(1, forKey: "inputFaceColorMatrixSaturation")
+                f.setValue(1, forKey: "inputFaceColorMatrixMaxLuma")
+                f.setValue(1, forKey: "inputFaceColorMatrixMaxLumaSDR")
+                f.setValue(identityFill, forKey: "inputFaceColorMatrixFillColor")
+            }
+            origFn(me, sel, arr)
+        }
+        if !class_addMethod(cls, sel, imp_implementationWithBlock(block), method_getTypeEncoding(orig)),
+           let m = class_getInstanceMethod(cls, sel) {
+            method_setImplementation(m, imp_implementationWithBlock(block))
+        }
+    }
+}
+
 func hexString(_ c: (UInt8, UInt8, UInt8)) -> String { String(format: "#%02X%02X%02X", c.0, c.1, c.2) }
 func srgbLinear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
 // CSS Color 4 breakdowns of one sRGB pixel
@@ -225,6 +268,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var recordingPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        ClearGlassPatch.install()
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
@@ -1670,7 +1714,7 @@ struct ToolbarView: View {
         .overlay {
             Capsule().fill(.clear)
                 .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
-                .glassEffect(lensActive ? .clear.interactive() : .identity, in: .capsule)
+                .glassEffect(lensActive ? .clear : .identity, in: .capsule)
                 .glassEffectTransition(.materialize)
                 .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
                 .allowsHitTesting(false)
