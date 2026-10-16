@@ -6,7 +6,7 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
-The research, the Workflow model, the Tools, upload behavior, Recording UX, capture history, and the Wadjet Server are settled.
+Every ticket on it is closed; the remaining fog (architecture, config and Settings, testing, platform validation) is being settled while writing the v1 PRD.
 The native prototype of the Freeze Frame overlay, toolbar, and toast became the app itself: v0.0.1 lives in `apps/macos`, built by CI on every change.
 Recording, uploads, Destinations, History, and Settings are still simulated or stubbed there.
 
