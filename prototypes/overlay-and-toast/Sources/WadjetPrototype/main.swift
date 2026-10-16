@@ -522,8 +522,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // a Recording never counts, so Esc reaches the app being recorded)
     var escRef: EventHotKeyRef?
     var measureRefs: [EventHotKeyRef?] = []
+    var spaceRef: EventHotKeyRef?
+    var spaceRegistered = false
     var escRegistered = false
     var escHandlerInstalled = false
+    // Space toggles Region <-> Window within the current kind, like macOS
+    func toggleRegionWindow() {
+        let s = ProtoState.shared
+        guard s.phase == .frozen, let t = s.tool else { return }
+        // not while a drag is in progress
+        for p in overlayCtrl.panels {
+            if p.contentView?.subviews.compactMap({ $0 as? OverlayNSView }).contains(where: { $0.dragStart != nil }) == true { return }
+        }
+        let next: Tool? = switch t {
+        case .capRegion, .capScreen: .capWindow
+        case .capWindow: .capRegion
+        case .recRegion, .recScreen: .recWindow
+        case .recWindow: .recRegion
+        default: nil
+        }
+        guard let n = next else { return }
+        trigger(n)
+        for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.setFlash(n.title) } }
+    }
     func setMeasureMode(_ i: Int) {
         let modes = ["Bounds", "Spacing", "Horizontal", "Vertical"]
         guard ProtoState.shared.tool == .measure, modes.indices.contains(i) else { return }
@@ -545,6 +566,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     if id.id == 10 { DispatchQueue.main.async { AppDelegate.shared?.handleEsc() }; return noErr }
                     if (20...23).contains(id.id) { // Ctrl+1..4 = Measure modes
                         DispatchQueue.main.async { AppDelegate.shared?.setMeasureMode(Int(id.id) - 20) }
+                        return noErr
+                    }
+                    if id.id == 30 { // Space = Region <-> Window
+                        DispatchQueue.main.async { AppDelegate.shared?.toggleRegionWindow() }
                         return noErr
                     }
                     return OSStatus(eventNotHandledErr)
@@ -569,6 +594,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             measureRefs = []
             escRef = nil; escRegistered = false
             ProtoLog.line("esc hotkey unregistered")
+        }
+        // Space is claimed only while the overlay is actually frozen — it must
+        // drop as soon as we leave .frozen (e.g. a countdown starts)
+        if s.phase == .frozen && !spaceRegistered {
+            var ref: EventHotKeyRef?
+            let err = RegisterEventHotKey(UInt32(kVK_Space), 0, EventHotKeyID(signature: OSType(0x77646A74), id: 30),
+                                          GetApplicationEventTarget(), 0, &ref)
+            spaceRef = ref; spaceRegistered = (err == noErr && ref != nil)
+        } else if s.phase != .frozen && spaceRegistered {
+            if let r = spaceRef { UnregisterEventHotKey(r) }
+            spaceRef = nil; spaceRegistered = false
         }
     }
     // priority: overlay > countdown > in-flight toast > idle toast > pin.
@@ -904,7 +940,8 @@ final class OverlayNSView: NSView {
     var rulerX: (lo: CGFloat, hi: CGFloat)?
     var rulerY: (lo: CGFloat, hi: CGFloat)?
     var tolerance = 30
-    var tolShownUntil = Date.distantPast
+    var flash: (text: String, until: Date)? // transient badge near the pointer
+    var scrollAcc: CGFloat = 0
     var boundsBoxes: [CGRect] = [] // Bounds boxes kept on screen via Shift
     init(frame f: NSRect, displayIndex: Int, controller: OverlayController) {
         di = displayIndex; ctrl = controller
@@ -955,6 +992,15 @@ final class OverlayNSView: NSView {
             let at = CGPoint(x: min(bounds.width - 90, s.maxX + 8), y: min(bounds.height - 26, s.maxY + 8))
             drawBadge(str, at: at)
         }
+        // the ruler label carries the flash itself, so it never draws twice
+        if let f = flash, Date() < f.until, !(t == .measure && measureMode != "Bounds") {
+            drawBadge(f.text, at: CGPoint(x: min(bounds.width - 160, hoverPt.x + 18), y: min(bounds.height - 30, hoverPt.y + 18)))
+        }
+    }
+    func setFlash(_ text: String) {
+        flash = (text, Date().addingTimeInterval(1.2))
+        needsDisplay = true
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.25) { [weak self] in self?.needsDisplay = true }
     }
     var rulerOrange: NSColor { NSColor(srgbRed: 1, green: 69.0 / 255, blue: 0, alpha: 1) } // #FF4500
     func drawMeasure() {
@@ -984,7 +1030,7 @@ final class OverlayNSView: NSView {
         if let x = rulerX, let y = rulerY { label = "\(fmtDim(x.hi - x.lo)) × \(fmtDim(y.hi - y.lo))" }
         else if let x = rulerX { label = fmtDim(x.hi - x.lo) }
         else if let y = rulerY { label = fmtDim(y.hi - y.lo) }
-        if Date() < tolShownUntil { label += "   tolerance \(tolerance)" }
+        if let f = flash, Date() < f.until { label += "   \(f.text)" }
         if !label.isEmpty {
             drawBadge(label, at: CGPoint(x: min(bounds.width - 130, pt.x + 18), y: min(bounds.height - 30, pt.y + 18)))
         }
@@ -1081,15 +1127,56 @@ final class OverlayNSView: NSView {
         }
         needsDisplay = true
     }
-    // scroll changes the edge tolerance: +15 up, -15 down, clamped 0...255
+    // one scroll tick per wheel notch; trackpads accumulate 24 pt per tick and
+    // momentum is ignored. Returns +1 for down (next) / -1 for up (previous)
+    func scrollStep(_ e: NSEvent) -> Int {
+        guard e.momentumPhase.isEmpty, e.scrollingDeltaY != 0 else { return 0 }
+        if !e.hasPreciseScrollingDeltas { return e.scrollingDeltaY > 0 ? -1 : 1 }
+        if e.phase == .began { scrollAcc = 0 }
+        scrollAcc += e.scrollingDeltaY
+        var n = 0
+        while scrollAcc >= 24 { scrollAcc -= 24; n += 1 }
+        while scrollAcc <= -24 { scrollAcc += 24; n -= 1 }
+        return n
+    }
     override func scrollWheel(with e: NSEvent) {
-        guard tool == .measure, measureMode != "Bounds" else { return }
-        let d = e.scrollingDeltaY
-        guard d != 0 else { return }
-        tolerance = min(255, max(0, tolerance + (d > 0 ? 15 : -15)))
-        tolShownUntil = Date().addingTimeInterval(1.2)
-        scanRuler(at: hoverPt)
-        needsDisplay = true
+        let step = scrollStep(e)
+        guard step != 0 else { return }
+        if e.modifierFlags.contains(.option) {
+            // Option+scroll = the Tool's value: edge tolerance on the ruler
+            guard tool == .measure, measureMode != "Bounds" else { return }
+            tolerance = min(255, max(0, tolerance - 15 * step))
+            setFlash("tolerance \(tolerance)")
+            scanRuler(at: hoverPt)
+            needsDisplay = true
+            return
+        }
+        cycleVariant(step)
+    }
+    // plain scroll cycles the selected Tool's variants, wrapping at both ends
+    func cycleVariant(_ step: Int) {
+        let s = ProtoState.shared
+        guard let t = s.tool else { return }
+        func wrap(_ i: Int, _ n: Int) -> Int { ((i + step) % n + n) % n }
+        switch t {
+        case .capRegion, .capWindow, .capScreen:
+            let l: [Tool] = [.capRegion, .capWindow, .capScreen]
+            let n = l[wrap(l.firstIndex(of: t)!, l.count)]
+            AppDelegate.shared?.trigger(n); setFlash(n.title)
+        case .recRegion, .recWindow, .recScreen:
+            let l: [Tool] = [.recRegion, .recWindow, .recScreen]
+            let n = l[wrap(l.firstIndex(of: t)!, l.count)]
+            AppDelegate.shared?.trigger(n); setFlash(n.title)
+        case .measure:
+            let modes = ["Bounds", "Spacing", "Horizontal", "Vertical"]
+            let i = wrap(modes.firstIndex(of: measureMode) ?? 1, modes.count)
+            AppDelegate.shared?.setMeasureMode(i); setFlash(modes[i])
+        case .pickColour:
+            let fmts = ["Hex", "rgb()", "hsl()", "oklch()", "lab()", "SwiftUI"]
+            let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
+            s.colourFmt = fmts[i]; setFlash(fmts[i])
+        case .copyText: break
+        }
     }
     override func mouseDown(with e: NSEvent) {
         let pt = convert(e.locationInWindow, from: nil)
@@ -1147,6 +1234,7 @@ final class OverlayNSView: NSView {
     @discardableResult
     func handleKey(_ e: NSEvent) -> Bool {
         if e.keyCode == 53 { ctrl?.closeAll(); return true }
+        if e.keyCode == 49 { app?.toggleRegionWindow(); return true } // Space
         // Ctrl+1..4 switch Measure modes while the overlay is open
         if tool == .measure, e.modifierFlags.contains(.control),
            let i = [18, 19, 20, 21].firstIndex(of: Int(e.keyCode)) {
