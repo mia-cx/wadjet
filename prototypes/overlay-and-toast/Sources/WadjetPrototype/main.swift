@@ -1068,6 +1068,7 @@ final class OverlayNSView: NSView {
     weak var ctrl: OverlayController?
     var dragStart: CGPoint?, sel: CGRect?
     var hoverWin: WinEntry?, hoverPt = CGPoint.zero
+    nonisolated(unsafe) static var pointerDisplay: Int? // display that last saw the pointer
     // Screen Ruler state: found edges in view points around the pointer
     var rulerX: (lo: CGFloat, hi: CGFloat)?
     var rulerY: (lo: CGFloat, hi: CGFloat)?
@@ -1182,6 +1183,7 @@ final class OverlayNSView: NSView {
         guard tool != .capScreen && tool != .recScreen else { return }
         guard NSEvent.mouseLocation.x != 0 || hoverPt != .zero else { return }
         let pt = mouseInView()
+        guard bounds.contains(pt) else { return } // one loupe, on the pointer's display
         let n = tool == .pickColour ? 15 : 11, px = 11
         let sz = CGFloat(n * px)
         let c = Freeze.shared.pixel(at: pt, on: di)
@@ -1231,7 +1233,8 @@ final class OverlayNSView: NSView {
         NSColor.black.withAlphaComponent(0.4).setStroke()
         NSBezierPath(roundedRect: NSRect(x: lx, y: ly, width: sz, height: totalH), xRadius: 8, yRadius: 8).stroke()
         if rows.isEmpty {
-            drawBadge("\(Int(pt.x)), \(Int(pt.y))  \(hexString(c))", at: CGPoint(x: lx, y: ly + 2))
+            // display-relative, top-left origin like the system screenshot tool
+            drawBadge("\(Int(pt.x)), \(Int(bounds.height - pt.y))  \(hexString(c))", at: CGPoint(x: lx, y: ly + 2))
             return
         }
         // info block: swatch + hex on row 0, then rgb/hsl/oklch/lab; the row of
@@ -1252,10 +1255,18 @@ final class OverlayNSView: NSView {
             (row.0 as NSString).draw(at: CGPoint(x: lx + 22, y: ry - 1), withAttributes: attrs)
         }
     }
-    func mouseInView() -> CGPoint { convert(NSEvent.mouseLocation, from: nil) }
+    // the pointer in this display's view coords (screen -> window -> view)
+    func mouseInView() -> CGPoint {
+        convert(window?.convertPoint(fromScreen: NSEvent.mouseLocation) ?? .zero, from: nil)
+    }
 
     override func mouseMoved(with e: NSEvent) {
         let pt = convert(e.locationInWindow, from: nil); hoverPt = pt
+        // the pointer moved here from another display: clear that one's loupe
+        if OverlayNSView.pointerDisplay != di {
+            OverlayNSView.pointerDisplay = di
+            ctrl?.panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.needsDisplay = true } }
+        }
         if tool == .capWindow || tool == .recWindow {
             hoverWin = fd.windowFrames.first { $0.frame.contains(pt) } // front-to-back: frontmost wins
         } else {
