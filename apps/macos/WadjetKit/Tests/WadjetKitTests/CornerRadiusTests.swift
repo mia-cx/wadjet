@@ -20,7 +20,7 @@ struct CornerRadiusTests {
         }
     }
 
-    @Test(arguments: [0, 12, 32, 52])
+    @Test(arguments: [0, 12, 24, 32, 48, 52])
     func rasterisedCorner(r: Double) {
         let measured = cornerRadius(diagonalAlpha: Self.diagonal(radius: r))
         #expect(measured != nil)

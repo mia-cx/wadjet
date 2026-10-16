@@ -12,7 +12,7 @@ public func cornerRadius(diagonalAlpha alpha: [UInt8]) -> Double? {
     let f = min(1, Double(alpha[i - 1]) / Double(inside))
     // inside region within pixel i−1 is the triangle 2(j+1−c)² when the crossing c
     // sits in its far half, or 1 − 2(c−j)² in its near half
-    let c = f <= 0.5 ? Double(i - 1) + ((1 - f) / 2).squareRoot()
-                     : Double(i) - (f / 2).squareRoot()
+    let c = f <= 0.5 ? Double(i) - (f / 2).squareRoot()
+                     : Double(i - 1) + ((1 - f) / 2).squareRoot()
     return c / (1 - 1 / Double(2).squareRoot())
 }
