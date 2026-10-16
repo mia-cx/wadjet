@@ -42,6 +42,7 @@ extension Color {
 }
 
 let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under it
+let dimAlpha: CGFloat = 0.4  // Freeze Frame dim outside the capture target
 
 @MainActor
 final class ProtoState: ObservableObject {
@@ -87,7 +88,12 @@ struct FrozenDisplay {
     var hdrImage: CGImage?      // extended-sRGB variant when the display is HDR
     var bitmap: UnsafePointer<UInt8>? // sRGB, premultiplied ARGB, pixel coords
     var bitmapWidth = 0, bitmapHeight = 0
-    var windowFrames: [CGRect] = []
+    var windowFrames: [WinEntry] = [] // front-to-back, view coords
+}
+
+struct WinEntry {
+    let id: CGWindowID
+    let frame: CGRect
 }
 @MainActor
 final class Freeze {
@@ -275,6 +281,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var recordingRect: CGRect = .zero
     var recordingDisplay = 0
     var recordingThumb: NSImage?
+    var recordingWindowID: CGWindowID?
     var recordingPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ n: Notification) {
@@ -429,6 +436,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: selection -> capture or recording
+    // a live shot of one window, "through" the Freeze Frame; nil if SCK can't
+    // find it anymore — callers fall back to cropping the frozen image
+    func captureWindow(id: CGWindowID, display: Int) async -> CGImage? {
+        guard let scw = overlayCtrl.scWindows[id] else { return nil }
+        let screen = Freeze.shared.displays[display].screen
+        let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        let sc = screen.backingScaleFactor
+        let cfg = SCScreenshotConfiguration()
+        cfg.width = Int((scw.frame.width * sc).rounded())
+        cfg.height = Int((scw.frame.height * sc).rounded())
+        cfg.showsCursor = false
+        cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
+        do {
+            let out = try await SCScreenshotManager.captureScreenshot(
+                contentFilter: SCContentFilter(desktopIndependentWindow: scw), configuration: cfg)
+            return out.hdrImage ?? out.sdrImage
+        } catch {
+            ProtoLog.line("window capture \(id) failed: \(error.localizedDescription)")
+            return nil
+        }
+    }
+    func didSelectWindow(id: CGWindowID, frame: CGRect, on display: Int) {
+        let s = ProtoState.shared
+        guard let tool = s.tool else { return }
+        if tool.kind == .shot {
+            overlayCtrl.closeAll()
+            Task { @MainActor in
+                var thumb = await captureWindow(id: id, display: display)
+                if thumb == nil {
+                    ProtoLog.line("window \(id) not capturable; falling back to frozen crop")
+                    thumb = Freeze.shared.crop(rect: frame, on: display, hdr: true)
+                }
+                runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
+            }
+        } else {
+            recordingWindowID = id // kept for the real SCStream later
+            Task { @MainActor in
+                startRecording(rect: frame, display: display, thumb: await captureWindow(id: id, display: display))
+            }
+        }
+    }
     func didSelect(_ rect: CGRect, on display: Int) {
         let s = ProtoState.shared
         guard let tool = s.tool else { return }
@@ -486,9 +534,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: recording (simulated)
-    func startRecording(rect: CGRect, display: Int) {
+    func startRecording(rect: CGRect, display: Int, thumb: CGImage? = nil) {
         let s = ProtoState.shared
-        let thumb = Freeze.shared.crop(rect: rect, on: display)
+        let thumb = thumb ?? Freeze.shared.crop(rect: rect, on: display)
         overlayCtrl.closeAllPanelsOnly() // live screen returns
         recordingRect = rect; recordingDisplay = display; recordingThumb = thumb.map { NSImage(cgImage: $0, size: .zero) }
         pauseAcc = 0; s.recordingElapsed = 0; s.recordingPaused = false
@@ -781,6 +829,7 @@ final class OverlayController {
     weak var app: AppDelegate?
     var panels: [NSPanel] = []
     var toolbarPanel: NSPanel?
+    var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
     var menuPanel: NSPanel?
     var menuMonitor: Any?
     var keyMonitor: Any?
@@ -856,21 +905,26 @@ final class OverlayController {
                 guard let img = out.sdrImage ?? out.hdrImage else { continue }
                 var fd = FrozenDisplay(screen: screen, image: img)
                 fd.hdrImage = out.hdrImage
-                fd.windowFrames = content.windows
-                    .filter { w in
-                        w.isActive && w.windowLayer == 0 &&
-                        !(w.owningApplication?.bundleIdentifier ?? "").contains("WadjetPrototype") &&
-                        w.frame.width > 40 && w.frame.height > 40
-                    }.map(\.frame)
-                // SCWindow frames are in top-left global coords; convert to this
-                // display's bottom-left view coords for NSView hit-testing/drawing
+                // CGWindowList is front-to-back, so first-hit is the frontmost
+                // window — SCShareableContent's windows list isn't ordered
+                let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
                 let sy = screen.frame
                 let primaryH = NSScreen.screens[0].frame.height
-                fd.windowFrames = fd.windowFrames.map { f in
-                    CGRect(x: f.origin.x - sy.origin.x,
-                           y: primaryH - sy.origin.y - f.origin.y - f.height,
-                           width: f.width, height: f.height)
+                fd.windowFrames = infos.compactMap { w in
+                    guard (w[kCGWindowLayer as String] as? Int) == 0,
+                          (w[kCGWindowOwnerPID as String] as? Int32) != ProcessInfo.processInfo.processIdentifier,
+                          (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
+                          let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                          let wn = w[kCGWindowNumber as String] as? Int else { return nil }
+                    let f = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+                    guard f.width > 40, f.height > 40 else { return nil }
+                    // top-left global coords -> this display's bottom-left view coords
+                    return WinEntry(id: CGWindowID(wn),
+                                    frame: CGRect(x: f.minX - sy.minX,
+                                                  y: primaryH - sy.minY - f.minY - f.height,
+                                                  width: f.width, height: f.height))
                 }
+                scWindows = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
                 // bitmap for pixel reads — real sRGB so colour math is honest
                 let w = img.width, h = img.height
                 var data = [UInt8](repeating: 0, count: w * h * 4)
@@ -1002,7 +1056,7 @@ final class OverlayNSView: NSView {
     let di: Int
     weak var ctrl: OverlayController?
     var dragStart: CGPoint?, sel: CGRect?
-    var hoverWin: CGRect?, hoverPt = CGPoint.zero
+    var hoverWin: WinEntry?, hoverPt = CGPoint.zero
     // Screen Ruler state: found edges in view points around the pointer
     var rulerX: (lo: CGFloat, hi: CGFloat)?
     var rulerY: (lo: CGFloat, hi: CGFloat)?
@@ -1030,27 +1084,27 @@ final class OverlayNSView: NSView {
         let ctx = NSGraphicsContext.current!.cgContext
         ctx.clear(bounds) // the frozen frame is drawn by the layer beneath
         let t = tool
-        if t == .capRegion || t == .recRegion || t == .copyText {
-            if let s = sel {
-                // dim everything except the selection; inside stays untouched
-                let dim = NSColor.black.withAlphaComponent(0.35)
-                for r in [CGRect(x: 0, y: s.maxY, width: bounds.width, height: bounds.height - s.maxY),
-                          CGRect(x: 0, y: 0, width: bounds.width, height: s.minY),
-                          CGRect(x: 0, y: s.minY, width: s.minX, height: s.height),
-                          CGRect(x: s.maxX, y: s.minY, width: bounds.width - s.maxX, height: s.height)] {
-                    dim.setFill(); r.fill()
-                }
-                NSColor.white.withAlphaComponent(0.8).setStroke()
-                let p = NSBezierPath(rect: s); p.lineWidth = 0.5; p.stroke()
-            } else {
-                NSColor.black.withAlphaComponent(0.15).setFill(); bounds.fill()
-            }
-        }
         let overToolbar = ctrl?.pointerOverUI ?? false
-        if !overToolbar, (t == .capWindow || t == .recWindow), let w = hoverWin,
-           w.width < bounds.width * 0.9 && w.height < bounds.height * 0.9 {
-            NSColor.systemBlue.withAlphaComponent(0.28).setFill()
-            NSBezierPath(roundedRect: w, xRadius: 10, yRadius: 10).fill()
+        // dim the frame except the capture target, which stays at full brightness;
+        // Screen Tools, Measure and Pick Colour get no dim
+        var target: NSBezierPath?, alpha: CGFloat?
+        switch t {
+        case .capRegion, .recRegion, .copyText:
+            target = sel.map { NSBezierPath(rect: $0) }
+            alpha = t != .copyText ? dimAlpha : sel == nil ? 0.15 : 0.35
+        case .capWindow, .recWindow:
+            if !overToolbar, let w = hoverWin { target = NSBezierPath(roundedRect: w.frame, xRadius: 12, yRadius: 12) }
+            alpha = dimAlpha
+        default: break
+        }
+        if let alpha {
+            let p = NSBezierPath(rect: bounds)
+            if let target { p.append(target); p.windingRule = .evenOdd }
+            NSColor.black.withAlphaComponent(alpha).setFill(); p.fill()
+        }
+        if let s = sel, t == .capRegion || t == .recRegion || t == .copyText {
+            NSColor.white.withAlphaComponent(0.8).setStroke()
+            let p = NSBezierPath(rect: s); p.lineWidth = 0.5; p.stroke()
         }
         if t == .measure { drawMeasure() }
         if !overToolbar && t != .measure { drawLoupe(ctx) }
@@ -1192,7 +1246,7 @@ final class OverlayNSView: NSView {
     override func mouseMoved(with e: NSEvent) {
         let pt = convert(e.locationInWindow, from: nil); hoverPt = pt
         if tool == .capWindow || tool == .recWindow {
-            hoverWin = fd.windowFrames.first { $0.contains(pt) }
+            hoverWin = fd.windowFrames.first { $0.frame.contains(pt) } // front-to-back: frontmost wins
         } else {
             hoverWin = nil
         }
@@ -1262,7 +1316,7 @@ final class OverlayNSView: NSView {
         case .capScreen, .recScreen:
             app?.didSelect(bounds, on: di)
         case .capWindow, .recWindow:
-            if let w = hoverWin { app?.didSelect(w, on: di) }
+            if let w = hoverWin { app?.didSelectWindow(id: w.id, frame: w.frame, on: di) }
         case .pickColour:
             let c = Freeze.shared.pixel(at: pt, on: di)
             let s = fmtColour(c, fmt: ProtoState.shared.colourFmt)
