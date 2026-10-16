@@ -1,5 +1,6 @@
 #!/bin/bash
 # Build, codesign and launch Wadjet.app.
+# Extra arguments go to xcodebuild (e.g. ./run.sh SWIFT_TREAT_WARNINGS_AS_ERRORS=YES).
 set -euo pipefail
 cd "$(dirname "$0")"
 
@@ -10,14 +11,6 @@ fi
 
 APP=build/Wadjet.app
 
-swift build -c release
-BIN="$(swift build -c release --show-bin-path)"
-
-rm -rf "$APP"
-mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp "$BIN/Wadjet" "$APP/Contents/MacOS/Wadjet"
-cp Resources/Info.plist "$APP/Contents/Info.plist"
-
 # Apple Development identity keeps the Screen Recording grant across rebuilds;
 # ad-hoc works but re-prompts for permissions every build.
 IDENTITY="${WADJET_SIGNING_IDENTITY:-}"
@@ -25,7 +18,13 @@ if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/"Apple Development/ { print $2; exit }')"
 fi
 IDENTITY="${IDENTITY:--}"
-codesign --force --sign "$IDENTITY" "$APP"
+
+xcodebuild -project Wadjet.xcodeproj -scheme Wadjet -configuration Release \
+    -derivedDataPath build/DerivedData -destination "platform=macOS,arch=$(uname -m)" \
+    ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY="$IDENTITY" -quiet "$@" build
+
+rm -rf "$APP"
+ditto build/DerivedData/Build/Products/Release/Wadjet.app "$APP"
 
 if [[ "${WADJET_NO_OPEN:-0}" == "1" ]]; then
     echo "Built $APP (WADJET_NO_OPEN=1, not launching)"
