@@ -36,7 +36,7 @@ _Avoid_: Hotkey binding, keybind
 
 **Workflow**:
 A named recipe for either Screenshots or Recordings: an ordered list of After-Capture Steps, an optional Destination, and an ordered list of After-Upload Steps.
-Screenshots and Recordings each have a default Workflow, which a Shortcut or the toolbar can override.
+Screenshots and Recordings each have a default Workflow, which a Shortcut or a Tool's menu in the toolbar can override.
 _Avoid_: Profile, preset, task
 
 **Step**:

@@ -7,16 +7,19 @@ It starts as a private Swift app for macOS 26+.
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
 The research, the Workflow model, the Tools, upload behavior, Recording UX, capture history, and the Wadjet Server are settled.
-There is no app implementation yet.
+A throwaway native prototype of the Freeze Frame overlay, toolbar, and toast is in review; once it settles, work moves to the real app.
 
 ## Direction
 
 - Capture the cursor and select regions on a Freeze Frame of every screen. It looks like macOS's own screenshot UI.
-- A toolbar at the notch, or a fake Dynamic Island on screens without one, holds the Tools and a Workflow picker.
+- The toolbar starts as the notch on the built-in display, or a black fake Dynamic Island on other displays, and expands on hover into Liquid Glass with touch-size Tool buttons.
+- Clicking the selected Tool opens its menu: its Workflow, Recording options, copy format, or Measure mode. Each Tool keeps its own Workflow.
+- Tooltips appear next to the pointer. The loupe flips to stay on screen.
+- Freeze Frames and Screenshots keep HDR on HDR displays; HDR Screenshots save as HEIC with a gain map. Recordings are SDR in v1.
 - Tools are Capture region, window, and screen; Record region, window, and screen; Pick colour; Copy text; and Measure. Brushes and markup are deferred.
 - Pick colour, Copy text, and Measure put their result on the clipboard and run no Workflow.
 - Measure works by region, by line (including diagonals), or by edge detection in X, Y, or both. It shows pixels, points, inches, and centimetres.
-- Pick colour copies hex by default; the format is set in Settings or the toolbar.
+- Pick colour's loupe shows hex, rgb, hsl, oklch, and lab. It copies hex by default; the format is set in Settings or the Tool's menu.
 - Use Workflows to control local outputs, upload, and post-upload behavior. A Workflow accepts Screenshots or Recordings, and Recording Workflows choose MP4 or GIF.
 - Mia chooses the order of Steps separately after capture and after upload.
 - Shortcuts open one Tool with set options, and can name a Workflow; otherwise the default Workflow runs. URL scheme and CLI triggers are deferred.
@@ -33,8 +36,8 @@ There is no app implementation yet.
 - Steps have no conditions. A failed Step is skipped, the rest still run, and the error shows in the toast and history.
 - A new Capture can start while earlier Captures still run their Steps or upload. Only one Freeze Frame or Recording is on screen at a time.
 - Recordings can pause, so wadjet writes them with its own `AVAssetWriter` instead of ScreenCaptureKit's file recorder.
-- Recording controls (time, Pause, Stop) sit in the notch toolbar or on the menu bar icon, set per Recording or by Shortcut. The Shortcut again stops.
-- Record Tool options: countdown, system audio, microphone, cursor, click circles. All off except the cursor by default.
+- Recording controls (time, Pause, Stop) sit on the menu bar icon and in the island. Either one stops, as does the Shortcut again. Esc never cancels a Recording.
+- Record Tool options: countdown, system audio, microphone, cursor, click circles, and show island while recording. Cursor and island are on by default; the rest are off.
 - A resized window is scaled into the Recording's starting size, with bars where the shape changes.
 - MP4 resolution and fps are configurable (1920 px, 30 fps by default) with no length limit.
 - GIFs default to 960 px, 15 fps, a 60 s max, 128 colours, and ordered dithering, all configurable.
