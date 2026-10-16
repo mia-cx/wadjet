@@ -35,6 +35,13 @@ enum Tool: String, CaseIterable {
 
 enum Phase { case desktop, frozen, countdown, recording }
 
+extension Color {
+    // Wadjet means "the green one": a malachite green, used instead of the system accent
+    static let wadjetAccent = Color(red: 0.20, green: 0.84, blue: 0.58)
+}
+
+let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under it
+
 @MainActor
 final class ProtoState: ObservableObject {
     static let shared = ProtoState()
@@ -1572,15 +1579,25 @@ struct ToolbarView: View {
             .frame(width: toolD, height: toolD)
     }
 
-    // one cell of the tab bar: plain white icon; the accent tint comes from the
-    // masked overlay row, the lens magnifies whichever cell it covers
+    var selShape: some View {
+        Capsule().frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+    }
+
+    // one cell of the tab bar: plain white icon, cut out wherever the
+    // capsule/lens covers it — the accent overlay row draws that part
     func cell(_ t: Tool) -> some View {
         let selected = s.tool == t
-        let underLens = lensActive && abs((cellCentres[t]?.x ?? 0) - blobX) < selW * 1.15 / 2
+        let c = cellCentres[t] ?? .zero
         return Image(systemName: t.symbol).font(.system(size: 22))
             .foregroundStyle(.white)
-            .scaleEffect(underLens ? 1.1 : 1)
             .frame(width: toolD, height: toolD)
+            .mask {
+                ZStack {
+                    Rectangle()
+                    selShape.offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
+                }
+                .compositingGroup()
+            }
             .overlay(alignment: .bottomTrailing) {
                 // the menu droplet budding off the rest capsule's corner —
                 // hidden while pressing/dragging; high-priority tap so the
@@ -1655,10 +1672,12 @@ struct ToolbarView: View {
                     ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
                 }
                 .padding(.horizontal, 20).padding(.vertical, 10)
+                // magnified about the lens centre, so only what's inside the lens looks bigger
+                .scaleEffect(lensActive ? lensZoom : 1, anchor: rowSize.width > 0
+                             ? UnitPoint(x: blobX / rowSize.width, y: blobY / rowSize.height) : .center)
             }
-            .mask(Capsule().frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
-                      .position(x: blobX, y: blobY))
-            .foregroundStyle(Color.accentColor)
+            .mask(selShape.position(x: blobX, y: blobY))
+            .foregroundStyle(Color.wadjetAccent)
             .allowsHitTesting(false)
         }
         .fixedSize()
