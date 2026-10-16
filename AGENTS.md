@@ -6,7 +6,7 @@
 - `Sources/Wadjet` is a folder-synced group: add Swift files on disk and never edit `project.pbxproj` for them.
 - `swift test` in `apps/macos/WadjetKit` tests the UI-free code (colour formats, Measure edge finding) without the app.
 - Local builds use the Xcode beta (`run.sh` sets `DEVELOPER_DIR`); CI builds with the runner's stable Xcode 26 and warnings as errors. Keep the code compiling on both.
-- Drive the running app with `apps/macos/tools/cmd.sh` and read the result in `~/Library/Application Support/wadjet/app.log`, because the overlay can't be inspected while you sit outside it.
+- Drive the running app with `apps/macos/tools/cmd.sh` and read the result in `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/app.log`, because the overlay can't be inspected while you sit outside it.
 - Get Mia's go-ahead before any screenshot, screen recording, or synthetic mouse input: her screens show work.
 
 ## Code gotchas
