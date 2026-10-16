@@ -1,0 +1,24 @@
+{
+  "name": "09-complete-upload-incomplete",
+  "request": {
+    "method": "POST",
+    "path": "/v1/uploads/Uq7Lm2/complete",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 409,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:05:45 GMT"
+    },
+    "body": {
+      "error": {
+        "code": "upload_incomplete",
+        "message": "Part 2 of 3 is missing."
+      }
+    }
+  }
+}

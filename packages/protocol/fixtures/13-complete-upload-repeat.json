@@ -1,0 +1,30 @@
+{
+  "name": "13-complete-upload-repeat",
+  "request": {
+    "method": "POST",
+    "path": "/v1/uploads/Uq7Lm2/complete",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:06:05 GMT"
+    },
+    "body": {
+      "id": "Uq7Lm2",
+      "url": "https://w.mia.cx/Uq7Lm2.mp4",
+      "filename": "Recording 2026-10-16 at 14.05.31.mp4",
+      "kind": "recording",
+      "contentType": "video/mp4",
+      "size": 2517,
+      "device": "Mia's MacBook Pro",
+      "createdAt": "2026-10-16T12:06:00Z",
+      "thumbnailUrl": null,
+      "deleteUrl": null
+    }
+  }
+}

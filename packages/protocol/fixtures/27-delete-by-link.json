@@ -1,0 +1,20 @@
+{
+  "name": "27-delete-by-link",
+  "request": {
+    "method": "POST",
+    "path": "/d/5mQeI1qnbywzZsvQ2MibRgZdGEmSSpZ_sh3HHTkl_FQ",
+    "headers": {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "Date": "Fri, 16 Oct 2026 12:31:05 GMT"
+    },
+    "body": "deleted-page.html"
+  }
+}

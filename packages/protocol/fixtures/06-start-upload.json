@@ -1,0 +1,32 @@
+{
+  "name": "06-start-upload",
+  "request": {
+    "method": "POST",
+    "path": "/v1/uploads",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+      "Content-Type": "application/json",
+      "Idempotency-Key": "cfbbb16f-9187-4cfa-aa64-936dc4a7b7dd"
+    },
+    "body": {
+      "filename": "Recording 2026-10-16 at 14.05.31.mp4",
+      "kind": "recording",
+      "contentType": "video/mp4",
+      "size": 2517,
+      "device": "Mia's MacBook Pro"
+    }
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:05:42 GMT"
+    },
+    "body": {
+      "id": "Uq7Lm2",
+      "partBytes": 1024,
+      "partCount": 3,
+      "expiresAt": "2026-10-17T12:05:42Z"
+    }
+  }
+}

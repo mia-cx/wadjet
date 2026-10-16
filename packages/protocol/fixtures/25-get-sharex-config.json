@@ -1,0 +1,35 @@
+{
+  "name": "25-get-sharex-config",
+  "request": {
+    "method": "GET",
+    "path": "/v1/sharex.sxcu",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Content-Disposition": "attachment; filename=\"w.mia.cx.sxcu\"",
+      "Date": "Fri, 16 Oct 2026 12:30:00 GMT"
+    },
+    "body": {
+      "Version": "13.7.0",
+      "Name": "Wadjet (w.mia.cx)",
+      "DestinationType": "ImageUploader, FileUploader",
+      "RequestMethod": "POST",
+      "RequestURL": "https://w.mia.cx/v1/files",
+      "Headers": {
+        "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+        "Wadjet-Filename": "{filename}",
+        "Wadjet-Device": "ShareX"
+      },
+      "Body": "Binary",
+      "URL": "{json:url}",
+      "DeletionURL": "{json:deleteUrl}",
+      "ErrorMessage": "{json:error.message}"
+    }
+  }
+}

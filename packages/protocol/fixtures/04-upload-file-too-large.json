@@ -1,0 +1,26 @@
+{
+  "name": "04-upload-file-too-large",
+  "request": {
+    "method": "POST",
+    "path": "/v1/files",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+      "Content-Type": "application/octet-stream",
+      "Content-Length": "4097"
+    },
+    "body": "too-large.bin"
+  },
+  "response": {
+    "status": 413,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:02:30 GMT"
+    },
+    "body": {
+      "error": {
+        "code": "too_large",
+        "message": "This server accepts up to 4096 bytes per request."
+      }
+    }
+  }
+}

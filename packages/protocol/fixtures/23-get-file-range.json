@@ -1,0 +1,25 @@
+{
+  "name": "23-get-file-range",
+  "request": {
+    "method": "GET",
+    "path": "/Uq7Lm2.mp4",
+    "headers": {
+      "Range": "bytes=0-99"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 206,
+    "headers": {
+      "Content-Type": "video/mp4",
+      "Content-Length": "100",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=31536000, immutable",
+      "Content-Range": "bytes 0-99/2517",
+      "Content-Disposition": "inline; filename*=UTF-8''Recording%202026-10-16%20at%2014.05.31.mp4",
+      "X-Content-Type-Options": "nosniff",
+      "Date": "Fri, 16 Oct 2026 12:21:03 GMT"
+    },
+    "body": "recording.bytes-0-99.bin"
+  }
+}

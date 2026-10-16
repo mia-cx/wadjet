@@ -1,0 +1,36 @@
+{
+  "name": "02-upload-file",
+  "request": {
+    "method": "POST",
+    "path": "/v1/files",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+      "Content-Type": "image/png",
+      "Content-Length": "126",
+      "Wadjet-Filename": "Screenshot%202026-10-16%20at%2014.02.11.png",
+      "Wadjet-Kind": "screenshot",
+      "Wadjet-Device": "Mia%27s%20MacBook%20Pro",
+      "Idempotency-Key": "edb739d4-a2ed-422a-b927-2846efd3a794"
+    },
+    "body": "screenshot.png"
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:02:13 GMT"
+    },
+    "body": {
+      "id": "aB3xK9",
+      "url": "https://w.mia.cx/aB3xK9.png",
+      "filename": "Screenshot 2026-10-16 at 14.02.11.png",
+      "kind": "screenshot",
+      "contentType": "image/png",
+      "size": 126,
+      "device": "Mia's MacBook Pro",
+      "createdAt": "2026-10-16T12:02:13Z",
+      "thumbnailUrl": null,
+      "deleteUrl": "https://w.mia.cx/d/5mQeI1qnbywzZsvQ2MibRgZdGEmSSpZ_sh3HHTkl_FQ"
+    }
+  }
+}
