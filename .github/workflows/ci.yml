@@ -42,6 +42,8 @@ jobs:
       - name: Build + verify
         working-directory: apps/macos
         run: |
-          WADJET_NO_OPEN=1 ./run.sh SWIFT_TREAT_WARNINGS_AS_ERRORS=YES
+          # stable Xcode builds the local package with warnings suppressed,
+          # which conflicts with warnings as errors
+          WADJET_NO_OPEN=1 ./run.sh SWIFT_TREAT_WARNINGS_AS_ERRORS=YES SWIFT_SUPPRESS_WARNINGS=NO
           plutil -lint build/Wadjet.app/Contents/Info.plist
           codesign --verify --strict build/Wadjet.app
