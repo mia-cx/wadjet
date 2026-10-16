@@ -43,6 +43,7 @@ extension Color {
 
 let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under it
 let dimAlpha: CGFloat = 0.4  // Freeze Frame dim outside the capture target
+let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used until the window's own corner is measured
 
 @MainActor
 final class AppState: ObservableObject {
@@ -84,7 +85,9 @@ final class AppState: ObservableObject {
 
 struct FrozenDisplay {
     let screen: NSScreen
-    let image: CGImage          // SDR image, pixel resolution
+    let image: CGImage          // SDR image, pixel resolution — what the panel shows (cursor included)
+    /// cursor-free SDR frame; every pixel read — Pick Colour, the loupe, Measure — uses it so the frozen cursor never shows up in a reading
+    let clean: CGImage
     var hdrImage: CGImage?      // extended-sRGB variant when the display is HDR
     var bitmap: UnsafePointer<UInt8>? // sRGB, premultiplied ARGB, pixel coords
     var bitmapWidth = 0, bitmapHeight = 0
@@ -353,15 +356,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: trigger
-    func trigger(_ tool: Tool) {
+    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now) {
         let s = AppState.shared
         if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
         // switching Tools while frozen keeps the same Freeze Frame
         if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("tool switched to \(tool.title)") }; return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
-        let t0 = CFAbsoluteTimeGetCurrent()
-        Task { await overlayCtrl.freezeAndShow(tool: tool, t0: t0) }
+        Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
     }
     func permissionNeeded() {
         _ = CGRequestScreenCaptureAccess()
@@ -378,9 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: selection -> capture or recording
     // a live shot of one window, "through" the Freeze Frame; nil if SCK can't
     // find it anymore — callers fall back to cropping the frozen image
-    func captureWindow(id: CGWindowID, display: Int) async -> CGImage? {
+    func captureWindow(id: CGWindowID, screen: NSScreen) async -> CGImage? {
         guard let scw = overlayCtrl.scWindows[id] else { return nil }
-        let screen = Freeze.shared.displays[display].screen
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
         let sc = screen.backingScaleFactor
         let cfg = SCScreenshotConfiguration()
@@ -401,19 +402,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
+            // read the screen and the frozen-crop fallback before closeAll
+            // clears the Freeze Frame — afterwards both would be gone
+            let screen = Freeze.shared.displays[display].screen
+            let fallback = Freeze.shared.crop(rect: frame, on: display, hdr: true)
             overlayCtrl.closeAll()
             Task { @MainActor in
-                var thumb = await captureWindow(id: id, display: display)
+                var thumb = await captureWindow(id: id, screen: screen)
                 if thumb == nil {
                     AppLog.line("window \(id) not capturable; falling back to frozen crop")
-                    thumb = Freeze.shared.crop(rect: frame, on: display, hdr: true)
+                    thumb = fallback
                 }
                 runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
             }
         } else {
             recordingWindowID = id // kept for the real SCStream later
+            let screen = Freeze.shared.displays[display].screen
             Task { @MainActor in
-                startRecording(rect: frame, display: display, thumb: await captureWindow(id: id, display: display))
+                startRecording(rect: frame, display: display, thumb: await captureWindow(id: id, screen: screen))
             }
         }
     }
@@ -770,6 +776,7 @@ final class OverlayController {
     var panels: [NSPanel] = []
     var toolbarPanels: [Int: NSPanel] = [:] // one per Freeze display index
     var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
+    var cornerRadii: [CGWindowID: CGFloat] = [:] // windowID -> measured corner radius, points
     var menuPanel: NSPanel?
     var menuMonitor: Any?
     var keyMonitor: Any?
@@ -837,63 +844,52 @@ final class OverlayController {
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
     }
 
-    func freezeAndShow(tool: Tool, t0: CFAbsoluteTime) async {
+    var freezeLatencies: [Double] = [] // hotkey-to-Freeze-Frame ms, one per open
+    struct CaptureError: LocalizedError {
+        let errorDescription: String?
+        init(_ description: String) { errorDescription = description }
+    }
+
+    func freezeAndShow(tool: Tool, start: ContinuousClock.Instant) async {
+        func ms(_ d: Duration) -> Int { Int(d / .milliseconds(1)) }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let tContent = start.duration(to: .now)
             Freeze.shared.displays = []
+            scWindows = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
+            // displays stay sequential: FrozenDisplay holds a raw bitmap
+            // pointer, so it can't cross a task boundary without a sendability
+            // hack — the two screenshots of each display still run concurrently
+            var failures: [String] = []
             for screen in NSScreen.screens {
-                guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
-                      let disp = content.displays.first(where: { $0.displayID == num }) else { continue }
-                let cfg = SCScreenshotConfiguration()
-                cfg.width = Int(disp.width); cfg.height = Int(disp.height)
-                cfg.showsCursor = true; cfg.displayIntent = .local
-                let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
-                cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
-                let out = try await SCScreenshotManager.captureScreenshot(
-                    contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
-                guard let img = out.sdrImage ?? out.hdrImage else { continue }
-                var fd = FrozenDisplay(screen: screen, image: img)
-                fd.hdrImage = out.hdrImage
-                // CGWindowList is front-to-back, so first-hit is the frontmost
-                // window — SCShareableContent's windows list isn't ordered
-                let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
-                let sy = screen.frame
-                let primaryH = NSScreen.screens[0].frame.height
-                fd.windowFrames = infos.compactMap { w in
-                    guard (w[kCGWindowLayer as String] as? Int) == 0,
-                          (w[kCGWindowOwnerPID as String] as? Int32) != ProcessInfo.processInfo.processIdentifier,
-                          (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
-                          let b = w[kCGWindowBounds as String] as? [String: CGFloat],
-                          let wn = w[kCGWindowNumber as String] as? Int else { return nil }
-                    let f = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
-                    guard f.width > 40, f.height > 40 else { return nil }
-                    // top-left global coords -> this display's bottom-left view coords
-                    return WinEntry(id: CGWindowID(wn),
-                                    frame: CGRect(x: f.minX - sy.minX,
-                                                  y: primaryH - sy.minY - f.minY - f.height,
-                                                  width: f.width, height: f.height))
+                do { Freeze.shared.displays.append(try await frozenDisplay(on: screen, from: content)) } catch {
+                    failures.append("\(screen.localizedName): \(error.localizedDescription)")
+                    AppLog.line("freeze \(screen.localizedName) failed: \(error.localizedDescription)")
                 }
-                scWindows = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
-                // bitmap for pixel reads — real sRGB so colour math is honest
-                let w = img.width, h = img.height
-                var data = [UInt8](repeating: 0, count: w * h * 4)
-                let ok = data.withUnsafeMutableBytes { ptr -> Bool in
-                    guard let ctx = CGContext(data: ptr.baseAddress, width: w, height: h, bitsPerComponent: 8,
-                                              bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                              bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return false }
-                    ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h)); return true
-                }
-                if ok { fd.bitmap = UnsafePointer(data.withUnsafeBufferPointer { $0.baseAddress }); fd.bitmapWidth = w; fd.bitmapHeight = h
-                    bitmapStore.append(data) }
-                Freeze.shared.displays.append(fd)
             }
-            let latency = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            // nothing captured: stay on the desktop so the next Tool shortcut retries
+            guard !Freeze.shared.displays.isEmpty else { throw CaptureError(failures.joined(separator: "; ")) }
+            // "capture" includes pixel prep: the sRGB bitmap is drawn inside
+            // the same per-display work as the screenshots
+            let tCapture = start.duration(to: .now)
             await MainActor.run {
-                AppState.shared.latencyText = String(format: "%.0f ms (%d displays)", latency, Freeze.shared.displays.count)
-                let perDisplay = Freeze.shared.displays.map { "\($0.image.width)x\($0.image.height)\($0.hdrImage != nil ? " HDR" : "")" }.joined(separator: ", ")
-                AppLog.line("freeze latency \(Int(latency)) ms across \(Freeze.shared.displays.count) displays: \(perDisplay)")
                 self.showPanels(tool: tool)
+                CATransaction.flush() // commit the Freeze Frame layers, then stop the clock
+                let total = start.duration(to: .now)
+                let totalMs = ms(total)
+                self.freezeLatencies.append(Double(totalMs))
+                AppState.shared.latencyText = String(format: "%.0f ms (%d displays)", Double(totalMs), Freeze.shared.displays.count)
+                AppLog.line("freeze \(totalMs) ms (content \(ms(tContent)), capture \(ms(tCapture - tContent)), present \(ms(total - tCapture)))")
+                for (i, fd) in Freeze.shared.displays.enumerated() {
+                    let img = fd.hdrImage ?? fd.image
+                    let f = fd.screen.frame
+                    AppLog.line("freeze d\(i) \(fd.screen.localizedName): \(Int(f.width))×\(Int(f.height)) pt @\(Int(fd.screen.backingScaleFactor))x → \(img.width)×\(img.height) px\(fd.hdrImage != nil ? " HDR" : "")")
+                }
+                if let p50 = self.freezeLatencies.percentile(50), let p95 = self.freezeLatencies.percentile(95) {
+                    AppLog.line("freeze p50 \(Int(p50)) ms, p95 \(Int(p95)) ms over \(self.freezeLatencies.count) opens (target p95 ≤ 200 ms)")
+                }
                 AppLog.line("phase=frozen tool=\(tool.title)")
+                self.measureWindowCorners()
             }
         } catch {
             await MainActor.run {
@@ -901,6 +897,122 @@ final class OverlayController {
                 AppLog.line("freeze failed: \(error.localizedDescription)")
             }
         }
+    }
+    // one display's Freeze Frame: two screenshots taken concurrently — what the
+    // panel shows (cursor, HDR as the display allows) and `clean` (cursor-free
+    // SDR) that every pixel read uses, so the frozen cursor never lands in a
+    // Pick Colour, loupe or Measure reading
+    func frozenDisplay(on screen: NSScreen, from content: SCShareableContent) async throws -> FrozenDisplay {
+        guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let disp = content.displays.first(where: { $0.displayID == num }) else { throw CaptureError("no shareable display") }
+        let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
+        let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
+        let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        // MainActor-inheriting tasks created on the actor itself: the SCK
+        // calls suspend off-actor so the two captures overlap, while `disp`
+        // never leaves its region (no SCK type is Sendable, so `async let`
+        // can't carry them itself)
+        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr) }
+        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false) }
+        let (out, cleanOut) = try await (shot.value, cleanShot.value)
+        guard let img = out.sdr ?? out.hdr, let clean = cleanOut.sdr else { throw CaptureError("screenshot returned no image") }
+        var fd = FrozenDisplay(screen: screen, image: img, clean: clean)
+        fd.hdrImage = out.hdr
+        // CGWindowList is front-to-back, so first-hit is the frontmost
+        // window — SCShareableContent's windows list isn't ordered
+        let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        let sy = screen.frame
+        let primaryH = NSScreen.screens[0].frame.height
+        fd.windowFrames = infos.compactMap { w in
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowOwnerPID as String] as? Int32) != ProcessInfo.processInfo.processIdentifier,
+                  (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
+                  let b = w[kCGWindowBounds as String] as? [String: CGFloat],
+                  let wn = w[kCGWindowNumber as String] as? Int else { return nil }
+            let f = CGRect(x: b["X"] ?? 0, y: b["Y"] ?? 0, width: b["Width"] ?? 0, height: b["Height"] ?? 0)
+            guard f.width > 40, f.height > 40 else { return nil }
+            // top-left global coords -> this display's bottom-left view coords
+            return WinEntry(id: CGWindowID(wn),
+                            frame: CGRect(x: f.minX - sy.minX,
+                                          y: primaryH - sy.minY - f.minY - f.height,
+                                          width: f.width, height: f.height))
+        }
+        // bitmap for pixel reads — real sRGB so colour math is honest
+        let bw = clean.width, bh = clean.height
+        var data = [UInt8](repeating: 0, count: bw * bh * 4)
+        let ok = data.withUnsafeMutableBytes { ptr -> Bool in
+            guard let ctx = CGContext(data: ptr.baseAddress, width: bw, height: bh, bitsPerComponent: 8,
+                                      bytesPerRow: bw * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                      bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return false }
+            ctx.draw(clean, in: CGRect(x: 0, y: 0, width: bw, height: bh)); return true
+        }
+        if ok { fd.bitmap = UnsafePointer(data.withUnsafeBufferPointer { $0.baseAddress }); fd.bitmapWidth = bw; fd.bitmapHeight = bh
+            bitmapStore.append(data) }
+        return fd
+    }
+    // one display screenshot at pixel resolution: `cursor` decides whether the
+    // pointer is composited in, `hdr` asks for an extended-sRGB variant
+    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool) async throws -> (sdr: CGImage?, hdr: CGImage?) {
+        let cfg = SCScreenshotConfiguration()
+        cfg.width = width; cfg.height = height
+        cfg.showsCursor = cursor; cfg.displayIntent = .local
+        cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
+        let out = try await SCScreenshotManager.captureScreenshot(
+            contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
+        return (out.sdrImage, out.hdrImage)
+    }
+    // measure each window's real corner radius from a corner screenshot, so the
+    // Capture Window highlight can follow it — window radii vary per window in
+    // macOS 26+ (title-bar-only vs toolbar, none full-screen). Front-to-back in
+    // windowFrames order; stops if the Freeze Frame goes away.
+    func measureWindowCorners() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var seen = Set<CGWindowID>()
+            var measured: [String] = []
+            for fd in Freeze.shared.displays {
+                for w in fd.windowFrames where seen.insert(w.id).inserted {
+                    guard AppState.shared.phase == .frozen else { return }
+                    guard let scw = scWindows[w.id],
+                          let r = await measureWindowCorner(scw, scale: fd.screen.backingScaleFactor) else { continue }
+                    cornerRadii[w.id] = r
+                    let name = scw.owningApplication?.applicationName ?? "?"
+                    measured.append("\(name) \(String(format: "%.1f", r)) pt")
+                }
+            }
+            for p in panels {
+                p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.needsDisplay = true }
+            }
+            AppLog.line("window corners: \(measured.joined(separator: ", "))")
+        }
+    }
+    // the window's real corner radius in points, read off the alpha ramp along
+    // the diagonal of a 32×32 pt shot of its bottom-right corner; nil when the
+    // corner can't be captured
+    func measureWindowCorner(_ scw: SCWindow, scale: CGFloat) async -> CGFloat? {
+        let side: CGFloat = 32
+        let px = Int((side * scale).rounded())
+        let cfg = SCScreenshotConfiguration()
+        cfg.sourceRect = CGRect(x: scw.frame.width - side, y: scw.frame.height - side, width: side, height: side)
+        cfg.width = px; cfg.height = px
+        cfg.ignoreShadows = true; cfg.showsCursor = false
+        cfg.dynamicRange = .sdr
+        guard let img = try? await SCScreenshotManager.captureScreenshot(
+            contentFilter: SCContentFilter(desktopIndependentWindow: scw), configuration: cfg).sdrImage,
+              img.width >= 2, img.height >= 2 else { return nil }
+        var alpha = [UInt8](repeating: 0, count: img.width * img.height)
+        let ok = alpha.withUnsafeMutableBytes { ptr -> Bool in
+            guard let ctx = CGContext(data: ptr.baseAddress, width: img.width, height: img.height,
+                                      bitsPerComponent: 8, bytesPerRow: img.width, space: CGColorSpace(name: CGColorSpace.genericGrayGamma2_2)!,
+                                      bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height)); return true
+        }
+        guard ok else { return nil }
+        // bitmap row 0 is the image's top row: walk the diagonal inward from
+        // the bottom-right pixel
+        let n = min(img.width, img.height)
+        let diag = (0..<n).map { i in alpha[(img.height - 1 - i) * img.width + (img.width - 1 - i)] }
+        return cornerRadius(diagonalAlpha: diag).map { CGFloat($0) / scale }
     }
     var bitmapStore: [[UInt8]] = []
 
@@ -995,7 +1107,7 @@ final class OverlayController {
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
         AppState.shared.expandedDisplay = nil
-        Freeze.shared.displays = []; bitmapStore = []
+        Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         AppDelegate.shared?.updateEscHotkey()
     }
 }
@@ -1045,7 +1157,10 @@ final class OverlayNSView: NSView {
             target = sel.map { NSBezierPath(rect: $0) }
             alpha = t != .copyText ? dimAlpha : sel == nil ? 0.15 : 0.35
         case .capWindow, .recWindow:
-            if !overToolbar, let w = hoverWin { target = NSBezierPath(roundedRect: w.frame, xRadius: 12, yRadius: 12) }
+            if !overToolbar, let w = hoverWin {
+                let r = ctrl?.cornerRadii[w.id] ?? fallbackWindowRadius
+                target = NSBezierPath(roundedRect: w.frame, xRadius: r, yRadius: r)
+            }
             alpha = dimAlpha
         default: break
         }
@@ -1149,10 +1264,10 @@ final class OverlayNSView: NSView {
         let n2 = n / 2
         let x0 = pp.x - n2, y0 = pp.y - n2
         let ix0 = max(0, x0), iy0 = max(0, y0)
-        let ix1 = min(f.image.width - 1, x0 + n - 1), iy1 = min(f.image.height - 1, y0 + n - 1)
+        let ix1 = min(f.clean.width - 1, x0 + n - 1), iy1 = min(f.clean.height - 1, y0 + n - 1)
         let cell = CGFloat(px), gridY = ly + infoH + 6
         if ix1 >= ix0, iy1 >= iy0,
-           let crop = f.image.cropping(to: CGRect(x: ix0, y: iy0, width: ix1 - ix0 + 1, height: iy1 - iy0 + 1)) {
+           let crop = f.clean.cropping(to: CGRect(x: ix0, y: iy0, width: ix1 - ix0 + 1, height: iy1 - iy0 + 1)) {
             ctx.saveGState()
             ctx.interpolationQuality = .none
             ctx.draw(crop, in: CGRect(x: lx + CGFloat(ix0 - x0) * cell,
@@ -2250,7 +2365,8 @@ enum Hotkeys {
             guard id.id >= 1 && id.id <= 3 else { return OSStatus(eventNotHandledErr) }
             let tools = [Tool.capRegion, .capScreen, .recRegion]
             let t = tools[Int(id.id) - 1]
-            DispatchQueue.main.async { AppDelegate.shared?.trigger(t) }
+            let start = ContinuousClock.now // hotkey press -> Freeze Frame latency starts here
+            DispatchQueue.main.async { AppDelegate.shared?.trigger(t, at: start) }
             return noErr
         }, 1, &type, nil, nil)
     }
