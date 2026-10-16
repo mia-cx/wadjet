@@ -1279,8 +1279,11 @@ struct ToolbarView: View {
     // Notched display: black, flush with the top edge, rounded bottom corners,
     // centred on (and slightly wider than) the notch.
     // Other displays: a fake Dynamic Island, a black capsule floating inside the
-    // menu bar band with a small gap above it.
-    var islandW: CGFloat { hasNotch ? max(126, notchW + 40) : 100 }
+    // menu bar band with a small gap above it. Both show the current Tool's icon
+    // and an expand chevron (or the recording dot and time) in ears either side
+    // of the notch, so the toolbar is visible while collapsed.
+    var earW: CGFloat { recording ? 48 : 28 }
+    var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (recording ? 120 : 100) }
     var islandH: CGFloat { max(22, barH) }
     var gap: CGFloat { hasNotch ? 0 : 3 }
     var pillH: CGFloat { islandH - 2 * gap }
@@ -1289,19 +1292,23 @@ struct ToolbarView: View {
     // buttons can never be clipped.
     @State var rowSize = CGSize(width: 520, height: 66)
     @State var glassD: CGFloat = 72 // measured glass button diameter
-    // Notched display: the row clears the notch. Island: the row hugs the shape
-    // with the same margin on every side, leaving no empty band over the menu bar.
+    // The row sits rowGap below the menu bar on every display. Notched display:
+    // the shape hangs from the top edge and its top band holds the notch.
+    // Island: the expanded shape drops below the menu bar, covering none of it.
     var rowInset: CGFloat { 10 }
-    var contentTop: CGFloat { hasNotch ? islandH + 6 : rowInset }
+    var rowGap: CGFloat { 6 }
+    var shapeTop: CGFloat { expanded && !hasNotch ? islandH : gap }
+    var contentTop: CGFloat { (hasNotch ? islandH : 0) + rowGap }
     var recExpandedW: CGFloat { 260 }
     var expW: CGFloat { min(limit, rowSize.width + 2 * rowInset) }
-    var expH: CGFloat { hasNotch ? islandH + 16 + rowSize.height : rowSize.height + 2 * rowInset }
+    var expH: CGFloat { contentTop + rowSize.height + rowInset }
     var shapeW: CGFloat { expanded ? (recording ? recExpandedW : expW) : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
     var panelW: CGFloat { min(limit, expW) + 48 }
-    var panelH: CGFloat { expH + 12 } // menus and tooltips are their own panels
+    // menus and tooltips are their own panels
+    var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
-        CGRect(x: (panelW - shapeW) / 2, y: panelH - gap - shapeH, width: shapeW, height: shapeH)
+        CGRect(x: (panelW - shapeW) / 2, y: panelH - shapeTop - shapeH, width: shapeW, height: shapeH)
     }
 
     var limit: CGFloat { (screen?.frame.width ?? 1280) - 40 }
@@ -1340,6 +1347,8 @@ struct ToolbarView: View {
 
     var morph: some View {
         ZStack(alignment: .top) {
+            // collapsed fill sits under the island icons, not over them
+            shape.fill(Color.black).opacity(expanded ? 0 : 1).allowsHitTesting(false)
             expandedContent
                 .opacity(expanded ? 1 : 0)
                 .scaleEffect(expanded ? 1 : 0.7, anchor: .top)
@@ -1349,24 +1358,30 @@ struct ToolbarView: View {
         .frame(width: shapeW, height: shapeH)
         .glassEffect(.regular.tint(.black.opacity(0.4)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
-        .overlay(shape.fill(Color.black).opacity(expanded ? 0 : 1).allowsHitTesting(false))
         .contentShape(shape)
         // an open menu holds the toolbar expanded while the pointer is in the menu
         .onHover { h in ProtoLog.line("hover -> \(h)"); s.toolbarExpanded = h || s.openMenu != nil }
+        .padding(.top, shapeTop)
         .animation(.spring(duration: 0.35), value: expanded)
     }
 
-    // black island contents: current Tool icon (or recording dot + time)
-    @ViewBuilder var islandContent: some View {
-        if recording {
-            HStack(spacing: 7) {
+    // black island contents, one item in each ear: current Tool icon and an
+    // expand chevron, or the recording dot and elapsed time
+    var islandContent: some View {
+        HStack(spacing: 0) {
+            if recording {
                 Circle().fill(.red).frame(width: 8, height: 8)
-                Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit().foregroundStyle(.white)
+                Spacer(minLength: 0)
+                Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
+            } else {
+                Image(systemName: (s.tool ?? .capRegion).symbol).font(.system(size: 13))
+                Spacer(minLength: 0)
+                Image(systemName: "chevron.down").font(.system(size: 9, weight: .bold)).opacity(0.6)
             }
-        } else {
-            Image(systemName: (s.tool ?? .capRegion).symbol)
-                .font(.system(size: 13)).foregroundStyle(.white)
         }
+        .foregroundStyle(.white)
+        .padding(.horizontal, hasNotch ? 7 : 12)
+        .frame(width: islandW, height: pillH)
     }
 
     @ViewBuilder var expandedContent: some View {
