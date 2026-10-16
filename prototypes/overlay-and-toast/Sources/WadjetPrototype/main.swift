@@ -164,6 +164,13 @@ enum ClearGlassPatch {
                 f.setValue(1, forKey: "inputFaceColorMatrixMaxLuma")
                 f.setValue(1, forKey: "inputFaceColorMatrixMaxLumaSDR")
                 f.setValue(identityFill, forKey: "inputFaceColorMatrixFillColor")
+                // rim chromatic aberration, tuned for the ~74 pt lens (Apple's own
+                // 600 pt loading blob uses 4 / 300 / 50; offset 0 turns it off).
+                // Scaled by the materialize progress, read off clear glass's -48.1 refraction.
+                let refraction = (f.value(forKey: "inputInnerRefractionAmount") as? NSNumber)?.doubleValue ?? 0
+                f.setValue(4 * min(1, abs(refraction) / 48.1), forKey: "inputAberrationAmount")
+                f.setValue(37, forKey: "inputAberrationHeight")
+                f.setValue(3, forKey: "inputAberrationOffset")
             }
             origFn(me, sel, arr)
         }
