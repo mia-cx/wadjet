@@ -30,14 +30,10 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - name: Select Xcode 27 if present
+      - name: Toolchain
+        # the image's default (stable) Xcode, so CI proves the app builds
+        # without the local Xcode beta
         run: |
-          # the runner image ships Xcode 27 as a preview; we build locally
-          # with the Xcode 27 beta
-          xcode=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1 || true)
-          if [ -n "$xcode" ]; then
-            sudo xcode-select -s "$xcode/Contents/Developer"
-          fi
           xcodebuild -version
           swift --version
       - name: Build
