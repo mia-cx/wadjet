@@ -7,6 +7,7 @@ import Carbon
 import Vision
 import UniformTypeIdentifiers
 import ObjectiveC
+import WadjetKit
 
 // MARK: - Model
 
@@ -87,6 +88,7 @@ struct FrozenDisplay {
     var hdrImage: CGImage?      // extended-sRGB variant when the display is HDR
     var bitmap: UnsafePointer<UInt8>? // sRGB, premultiplied ARGB, pixel coords
     var bitmapWidth = 0, bitmapHeight = 0
+    var pixels: PixelBuffer? { bitmap.map { PixelBuffer(base: $0, width: bitmapWidth, height: bitmapHeight) } }
     var windowFrames: [WinEntry] = [] // front-to-back, view coords
 }
 
@@ -110,20 +112,10 @@ final class Freeze {
         return (min(max(0, Int((pt.x * sx).rounded(.down))), f.bitmapWidth - 1),
                 min(max(0, Int(((f.screen.frame.height - pt.y) * sy).rounded(.down))), f.bitmapHeight - 1))
     }
-    func pixel(at pt: CGPoint, on d: Int) -> (UInt8, UInt8, UInt8) {
-        guard d < displays.count, let bm = displays[d].bitmap else { return (0, 0, 0) }
-        let f = displays[d]
+    func pixel(at pt: CGPoint, on d: Int) -> RGB8 {
+        guard d < displays.count else { return (0, 0, 0) }
         let p = pointerPixel(pt, on: d)
-        let i = (p.y * f.bitmapWidth + p.x) * 4
-        return (bm[i + 1], bm[i + 2], bm[i + 3]) // ARGB -> RGB
-    }
-    // direct read in bitmap-pixel coords (x right, y down from the top)
-    func pixelXY(_ x: Int, _ yTop: Int, on d: Int) -> (UInt8, UInt8, UInt8) {
-        guard d < displays.count, let bm = displays[d].bitmap else { return (0, 0, 0) }
-        let f = displays[d]
-        let x = min(max(0, x), f.bitmapWidth - 1), y = min(max(0, yTop), f.bitmapHeight - 1)
-        let i = (y * f.bitmapWidth + x) * 4
-        return (bm[i + 1], bm[i + 2], bm[i + 3])
+        return displays[d].pixels?[p.x, p.y] ?? (0, 0, 0)
     }
     func crop(rect: CGRect, on d: Int, hdr: Bool = false) -> CGImage? {
         guard d < displays.count else { return nil }
@@ -189,61 +181,6 @@ enum ClearGlassPatch {
     }
 }
 
-func hexString(_ c: (UInt8, UInt8, UInt8)) -> String { String(format: "#%02X%02X%02X", c.0, c.1, c.2) }
-func srgbLinear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
-// CSS Color 4 breakdowns of one sRGB pixel
-func fmtRGB(_ c: (UInt8, UInt8, UInt8)) -> String { "rgb(\(c.0) \(c.1) \(c.2))" }
-func fmtHSL(_ c: (UInt8, UInt8, UInt8)) -> String {
-    let r = Double(c.0) / 255, g = Double(c.1) / 255, b = Double(c.2) / 255
-    let mx = max(r, g, b), mn = min(r, g, b); var h = 0.0, s = 0.0
-    let l = (mx + mn) / 2
-    if mx != mn {
-        let d = mx - mn
-        s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
-        h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4
-        h *= 60
-    }
-    return String(format: "hsl(%.0f %.0f%% %.0f%%)", h, s * 100, l * 100)
-}
-// OKLab (Ottosson) from linear sRGB
-func fmtOKLCH(_ c: (UInt8, UInt8, UInt8)) -> String {
-    let r = srgbLinear(Double(c.0) / 255), g = srgbLinear(Double(c.1) / 255), b = srgbLinear(Double(c.2) / 255)
-    let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
-    let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
-    let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
-    let L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
-    let a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
-    let bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
-    let C = sqrt(a * a + bb * bb)
-    var h = atan2(bb, a) * 180 / .pi; if h < 0 { h += 360 }
-    return String(format: "oklch(%.3f %.3f %.1f)", L, C, h)
-}
-// CIELAB D50 (CSS lab()) via linear sRGB -> XYZ D65 -> Bradford D50
-func fmtLAB(_ c: (UInt8, UInt8, UInt8)) -> String {
-    let r = srgbLinear(Double(c.0) / 255), g = srgbLinear(Double(c.1) / 255), b = srgbLinear(Double(c.2) / 255)
-    let x65 = 0.4123908 * r + 0.3575843 * g + 0.1804808 * b
-    let y65 = 0.2126390 * r + 0.7151687 * g + 0.0721923 * b
-    let z65 = 0.0193308 * r + 0.1191948 * g + 0.9505322 * b
-    let X =  1.0479298 * x65 + 0.0229468 * y65 - 0.0501922 * z65
-    let Y =  0.0296278 * x65 + 0.9904345 * y65 - 0.0170738 * z65 // Bradford D65->D50
-    let Z = -0.0092430 * x65 + 0.0150552 * y65 + 0.7518743 * z65
-    func f(_ t: Double) -> Double { t > 0.008856 ? pow(t, 1.0 / 3.0) : (903.3 * t + 16) / 116 }
-    let fx = f(X / 0.9642), fy = f(Y / 1.0000), fz = f(Z / 0.8251)
-    return String(format: "lab(%.2f %.2f %.2f)", 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
-}
-func fmtSwiftUI(_ c: (UInt8, UInt8, UInt8)) -> String {
-    String(format: "Color(red: %.3f, green: %.3f, blue: %.3f)", Double(c.0) / 255, Double(c.1) / 255, Double(c.2) / 255)
-}
-func fmtColour(_ c: (UInt8, UInt8, UInt8), fmt: String) -> String {
-    switch fmt {
-    case "rgb()": return fmtRGB(c)
-    case "hsl()": return fmtHSL(c)
-    case "oklch()": return fmtOKLCH(c)
-    case "lab()": return fmtLAB(c)
-    case "SwiftUI": return fmtSwiftUI(c)
-    default: return hexString(c)
-    }
-}
 @MainActor
 func clipboard(_ s: String) {
     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string)
@@ -1188,13 +1125,9 @@ final class OverlayNSView: NSView {
         let c = Freeze.shared.pixel(at: pt, on: di)
         // colour info block under the grid (Pick Colour only) — counts towards
         // the loupe's total height for edge flipping
-        let rows: [(String, Bool)] = tool == .pickColour ? [
-            (hexString(c), AppState.shared.colourFmt == "Hex"),
-            (fmtRGB(c), AppState.shared.colourFmt == "rgb()"),
-            (fmtHSL(c), AppState.shared.colourFmt == "hsl()"),
-            (fmtOKLCH(c), AppState.shared.colourFmt == "oklch()"),
-            (fmtLAB(c), AppState.shared.colourFmt == "lab()"),
-        ] : []
+        let rows: [(String, Bool)] = tool == .pickColour
+            ? [ColourFormat.hex, .rgb, .hsl, .oklch, .lab].map { ($0.format(c), AppState.shared.colourFmt == $0.rawValue) }
+            : []
         let infoH: CGFloat = rows.isEmpty ? 20 : CGFloat(rows.count) * 14 + 12
         let totalH = sz + 6 + infoH
         // default above-right of the pointer; flip below if it crosses the top,
@@ -1233,7 +1166,7 @@ final class OverlayNSView: NSView {
         NSBezierPath(roundedRect: NSRect(x: lx, y: ly, width: sz, height: totalH), xRadius: 8, yRadius: 8).stroke()
         if rows.isEmpty {
             // display-relative, top-left origin like the system screenshot tool
-            drawBadge("\(Int(pt.x)), \(Int(bounds.height - pt.y))  \(hexString(c))", at: CGPoint(x: lx, y: ly + 2))
+            drawBadge("\(Int(pt.x)), \(Int(bounds.height - pt.y))  \(ColourFormat.hex.format(c))", at: CGPoint(x: lx, y: ly + 2))
             return
         }
         // info block: swatch + hex on row 0, then rgb/hsl/oklch/lab; the row of
@@ -1324,7 +1257,7 @@ final class OverlayNSView: NSView {
             let i = wrap(modes.firstIndex(of: measureMode) ?? 1, modes.count)
             AppDelegate.shared?.setMeasureMode(i); setFlash(modes[i])
         case .pickColour:
-            let fmts = ["Hex", "rgb()", "hsl()", "oklch()", "lab()", "SwiftUI"]
+            let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
         case .copyText: break
@@ -1340,8 +1273,8 @@ final class OverlayNSView: NSView {
             if let w = hoverWin { app?.didSelectWindow(id: w.id, frame: w.frame, on: di) }
         case .pickColour:
             let c = Freeze.shared.pixel(at: pt, on: di)
-            let s = fmtColour(c, fmt: AppState.shared.colourFmt)
-            clipboard(s); showHUD("Copied \(s)", swatch: hexString(c))
+            let s = (ColourFormat(rawValue: AppState.shared.colourFmt) ?? .hex).format(c)
+            clipboard(s); showHUD("Copied \(s)", swatch: ColourFormat.hex.format(c))
             ctrl?.closeAll()
         case .measure where measureMode != "Bounds":
             if let v = rulerLabel() { copyMeasureAndClose(v) }
@@ -1425,27 +1358,18 @@ final class OverlayNSView: NSView {
     // Screen Ruler: walk the Freeze Frame bitmap outward from the pointer pixel
     // until a pixel differs from it by more than `tolerance` (sum of |ΔRGB|)
     func scanRuler(at pt: CGPoint) {
-        let f = fd
-        let sx = CGFloat(f.bitmapWidth) / bounds.width, sy = CGFloat(f.bitmapHeight) / bounds.height
-        let (px, py) = Freeze.shared.pointerPixel(pt, on: di)
-        let c0 = Freeze.shared.pixelXY(px, py, on: di)
-        func diff(_ x: Int, _ y: Int) -> Bool {
-            let c = Freeze.shared.pixelXY(x, y, on: di)
-            return abs(Int(c.0) - Int(c0.0)) + abs(Int(c.1) - Int(c0.1)) + abs(Int(c.2) - Int(c0.2)) > tolerance
-        }
         rulerX = nil; rulerY = nil
+        guard let pixels = fd.pixels else { return }
+        let sx = CGFloat(pixels.width) / bounds.width, sy = CGFloat(pixels.height) / bounds.height
+        let (px, py) = Freeze.shared.pointerPixel(pt, on: di)
         if measureMode != "Vertical" { // Spacing + Horizontal
-            var l = px, r = px
-            while l > 0 && !diff(l - 1, py) { l -= 1 }
-            while r < f.bitmapWidth - 1 && !diff(r + 1, py) { r += 1 }
-            rulerX = (CGFloat(l) / sx, CGFloat(r + 1) / sx) // r is the last matching pixel, so the run ends at r + 1
+            let r = pixels.run(through: px, py, along: .horizontal, tolerance: tolerance)
+            rulerX = (CGFloat(r.lowerBound) / sx, CGFloat(r.upperBound) / sx)
         }
         if measureMode != "Horizontal" { // Spacing + Vertical
-            var t = py, b = py
-            while t > 0 && !diff(px, t - 1) { t -= 1 }
-            while b < f.bitmapHeight - 1 && !diff(px, b + 1) { b += 1 }
+            let r = pixels.run(through: px, py, along: .vertical, tolerance: tolerance)
             // bitmap y is top-down; view y is bottom-up
-            rulerY = (bounds.height - CGFloat(b + 1) / sy, bounds.height - CGFloat(t) / sy)
+            rulerY = (bounds.height - CGFloat(r.upperBound) / sy, bounds.height - CGFloat(r.lowerBound) / sy)
         }
     }
     func rescanRuler() {
@@ -1966,7 +1890,7 @@ struct ToolMenuView: View {
                 section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
                 toggles()
             case .util where tool == .pickColour:
-                section("Copy as", picks: ["Hex", "rgb()", "hsl()", "oklch()", "lab()", "SwiftUI"], current: s.colourFmt) { s.colourFmt = $0 }
+                section("Copy as", picks: ColourFormat.allCases.map(\.rawValue), current: s.colourFmt) { s.colourFmt = $0 }
             case .util where tool == .measure:
                 section("", picks: ["Bounds", "Spacing", "Horizontal", "Vertical"], current: s.measureMode) { s.measureMode = $0 }
             default: EmptyView()
