@@ -43,6 +43,7 @@ extension Color {
 
 let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under it
 let dimAlpha: CGFloat = 0.4  // Freeze Frame dim outside the capture target
+let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used until the window's own corner is measured
 
 @MainActor
 final class AppState: ObservableObject {
@@ -776,6 +777,7 @@ final class OverlayController {
     var panels: [NSPanel] = []
     var toolbarPanels: [Int: NSPanel] = [:] // one per Freeze display index
     var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
+    var cornerRadii: [CGWindowID: CGFloat] = [:] // windowID -> measured corner radius, points
     var menuPanel: NSPanel?
     var menuMonitor: Any?
     var keyMonitor: Any?
@@ -861,6 +863,7 @@ final class OverlayController {
                 AppLog.line("freeze latency \(Int(latency)) ms across \(Freeze.shared.displays.count) displays: \(perDisplay)")
                 self.showPanels(tool: tool)
                 AppLog.line("phase=frozen tool=\(tool.title)")
+                self.measureWindowCorners()
             }
         } catch {
             await MainActor.run {
@@ -936,6 +939,59 @@ final class OverlayController {
         let out = try await SCScreenshotManager.captureScreenshot(
             contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
         return (out.sdrImage, out.hdrImage)
+    }
+    // measure each window's real corner radius from a corner screenshot, so the
+    // Capture Window highlight can follow it — window radii vary per window in
+    // macOS 26+ (title-bar-only vs toolbar, none full-screen). Front-to-back in
+    // windowFrames order; stops if the Freeze Frame goes away.
+    func measureWindowCorners() {
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            var seen = Set<CGWindowID>()
+            var measured: [String] = []
+            for fd in Freeze.shared.displays {
+                for w in fd.windowFrames where seen.insert(w.id).inserted {
+                    guard AppState.shared.phase == .frozen else { return }
+                    guard let scw = scWindows[w.id],
+                          let r = await measureWindowCorner(scw, scale: fd.screen.backingScaleFactor) else { continue }
+                    cornerRadii[w.id] = r
+                    let name = scw.owningApplication?.applicationName ?? "?"
+                    measured.append("\(name) \(String(format: "%.1f", r)) pt")
+                }
+            }
+            for p in panels {
+                p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.needsDisplay = true }
+            }
+            AppLog.line("window corners: \(measured.joined(separator: ", "))")
+        }
+    }
+    // the window's real corner radius in points, read off the alpha ramp along
+    // the diagonal of a 32×32 pt shot of its bottom-right corner; nil when the
+    // corner can't be captured
+    func measureWindowCorner(_ scw: SCWindow, scale: CGFloat) async -> CGFloat? {
+        let side: CGFloat = 32
+        let px = Int((side * scale).rounded())
+        let cfg = SCScreenshotConfiguration()
+        cfg.sourceRect = CGRect(x: scw.frame.width - side, y: scw.frame.height - side, width: side, height: side)
+        cfg.width = px; cfg.height = px
+        cfg.ignoreShadows = true; cfg.showsCursor = false
+        cfg.dynamicRange = .sdr
+        guard let img = try? await SCScreenshotManager.captureScreenshot(
+            contentFilter: SCContentFilter(desktopIndependentWindow: scw), configuration: cfg).sdrImage,
+              img.width >= 2, img.height >= 2 else { return nil }
+        var alpha = [UInt8](repeating: 0, count: img.width * img.height)
+        let ok = alpha.withUnsafeMutableBytes { ptr -> Bool in
+            guard let ctx = CGContext(data: ptr.baseAddress, width: img.width, height: img.height,
+                                      bitsPerComponent: 8, bytesPerRow: img.width, space: CGColorSpace(name: CGColorSpace.genericGrayGamma2_2)!,
+                                      bitmapInfo: CGImageAlphaInfo.alphaOnly.rawValue) else { return false }
+            ctx.draw(img, in: CGRect(x: 0, y: 0, width: img.width, height: img.height)); return true
+        }
+        guard ok else { return nil }
+        // bitmap row 0 is the image's top row: walk the diagonal inward from
+        // the bottom-right pixel
+        let n = min(img.width, img.height)
+        let diag = (0..<n).map { i in alpha[(img.height - 1 - i) * img.width + (img.width - 1 - i)] }
+        return cornerRadius(diagonalAlpha: diag).map { CGFloat($0) / scale }
     }
     var bitmapStore: [[UInt8]] = []
 
@@ -1030,7 +1086,7 @@ final class OverlayController {
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
         AppState.shared.expandedDisplay = nil
-        Freeze.shared.displays = []; bitmapStore = []
+        Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         AppDelegate.shared?.updateEscHotkey()
     }
 }
@@ -1080,7 +1136,10 @@ final class OverlayNSView: NSView {
             target = sel.map { NSBezierPath(rect: $0) }
             alpha = t != .copyText ? dimAlpha : sel == nil ? 0.15 : 0.35
         case .capWindow, .recWindow:
-            if !overToolbar, let w = hoverWin { target = NSBezierPath(roundedRect: w.frame, xRadius: 12, yRadius: 12) }
+            if !overToolbar, let w = hoverWin {
+                let r = ctrl?.cornerRadii[w.id] ?? fallbackWindowRadius
+                target = NSBezierPath(roundedRect: w.frame, xRadius: r, yRadius: r)
+            }
             alpha = dimAlpha
         default: break
         }
