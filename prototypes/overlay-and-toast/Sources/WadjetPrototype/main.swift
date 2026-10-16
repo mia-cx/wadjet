@@ -1044,22 +1044,27 @@ struct ToolbarView: View {
     }
     var recording: Bool { s.phase == .recording && s.showIslandWhileRecording }
 
-    // island: black, flush with the top edge, rounded bottom corners like the notch;
-    // on notched displays it is centred on (and slightly wider than) the notch.
-    var islandW: CGFloat { hasNotch ? max(126, notchW + 40) : 126 }
+    // Notched display: black, flush with the top edge, rounded bottom corners,
+    // centred on (and slightly wider than) the notch.
+    // Other displays: a fake Dynamic Island, a black capsule floating inside the
+    // menu bar band with a small gap above it.
+    var islandW: CGFloat { hasNotch ? max(126, notchW + 40) : 100 }
     var islandH: CGFloat { max(22, barH) }
-    // expanded toolbar grows down from inside the same shape: square top corners
-    // flush with the screen edge, rounded bottom, sized to its content.
+    var gap: CGFloat { hasNotch ? 0 : 3 }
+    var pillH: CGFloat { islandH - 2 * gap }
+    // expanded toolbar grows down from the same shape, sized to its content:
+    // square top corners on the notch, fully rounded as a floating island.
     var contentH: CGFloat { twoRows ? 74 : 40 }
+    var contentTop: CGFloat { islandH + 6 - gap }
     var recExpandedW: CGFloat { 260 }
     var expW: CGFloat { min(limit, (compact ? compactOptionsWidth : optionsWidth) + 430) }
-    var expH: CGFloat { islandH + 8 + contentH }
+    var expH: CGFloat { islandH + 8 + contentH - gap }
     var shapeW: CGFloat { expanded ? (recording ? recExpandedW : expW) : islandW }
-    var shapeH: CGFloat { expanded ? expH : islandH }
+    var shapeH: CGFloat { expanded ? expH : pillH }
     var panelW: CGFloat { max(islandW, min(limit, baseWidth + 430)) + 48 } // room for the widest tool's options
     var panelH: CGFloat { islandH + 6 + 74 + 100 + 28 } // island + gap + 2-row max + dropdown + tooltip band
     var shapeRectInView: CGRect {
-        CGRect(x: (panelW - shapeW) / 2, y: panelH - shapeH, width: shapeW, height: shapeH)
+        CGRect(x: (panelW - shapeW) / 2, y: panelH - gap - shapeH, width: shapeW, height: shapeH)
     }
 
     var limit: CGFloat { (screen?.frame.width ?? 1280) - 40 }
@@ -1109,7 +1114,7 @@ struct ToolbarView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            morph
+            morph.padding(.top, gap)
             if s.workflowMenuOpen {
                 workflowMenu.padding(.top, 4)
             }
@@ -1129,10 +1134,10 @@ struct ToolbarView: View {
     }
 
     var shape: UnevenRoundedRectangle {
-        UnevenRoundedRectangle(topLeadingRadius: 0,
-                               bottomLeadingRadius: expanded ? 18 : 13,
-                               bottomTrailingRadius: expanded ? 18 : 13,
-                               topTrailingRadius: 0)
+        let bottom: CGFloat = expanded ? 18 : (hasNotch ? 13 : pillH / 2)
+        let top: CGFloat = hasNotch ? 0 : bottom
+        return UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
+                                      bottomTrailingRadius: bottom, topTrailingRadius: top)
     }
 
     var morph: some View {
@@ -1177,7 +1182,7 @@ struct ToolbarView: View {
             Button("Stop") { AppDelegate.shared?.stopRecording() }
         }
         .font(.system(size: 12))
-        .padding(.top, islandH + 6)
+        .padding(.top, contentTop)
     }
 
     func setTip(_ text: String, _ on: Bool) {
@@ -1225,7 +1230,7 @@ struct ToolbarView: View {
 
     var toolbarRows: some View {
         VStack(spacing: 4) {
-            Spacer(minLength: 0).frame(height: islandH + 6)
+            Spacer(minLength: 0).frame(height: contentTop)
             HStack(spacing: 2) {
                 ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: tbtn)
                 Divider().frame(height: 18).padding(.horizontal, 5)
@@ -1276,7 +1281,7 @@ struct ToolbarView: View {
     var menuRectInView: CGRect {
         // anchored under the toolbar's bottom edge, right-aligned to the picker
         let x = min(max(4, shapeRectInView.maxX - 16 - menuW), panelW - menuW - 4)
-        return CGRect(x: x, y: panelH - shapeH - menuH - 4, width: menuW, height: menuH)
+        return CGRect(x: x, y: shapeRectInView.minY - menuH - 4, width: menuW, height: menuH)
     }
     var workflowMenu: some View {
         VStack(alignment: .leading, spacing: 0) {
