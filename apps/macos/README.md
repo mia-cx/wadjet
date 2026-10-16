@@ -75,8 +75,10 @@ only while the overlay is up or at known app windows.
 
 ## What's real
 
-- Freeze Frame: SCScreenshotManager, per display, cursor included; trigger-to-visible latency
-  is measured (~60-160 ms) and logged/shown in the state HUD.
+- Freeze Frame: SCScreenshotManager, per display at its native pixel size, cursor shown
+  but every pixel read (Pick Colour, loupe, Measure) taken from a second cursor-free
+  capture; hotkey-to-visible latency per open plus session p50/p95 goes to the app log
+  and the state HUD.
 - Region/window/screen selection on the frozen pixels with macOS-style dimming, window
   capture "through" the overlay via SCContentFilter(desktopIndependentWindow:), a crosshair
   loupe (magnified pixels, x/y, hex), Pick Colour (many formats to pasteboard), Copy Text
