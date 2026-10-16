@@ -12,6 +12,7 @@ import {
   StartUpload,
   StartUploadHeaders,
   ThumbnailHeaders,
+  ThumbnailQuery,
   UploadedFile,
   UploadFileHeaders,
   UploadSession,
@@ -24,7 +25,7 @@ export type Auth = 'none' | 'bearer' | 'token'
 /**
  * One endpoint of the Wadjet Server v1 protocol. `path` is a template such as
  * `/v1/files/{id}`; `headers`, `query`, and `body` are the request schemas when
- * defined. `responses` maps each success status to its JSON body schema, or
+ * defined. `responses` maps each non-error status to its JSON body schema, or
  * `null` when the body is empty or raw (binary, HTML). Any status ≥ 400 carries
  * an `ErrorBody` and is not listed.
  */
@@ -134,7 +135,22 @@ export const endpoints = [
     headers: BearerHeaders,
     responses: { 204: null },
   },
-  { name: 'get-thumbnail', method: 'GET', path: '/t/{id}', auth: 'none', responses: { 200: null } },
+  {
+    name: 'get-thumbnail',
+    method: 'GET',
+    path: '/t/{id}',
+    auth: 'none',
+    query: ThumbnailQuery,
+    responses: { 200: null, 206: null, 301: null },
+  },
+  {
+    name: 'head-thumbnail',
+    method: 'HEAD',
+    path: '/t/{id}',
+    auth: 'none',
+    query: ThumbnailQuery,
+    responses: { 200: null, 206: null, 301: null },
+  },
   {
     name: 'get-deletion-page',
     method: 'GET',
@@ -154,28 +170,28 @@ export const endpoints = [
     method: 'GET',
     path: '/{id}.{ext}',
     auth: 'none',
-    responses: { 200: null, 206: null },
+    responses: { 200: null, 206: null, 301: null },
   },
   {
     name: 'head-file-ext',
     method: 'HEAD',
     path: '/{id}.{ext}',
     auth: 'none',
-    responses: { 200: null, 206: null },
+    responses: { 200: null, 206: null, 301: null },
   },
   {
     name: 'get-file',
     method: 'GET',
     path: '/{id}',
     auth: 'none',
-    responses: { 200: null, 206: null },
+    responses: { 200: null, 206: null, 301: null },
   },
   {
     name: 'head-file',
     method: 'HEAD',
     path: '/{id}',
     auth: 'none',
-    responses: { 200: null, 206: null },
+    responses: { 200: null, 206: null, 301: null },
   },
 ] as const satisfies readonly Endpoint[]
 

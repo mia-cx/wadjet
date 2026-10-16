@@ -31,7 +31,7 @@ A test fails when a quote and its file disagree.
 | `DELETE /v1/uploads/{id}` | bearer | Abort |
 | `GET /v1/sharex.sxcu` | bearer | [ShareX config](#sharex-config) |
 | `GET /{id}.{ext}`, `GET /{id}` | none | [The file](#files-and-thumbnails), with `HEAD` and `Range` |
-| `GET /t/{id}` | none | The thumbnail |
+| `GET /t/{id}?v={n}` | none | The thumbnail, with `HEAD` and `Range` |
 | `GET /d/{token}`, `POST /d/{token}` | token | [Single-file deletion link](#deletion-link) |
 | `GET /healthz` | none | [Health](#health) |
 
@@ -155,7 +155,7 @@ Percent-encoding keeps `A-Z a-z 0-9 - . _ ~` and encodes every other UTF-8 byte 
 The server also accepts a raw ASCII value, because ShareX sends `{filename}` unencoded.
 
 The response is `201` with the [file object](#the-file-object) plus `deleteUrl`, the file's [deletion link](#deletion-link).
-The link ends in the filename's extension, or the content type's when there's no filename.
+`url` ends in the filename's extension, or the content type's when there's no filename, and has no extension when neither gives one. It's the file's [canonical URL](#files-and-thumbnails).
 
 <!-- fixture: 02-upload-file -->
 ```json
@@ -290,14 +290,14 @@ Single upload, multipart complete, thumbnail, and list all return the same file 
 | Field | Type | Meaning |
 | --- | --- | --- |
 | `id` | string | The 6-character id. |
-| `url` | string | The short link. |
+| `url` | string | The canonical short link. |
 | `filename` | string | The decoded filename. |
 | `kind` | string | `screenshot` or `recording`. |
 | `contentType` | string | The MIME type the upload sent. |
 | `size` | integer | Bytes. |
 | `device` | string or `null` | The Mac's name, decoded. |
 | `createdAt` | time | When the upload finished. |
-| `thumbnailUrl` | string or `null` | The [thumbnail](#thumbnail), once attached. |
+| `thumbnailUrl` | string or `null` | The [thumbnail](#thumbnail)'s current URL, once attached. |
 
 Upload and complete responses add `deleteUrl`. Nothing else returns it.
 
@@ -308,7 +308,8 @@ The body is a raw `image/webp`, `image/jpeg`, or `image/png` up to `maxThumbnail
 wadjet makes the thumbnail. The server never decodes or resizes images.
 
 The response is `200` with the file object, `thumbnailUrl` set.
-Sending a thumbnail again replaces it.
+`thumbnailUrl` is `/t/{id}?v={n}`, where `n` starts at 1 and goes up by one each time a new thumbnail replaces the last.
+Replacing purges the previous URL from Cloudflare's edge, so History never shows an old preview.
 A body over `maxThumbnailBytes` gets `413` with `too_large`, and another type gets `415` with `unsupported_media_type`.
 
 <!-- fixture: 05-attach-thumbnail -->
@@ -340,7 +341,7 @@ A body over `maxThumbnailBytes` gets `413` with `too_large`, and another type ge
       "size": 126,
       "device": "Mia's MacBook Pro",
       "createdAt": "2026-10-16T12:02:13Z",
-      "thumbnailUrl": "https://w.mia.cx/t/aB3xK9"
+      "thumbnailUrl": "https://w.mia.cx/t/aB3xK9?v=1"
     }
   }
 }
@@ -880,7 +881,7 @@ The server never pushes changes. wadjet lists when the History window opens and 
           "size": 126,
           "device": "Mia's MacBook Pro",
           "createdAt": "2026-10-16T12:02:13Z",
-          "thumbnailUrl": "https://w.mia.cx/t/aB3xK9"
+          "thumbnailUrl": "https://w.mia.cx/t/aB3xK9?v=1"
         }
       ],
       "nextCursor": null
@@ -894,7 +895,7 @@ The server never pushes changes. wadjet lists when the History window opens and 
 ## Delete
 
 `DELETE /v1/files/{id}` returns `204`.
-It removes the file, its thumbnail, and its row, then purges both URLs from every cache, Cloudflare's edge included.
+It removes the file, its thumbnail, and its row, then purges the file's canonical URL and its thumbnail URL from Cloudflare's edge.
 An unknown id, or someone else's file, gets `404` with `not_found`, never `403`.
 
 <!-- fixture: 29-delete-file -->
@@ -954,13 +955,15 @@ An unknown id, or someone else's file, gets `404` with `not_found`, never `403`.
 
 ## Files and thumbnails
 
-`GET /{id}.{ext}` and `GET /{id}` stream the file, with no auth.
-The extension is cosmetic: the server finds the file by id and sends its stored type.
-`GET /t/{id}` streams the thumbnail the same way.
-All three answer `HEAD` too.
+`GET /{id}.{ext}` streams the file, with no auth.
+Each file has one canonical URL: its `url`, `/{id}.{ext}` with the extension stored at upload, or `/{id}` when it has none.
+Every other form, `/{id}` or another extension, answers `301` with `Location` set to the canonical URL, so each file sits in Cloudflare's cache under one URL.
+`GET /t/{id}?v={n}` streams the thumbnail the same way. Any other `v`, or none, answers `301` to the current `thumbnailUrl`.
+Files and thumbnails answer `HEAD` too.
 
 - `Range` takes one byte range and returns `206` with `Content-Range`. The server sends the whole file with `200` for a range it can't satisfy, or for several ranges.
-- `Cache-Control: public, max-age=31536000, immutable`, because ids never come back.
+- `Cache-Control: public, max-age=300, s-maxage=31536000`. Cloudflare keeps a file until deletion purges it. Browsers revalidate after 5 minutes, so a deleted Capture can stay visible for up to 5 minutes in a browser that already loaded it.
+- Redirects carry the same `Cache-Control`. They hold no content, so deletion leaves them cached.
 - Images, video, audio, PDF, and plain text display inline. Everything else downloads as an attachment, HTML and SVG included, so an upload never runs as a page on the server's domain.
 - `X-Content-Type-Options: nosniff` on every file and thumbnail.
 - An `ETag`, whose value the server chooses.
@@ -981,7 +984,7 @@ All three answer `HEAD` too.
       "Content-Type": "image/png",
       "Content-Length": "126",
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
       "Content-Disposition": "inline; filename*=UTF-8''Screenshot%202026-10-16%20at%2014.02.11.png",
       "X-Content-Type-Options": "nosniff",
       "Date": "Fri, 16 Oct 2026 12:21:00 GMT"
@@ -994,10 +997,10 @@ All three answer `HEAD` too.
 <details>
 <summary>Without the extension</summary>
 
-<!-- fixture: 21-get-file-without-extension -->
+<!-- fixture: 21-get-file-redirect -->
 ```json
 {
-  "name": "21-get-file-without-extension",
+  "name": "21-get-file-redirect",
   "request": {
     "method": "GET",
     "path": "/aB3xK9",
@@ -1005,17 +1008,13 @@ All three answer `HEAD` too.
     "body": null
   },
   "response": {
-    "status": 200,
+    "status": 301,
     "headers": {
-      "Content-Type": "image/png",
-      "Content-Length": "126",
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
-      "Content-Disposition": "inline; filename*=UTF-8''Screenshot%202026-10-16%20at%2014.02.11.png",
-      "X-Content-Type-Options": "nosniff",
+      "Location": "https://w.mia.cx/aB3xK9.png",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
       "Date": "Fri, 16 Oct 2026 12:21:01 GMT"
     },
-    "body": "screenshot.png"
+    "body": null
   }
 }
 ```
@@ -1041,7 +1040,7 @@ All three answer `HEAD` too.
       "Content-Type": "image/png",
       "Content-Length": "126",
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
       "Content-Disposition": "inline; filename*=UTF-8''Screenshot%202026-10-16%20at%2014.02.11.png",
       "X-Content-Type-Options": "nosniff",
       "Date": "Fri, 16 Oct 2026 12:21:02 GMT"
@@ -1074,7 +1073,7 @@ All three answer `HEAD` too.
       "Content-Type": "video/mp4",
       "Content-Length": "100",
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
       "Content-Range": "bytes 0-99/2517",
       "Content-Disposition": "inline; filename*=UTF-8''Recording%202026-10-16%20at%2014.05.31.mp4",
       "X-Content-Type-Options": "nosniff",
@@ -1096,7 +1095,7 @@ All three answer `HEAD` too.
   "name": "24-get-thumbnail",
   "request": {
     "method": "GET",
-    "path": "/t/aB3xK9",
+    "path": "/t/aB3xK9?v=1",
     "headers": {},
     "body": null
   },
@@ -1106,7 +1105,7 @@ All three answer `HEAD` too.
       "Content-Type": "image/webp",
       "Content-Length": "122",
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
       "X-Content-Type-Options": "nosniff",
       "Date": "Fri, 16 Oct 2026 12:21:04 GMT"
     },
@@ -1215,6 +1214,8 @@ Once the file is gone, the link gets `404` with `not_found`.
 It embeds the API key that fetched it, so it needs an API key; an OAuth token gets `400` with `invalid_request`.
 ShareX can't upload in parts, so its files cap at `maxRequestBytes`.
 It shows `url` as the link and `deleteUrl` as the deletion link.
+`Version` is `21.0.0`, the ShareX release current when this was written.
+ShareX rewrites the expressions in any config at 13.7.1 or older and escapes their braces, which would break `{filename}` and `{json:...}` ([`CheckBackwardCompatibility`](https://github.com/ShareX/ShareX/blob/7223e5363b365cdff5fb2b5448bc51083d3f1108/ShareX.UploadersLib/CustomUploader/CustomUploaderItem.cs#L355-L405)), so `Version` stays above 13.7.1.
 
 <!-- fixture: 25-get-sharex-config -->
 ```json
@@ -1236,7 +1237,7 @@ It shows `url` as the link and `deleteUrl` as the deletion link.
       "Date": "Fri, 16 Oct 2026 12:30:00 GMT"
     },
     "body": {
-      "Version": "13.7.0",
+      "Version": "21.0.0",
       "Name": "Wadjet (w.mia.cx)",
       "DestinationType": "ImageUploader, FileUploader",
       "RequestMethod": "POST",
@@ -1317,6 +1318,7 @@ New fields aren't breaking.
 
 Docker and Helm can change all four.
 At 64 MiB parts, R2's 10,000-part ceiling allows files up to 625 GiB.
+On R2, `partBytes` must be at least 5 MiB, because R2 needs every part but the last to be at least that size.
 
 ## Fixtures
 
@@ -1347,5 +1349,7 @@ The fixtures tell one story, in filename order, against one server:
 - The token generator returns `5mQeI1qnbywzZsvQ2MibRgZdGEmSSpZ_sh3HHTkl_FQ`, then `eIipUchuHMYCyF5sa-JRAMyV6a-jZ3htmkInxF4xd5A`.
 
 The server's replay suite sends every request and checks the exact response.
+It runs against the memory and filesystem blob stores, with any file index adapter.
+R2 needs every part but the last to be at least 5 MiB, so the 1024-byte fixture parts can't replay on it; the R2 blob store gets its own contract suite with parts of 5 MiB or more.
 The Swift contract test in `apps/macos` builds each request from the same inputs and decodes each response.
 It reads the folder straight from the repo, so neither side mocks the other.

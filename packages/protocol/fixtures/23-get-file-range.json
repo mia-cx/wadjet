@@ -14,7 +14,7 @@
       "Content-Type": "video/mp4",
       "Content-Length": "100",
       "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
       "Content-Range": "bytes 0-99/2517",
       "Content-Disposition": "inline; filename*=UTF-8''Recording%202026-10-16%20at%2014.05.31.mp4",
       "X-Content-Type-Options": "nosniff",

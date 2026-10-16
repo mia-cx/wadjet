@@ -16,7 +16,7 @@
       "Date": "Fri, 16 Oct 2026 12:30:00 GMT"
     },
     "body": {
-      "Version": "13.7.0",
+      "Version": "21.0.0",
       "Name": "Wadjet (w.mia.cx)",
       "DestinationType": "ImageUploader, FileUploader",
       "RequestMethod": "POST",

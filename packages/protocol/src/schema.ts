@@ -35,7 +35,7 @@ export const Discovery = Schema.Struct({
   }),
 })
 
-/** A stored file as returned by the API. */
+/** A stored file as returned by the API; `thumbnailUrl` carries the current `?v={n}` version. */
 export const File = Schema.Struct({
   id: Id,
   url: Schema.String,
@@ -45,7 +45,9 @@ export const File = Schema.Struct({
   size: nonNegativeInt,
   device: Schema.NullOr(Schema.String),
   createdAt: Time,
-  thumbnailUrl: Schema.NullOr(Schema.String),
+  thumbnailUrl: Schema.NullOr(
+    Schema.String.check(Schema.isPattern(/\/t\/[0-9A-Za-z]{6}\?v=[1-9]\d*$/)),
+  ),
 })
 
 /** A stored file after upload, with a deletion URL unless the upload was an idempotent repeat. */
@@ -67,6 +69,13 @@ export const ListQuery = Schema.fromURLSearchParams(
     limit: Schema.optionalKey(
       Schema.NumberFromString.check(Schema.isInt(), Schema.isBetween({ minimum: 1, maximum: 200 })),
     ),
+  }),
+)
+
+/** Query for the canonical thumbnail URL `/t/{id}?v={n}`; any other query answers `301`. */
+export const ThumbnailQuery = Schema.fromURLSearchParams(
+  Schema.Struct({
+    v: Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
   }),
 )
 
