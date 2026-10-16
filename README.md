@@ -53,6 +53,7 @@ apps/macos/run.sh
 
 The script builds, bundles, signs, and opens `apps/macos/build/Wadjet.app`, replacing any running copy.
 It uses an Apple Development signing identity when available, or ad-hoc signing otherwise.
+`swift test --package-path apps/macos/WadjetKit` runs the UI-free unit tests without building the app.
 To build and sign without launching, as CI does:
 
 ```sh
