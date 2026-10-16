@@ -1,5 +1,5 @@
 {
-  "name": "30-delete-file-not-found",
+  "name": "31-delete-file-not-found",
   "request": {
     "method": "DELETE",
     "path": "/v1/files/Uq7Lm2",

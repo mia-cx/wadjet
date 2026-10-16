@@ -62,7 +62,8 @@ describe("every fixture decodes with its endpoint's schemas", () => {
       Schema.decodeUnknownSync(endpoint.query)(new URLSearchParams(query))
     }
     const requestBody = bodyOf(fixture.request)
-    if (endpoint?.body !== undefined && requestBody !== null) {
+    if (endpoint?.body !== undefined) {
+      expect(requestBody, 'request body required by the schema').not.toBeNull()
       Schema.decodeUnknownSync(endpoint.body)(requestBody)
     }
 
@@ -78,9 +79,10 @@ describe("every fixture decodes with its endpoint's schemas", () => {
       Object.keys(endpoint?.responses ?? {}).map(Number),
       `status ${status} not listed`,
     ).toContain(status)
-    bodyOf(fixture.response)
-    if (listed != null && fixture.response.body !== null) {
-      Schema.decodeUnknownSync(listed)(fixture.response.body)
+    const responseBody = bodyOf(fixture.response)
+    if (listed != null) {
+      expect(responseBody, 'response body required by the schema').not.toBeNull()
+      Schema.decodeUnknownSync(listed)(responseBody)
     }
   })
 })

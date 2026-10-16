@@ -1,5 +1,5 @@
 {
-  "name": "29-delete-file",
+  "name": "30-delete-file",
   "request": {
     "method": "DELETE",
     "path": "/v1/files/Uq7Lm2",

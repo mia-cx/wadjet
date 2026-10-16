@@ -731,10 +731,10 @@ The client asks which parts landed, sends part 2, and completes.
 <details>
 <summary>A part sent after the upload expired</summary>
 
-<!-- fixture: 31-start-upload-to-expire -->
+<!-- fixture: 32-start-upload-to-expire -->
 ```json
 {
-  "name": "31-start-upload-to-expire",
+  "name": "32-start-upload-to-expire",
   "request": {
     "method": "POST",
     "path": "/v1/uploads",
@@ -767,10 +767,10 @@ The client asks which parts landed, sends part 2, and completes.
 }
 ```
 
-<!-- fixture: 32-upload-part-expired -->
+<!-- fixture: 33-upload-part-expired -->
 ```json
 {
-  "name": "32-upload-part-expired",
+  "name": "33-upload-part-expired",
   "request": {
     "method": "PUT",
     "path": "/v1/uploads/Hn4Rt8/parts/1",
@@ -898,10 +898,10 @@ The server never pushes changes. wadjet lists when the History window opens and 
 It removes the file, its thumbnail, and its row, then purges the file's canonical URL and its thumbnail URL from Cloudflare's edge.
 An unknown id, or someone else's file, gets `404` with `not_found`, never `403`.
 
-<!-- fixture: 29-delete-file -->
+<!-- fixture: 30-delete-file -->
 ```json
 {
-  "name": "29-delete-file",
+  "name": "30-delete-file",
   "request": {
     "method": "DELETE",
     "path": "/v1/files/Uq7Lm2",
@@ -923,10 +923,10 @@ An unknown id, or someone else's file, gets `404` with `not_found`, never `403`.
 <details>
 <summary>Deleting it again</summary>
 
-<!-- fixture: 30-delete-file-not-found -->
+<!-- fixture: 31-delete-file-not-found -->
 ```json
 {
-  "name": "30-delete-file-not-found",
+  "name": "31-delete-file-not-found",
   "request": {
     "method": "DELETE",
     "path": "/v1/files/Uq7Lm2",
@@ -963,7 +963,7 @@ Files and thumbnails answer `HEAD` too.
 
 - `Range` takes one byte range and returns `206` with `Content-Range`. The server sends the whole file with `200` for a range it can't satisfy, or for several ranges.
 - `Cache-Control: public, max-age=300, s-maxage=31536000`. Cloudflare keeps a file until deletion purges it. Browsers revalidate after 5 minutes, so a deleted Capture can stay visible for up to 5 minutes in a browser that already loaded it.
-- Redirects carry the same `Cache-Control`. They hold no content, so deletion leaves them cached.
+- File redirects carry the same `Cache-Control`. They hold no content, so deletion leaves them cached. Thumbnail redirects send `Cache-Control: no-store`, because the current version moves.
 - Images, video, audio, PDF, and plain text display inline. Everything else downloads as an attachment, HTML and SVG included, so an upload never runs as a page on the server's domain.
 - `X-Content-Type-Options: nosniff` on every file and thumbnail.
 - An `ETag`, whose value the server chooses.
@@ -1117,12 +1117,39 @@ Files and thumbnails answer `HEAD` too.
 </details>
 
 <details>
-<summary>A deleted file</summary>
+<summary>The thumbnail without its version</summary>
 
-<!-- fixture: 28-get-file-not-found -->
+<!-- fixture: 25-get-thumbnail-redirect -->
 ```json
 {
-  "name": "28-get-file-not-found",
+  "name": "25-get-thumbnail-redirect",
+  "request": {
+    "method": "GET",
+    "path": "/t/aB3xK9",
+    "headers": {},
+    "body": null
+  },
+  "response": {
+    "status": 301,
+    "headers": {
+      "Location": "https://w.mia.cx/t/aB3xK9?v=1",
+      "Cache-Control": "no-store",
+      "Date": "Fri, 16 Oct 2026 12:21:05 GMT"
+    },
+    "body": null
+  }
+}
+```
+
+</details>
+
+<details>
+<summary>A deleted file</summary>
+
+<!-- fixture: 29-get-file-not-found -->
+```json
+{
+  "name": "29-get-file-not-found",
   "request": {
     "method": "GET",
     "path": "/aB3xK9.png",
@@ -1157,10 +1184,10 @@ The button sends `POST /d/{token}`, which deletes and purges like `DELETE /v1/fi
 Link previews and prefetchers only send `GET`, so they can't delete anything.
 Once the file is gone, the link gets `404` with `not_found`.
 
-<!-- fixture: 26-get-deletion-page -->
+<!-- fixture: 27-get-deletion-page -->
 ```json
 {
-  "name": "26-get-deletion-page",
+  "name": "27-get-deletion-page",
   "request": {
     "method": "GET",
     "path": "/d/5mQeI1qnbywzZsvQ2MibRgZdGEmSSpZ_sh3HHTkl_FQ",
@@ -1182,10 +1209,10 @@ Once the file is gone, the link gets `404` with `not_found`.
 <details>
 <summary>Pressing Delete</summary>
 
-<!-- fixture: 27-delete-by-link -->
+<!-- fixture: 28-delete-by-link -->
 ```json
 {
-  "name": "27-delete-by-link",
+  "name": "28-delete-by-link",
   "request": {
     "method": "POST",
     "path": "/d/5mQeI1qnbywzZsvQ2MibRgZdGEmSSpZ_sh3HHTkl_FQ",
@@ -1217,10 +1244,10 @@ It shows `url` as the link and `deleteUrl` as the deletion link.
 `Version` is `21.0.0`, the ShareX release current when this was written.
 ShareX rewrites the expressions in any config at 13.7.1 or older and escapes their braces, which would break `{filename}` and `{json:...}` ([`CheckBackwardCompatibility`](https://github.com/ShareX/ShareX/blob/7223e5363b365cdff5fb2b5448bc51083d3f1108/ShareX.UploadersLib/CustomUploader/CustomUploaderItem.cs#L355-L405)), so `Version` stays above 13.7.1.
 
-<!-- fixture: 25-get-sharex-config -->
+<!-- fixture: 26-get-sharex-config -->
 ```json
 {
-  "name": "25-get-sharex-config",
+  "name": "26-get-sharex-config",
   "request": {
     "method": "GET",
     "path": "/v1/sharex.sxcu",
@@ -1260,10 +1287,10 @@ ShareX rewrites the expressions in any config at 13.7.1 or older and escapes the
 
 `GET /healthz` returns `200` once the server is ready, for Docker and Kubernetes.
 
-<!-- fixture: 33-healthz -->
+<!-- fixture: 34-healthz -->
 ```json
 {
-  "name": "33-healthz",
+  "name": "34-healthz",
   "request": {
     "method": "GET",
     "path": "/healthz",
@@ -1344,7 +1371,7 @@ The fixtures tell one story, in filename order, against one server:
 
 - The server runs with the config in `01-discovery` and base URL `https://w.mia.cx`.
 - API key `wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g` maps to the owner. `wdj_NwcSbBAhf6wp8yAOsoxK71ayVhjXPUVDpQPv4ZLmSKE` is revoked.
-- The clock reads each response's `Date` header while the server handles that request. The story jumps a day before `32-upload-part-expired`.
+- The clock reads each response's `Date` header while the server handles that request. The story jumps a day before `33-upload-part-expired`.
 - The id generator returns `aB3xK9`, `Uq7Lm2`, `Pz2Wc5`, `Hn4Rt8`, in that order.
 - The token generator returns `5mQeI1qnbywzZsvQ2MibRgZdGEmSSpZ_sh3HHTkl_FQ`, then `eIipUchuHMYCyF5sa-JRAMyV6a-jZ3htmkInxF4xd5A`.
 

@@ -72,10 +72,10 @@ export const ListQuery = Schema.fromURLSearchParams(
   }),
 )
 
-/** Query for the canonical thumbnail URL `/t/{id}?v={n}`; any other query answers `301`. */
+/** Query for `/t/{id}`: the current `v` gets the thumbnail, and anything else, `v` missing included, gets a `301`. */
 export const ThumbnailQuery = Schema.fromURLSearchParams(
   Schema.Struct({
-    v: Schema.NumberFromString.check(Schema.isInt(), Schema.isGreaterThanOrEqualTo(1)),
+    v: Schema.optionalKey(Schema.String),
   }),
 )
 

@@ -1,5 +1,5 @@
 {
-  "name": "32-upload-part-expired",
+  "name": "33-upload-part-expired",
   "request": {
     "method": "PUT",
     "path": "/v1/uploads/Hn4Rt8/parts/1",

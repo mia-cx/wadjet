@@ -1,5 +1,5 @@
 {
-  "name": "25-get-sharex-config",
+  "name": "26-get-sharex-config",
   "request": {
     "method": "GET",
     "path": "/v1/sharex.sxcu",

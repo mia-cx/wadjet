@@ -1,5 +1,5 @@
 {
-  "name": "33-healthz",
+  "name": "34-healthz",
   "request": {
     "method": "GET",
     "path": "/healthz",
