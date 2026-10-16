@@ -29,6 +29,7 @@ enum Tool: String, CaseIterable {
     }
     var shortcut: String? { switch self { case .capRegion: "⌘⇧4"; case .capScreen: "⌘⇧3"; case .recRegion: "⌘⇧5"; default: nil } }
     enum Kind { case shot, rec, util }
+    var hasMenu: Bool { self != .copyText }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
 }
 
@@ -39,8 +40,8 @@ final class ProtoState: ObservableObject {
     static let shared = ProtoState()
     @Published var phase: Phase = .desktop
     @Published var tool: Tool? = nil
-    @Published var workflow: String? = nil
-    @Published var colourFmt = "Hex"
+    @Published var workflowByTool: [Tool: String] = [:]
+    @Published var colourFmt = "Hex" // Hex, rgb(), hsl(), oklch(), lab(), SwiftUI
     @Published var measureMode = "Region" // Region, Line, Edges X, Edges Y, Edges X+Y
     @Published var countdown = "Off" // Off 3 5 10
     @Published var sysAudio = false
@@ -49,7 +50,7 @@ final class ProtoState: ObservableObject {
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
     @Published var toolbarExpanded = false
-    @Published var workflowMenuOpen = false
+    @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
     @Published var lastClipboard = ""
@@ -58,23 +59,25 @@ final class ProtoState: ObservableObject {
     @Published var uploadMode = 0            // 0 succeed, 1 fail, 2 offline
     @Published var stepErrorNext = false
     @Published var showStateHUD = false
-    var workflows: [String] {
-        guard let tool else { return [] }
-        switch tool.kind {
+    func workflows(for t: Tool?) -> [String] {
+        switch t?.kind {
         case .shot: return ["Screenshot", "Upload to w.mia.cx", "Pin"]
         case .rec: return ["MP4", "GIF", "GIF to w.mia.cx"]
-        case .util: return []
+        default: return []
         }
     }
-    var effectiveWorkflow: String? { workflow ?? workflows.first }
+    // the Workflow a capture runs with: the per-Tool choice, defaulting to the
+    // first compatible one (Screenshot for Capture, MP4 for Record)
+    func workflowFor(_ t: Tool?) -> String? { workflows(for: t).isEmpty ? nil : (workflowByTool[t ?? .capRegion] ?? workflows(for: t).first) }
 }
 
 // MARK: - Frozen frame store
 
 struct FrozenDisplay {
     let screen: NSScreen
-    let image: CGImage          // pixel resolution
-    var bitmap: UnsafePointer<UInt8>? // RGBA premultiplied, pixel coords
+    let image: CGImage          // SDR image, pixel resolution
+    var hdrImage: CGImage?      // extended-sRGB variant when the display is HDR
+    var bitmap: UnsafePointer<UInt8>? // sRGB, premultiplied ARGB, pixel coords
     var bitmapWidth = 0, bitmapHeight = 0
     var windowFrames: [CGRect] = []
 }
@@ -95,32 +98,70 @@ final class Freeze {
         let i = (y * f.bitmapWidth + x) * 4
         return (bm[i + 1], bm[i + 2], bm[i + 3]) // ARGB -> RGB
     }
-    func crop(rect: CGRect, on d: Int) -> CGImage? {
+    func crop(rect: CGRect, on d: Int, hdr: Bool = false) -> CGImage? {
         guard d < displays.count else { return nil }
         let f = displays[d]
-        let sx = CGFloat(f.image.width) / f.screen.frame.width
-        let sy = CGFloat(f.image.height) / f.screen.frame.height
+        let src = (hdr ? f.hdrImage : nil) ?? f.image
+        let sx = CGFloat(src.width) / f.screen.frame.width
+        let sy = CGFloat(src.height) / f.screen.frame.height
         let r = CGRect(x: rect.origin.x * sx, y: (f.screen.frame.height - rect.origin.y - rect.height) * sy,
                        width: rect.width * sx, height: rect.height * sy).integral
-        return f.image.cropping(to: r)
+        return src.cropping(to: r)
     }
 }
 
 func hexString(_ c: (UInt8, UInt8, UInt8)) -> String { String(format: "#%02X%02X%02X", c.0, c.1, c.2) }
+func srgbLinear(_ v: Double) -> Double { v <= 0.04045 ? v / 12.92 : pow((v + 0.055) / 1.055, 2.4) }
+// CSS Color 4 breakdowns of one sRGB pixel
+func fmtRGB(_ c: (UInt8, UInt8, UInt8)) -> String { "rgb(\(c.0) \(c.1) \(c.2))" }
+func fmtHSL(_ c: (UInt8, UInt8, UInt8)) -> String {
+    let r = Double(c.0) / 255, g = Double(c.1) / 255, b = Double(c.2) / 255
+    let mx = max(r, g, b), mn = min(r, g, b); var h = 0.0, s = 0.0
+    let l = (mx + mn) / 2
+    if mx != mn {
+        let d = mx - mn
+        s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+        h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4
+        h *= 60
+    }
+    return String(format: "hsl(%.0f %.0f%% %.0f%%)", h, s * 100, l * 100)
+}
+// OKLab (Ottosson) from linear sRGB
+func fmtOKLCH(_ c: (UInt8, UInt8, UInt8)) -> String {
+    let r = srgbLinear(Double(c.0) / 255), g = srgbLinear(Double(c.1) / 255), b = srgbLinear(Double(c.2) / 255)
+    let l = cbrt(0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b)
+    let m = cbrt(0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b)
+    let s = cbrt(0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b)
+    let L = 0.2104542553 * l + 0.7936177850 * m - 0.0040720468 * s
+    let a = 1.9779984951 * l - 2.4285922050 * m + 0.4505937099 * s
+    let bb = 0.0259040371 * l + 0.7827717662 * m - 0.8086757660 * s
+    let C = sqrt(a * a + bb * bb)
+    var h = atan2(bb, a) * 180 / .pi; if h < 0 { h += 360 }
+    return String(format: "oklch(%.3f %.3f %.1f)", L, C, h)
+}
+// CIELAB D50 (CSS lab()) via linear sRGB -> XYZ D65 -> Bradford D50
+func fmtLAB(_ c: (UInt8, UInt8, UInt8)) -> String {
+    let r = srgbLinear(Double(c.0) / 255), g = srgbLinear(Double(c.1) / 255), b = srgbLinear(Double(c.2) / 255)
+    let x65 = 0.4123908 * r + 0.3575843 * g + 0.1804808 * b
+    let y65 = 0.2126390 * r + 0.7151687 * g + 0.0721923 * b
+    let z65 = 0.0193308 * r + 0.1191948 * g + 0.9505322 * b
+    let X =  1.0479298 * x65 + 0.0229468 * y65 - 0.0501922 * z65
+    let Y =  0.0296278 * x65 + 0.9904345 * y65 - 0.0170738 * z65 // Bradford D65->D50
+    let Z = -0.0092430 * x65 + 0.0150552 * y65 + 0.7518743 * z65
+    func f(_ t: Double) -> Double { t > 0.008856 ? pow(t, 1.0 / 3.0) : (903.3 * t + 16) / 116 }
+    let fx = f(X / 0.9642), fy = f(Y / 1.0000), fz = f(Z / 0.8251)
+    return String(format: "lab(%.2f %.2f %.2f)", 116 * fy - 16, 500 * (fx - fy), 200 * (fy - fz))
+}
+func fmtSwiftUI(_ c: (UInt8, UInt8, UInt8)) -> String {
+    String(format: "Color(red: %.3f, green: %.3f, blue: %.3f)", Double(c.0) / 255, Double(c.1) / 255, Double(c.2) / 255)
+}
 func fmtColour(_ c: (UInt8, UInt8, UInt8), fmt: String) -> String {
     switch fmt {
-    case "RGB": return "rgb(\(c.0), \(c.1), \(c.2))"
-    case "HSL":
-        let r = Double(c.0) / 255, g = Double(c.1) / 255, b = Double(c.2) / 255
-        let mx = max(r, g, b), mn = min(r, g, b); var h = 0.0, s = 0.0
-        let l = (mx + mn) / 2
-        if mx != mn {
-            let d = mx - mn
-            s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
-            h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4
-            h *= 60
-        }
-        return String(format: "hsl(%.0f, %.0f%%, %.0f%%)", h, s * 100, l * 100)
+    case "rgb()": return fmtRGB(c)
+    case "hsl()": return fmtHSL(c)
+    case "oklch()": return fmtOKLCH(c)
+    case "lab()": return fmtLAB(c)
+    case "SwiftUI": return fmtSwiftUI(c)
     default: return hexString(c)
     }
 }
@@ -197,7 +238,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "tool" where parts.count > 1:
             if let t = Tool(named: parts.dropFirst().joined(separator: " ")) { trigger(t) }
         case "workflow":
-            s.workflow = parts.dropFirst().joined(separator: " ")
+            s.workflowByTool[s.tool ?? .capRegion] = parts.dropFirst().joined(separator: " ")
+        case "menu" where parts.count > 1:
+            if let t = Tool(named: parts.dropFirst().joined(separator: " ")), t.hasMenu {
+                s.toolbarExpanded = true; s.openMenu = t; overlayCtrl.syncMenu()
+            }
+        case "closemenu":
+            s.openMenu = nil; overlayCtrl.syncMenu()
         case "option" where parts.count > 2:
             let key = parts[1], val = parts.dropFirst(2).joined(separator: " ")
             switch key {
@@ -288,7 +335,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = ProtoState.shared
         if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
         // switching Tools while frozen keeps the same Freeze Frame
-        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.workflow = nil; ProtoLog.line("tool switched to \(tool.title)") }; return }
+        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); ProtoLog.line("tool switched to \(tool.title)") }; return }
         if s.phase != .desktop { ProtoLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); ProtoLog.line("screen capture preflight denied for \(tool.title)"); return }
         let t0 = CFAbsoluteTimeGetCurrent()
@@ -311,7 +358,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = ProtoState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
-            let thumb = Freeze.shared.crop(rect: rect, on: display)
+            // screenshots keep HDR pixels when the display provides them
+            let thumb = Freeze.shared.crop(rect: rect, on: display, hdr: true)
             overlayCtrl.closeAll()
             runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))")
         } else {
@@ -319,20 +367,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func runCapture(thumb: CGImage?, label: String, duration: TimeInterval? = nil) {
+        let wf = ProtoState.shared.workflowFor(ProtoState.shared.tool) ?? "Screenshot"
         var path: URL? = nil
+        var heic: Data? = nil
         if let img = thumb {
-            path = Self.capturesDir.appendingPathComponent("capture-\(Int(Date().timeIntervalSince1970)).png")
-            let rep = NSBitmapImageRep(cgImage: img)
-            try? rep.representation(using: .png, properties: [:])?.write(to: path!)
+            if duration == nil, let d = heicData(img) {
+                // HDR screenshot -> HEIC with an ISO gain map
+                heic = d
+                path = Self.capturesDir.appendingPathComponent("capture-\(Int(Date().timeIntervalSince1970)).heic")
+                try? d.write(to: path!)
+            } else {
+                path = Self.capturesDir.appendingPathComponent("capture-\(Int(Date().timeIntervalSince1970)).png")
+                let rep = NSBitmapImageRep(cgImage: img)
+                try? rep.representation(using: .png, properties: [:])?.write(to: path!)
+            }
+            ProtoLog.line("saved \(path!.lastPathComponent) workflow=\(wf)")
         }
-        toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: path, duration: duration))
-        let wf = ProtoState.shared.effectiveWorkflow ?? "Screenshot"
+        toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: path, duration: duration), workflow: wf)
         if wf == "Pin", let img = thumb { openPin(image: img) }
         if wf == "Screenshot", let img = thumb {
-            NSPasteboard.general.clearContents()
-            NSPasteboard.general.writeObjects([NSImage(cgImage: img, size: .zero) as NSPasteboardWriting])
-            ProtoState.shared.lastClipboard = "<image \(img.width)×\(img.height)>"
+            let pb = NSPasteboard.general
+            pb.clearContents()
+            if let heic {
+                let heicT = NSPasteboard.PasteboardType(UTType.heic.identifier)
+                pb.declareTypes([heicT, .png], owner: nil)
+                pb.setData(heic, forType: heicT)
+                pb.setData(NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]), forType: .png)
+                ProtoState.shared.lastClipboard = "<heic+png \(img.width)×\(img.height)>"
+            } else {
+                pb.writeObjects([NSImage(cgImage: img, size: .zero) as NSPasteboardWriting])
+                ProtoState.shared.lastClipboard = "<image \(img.width)×\(img.height)>"
+            }
         }
+    }
+    // HEIC with an ISO gain map from an extended-sRGB CGImage; nil for SDR input
+    func heicData(_ img: CGImage) -> Data? {
+        guard img.colorSpace?.name == CGColorSpace.extendedSRGB
+           || img.colorSpace?.name == CGColorSpace.extendedLinearSRGB else { return nil }
+        let data = NSMutableData()
+        guard let dst = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil) else { return nil }
+        CGImageDestinationAddImage(dst, img, [kCGImageDestinationEncodeRequest: kCGImageDestinationEncodeToISOGainmap] as CFDictionary)
+        return CGImageDestinationFinalize(dst) ? data as Data : nil
     }
 
     // MARK: recording (simulated)
@@ -471,7 +546,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // (Recording is never here; Esc is not registered on its account.)
     func handleEsc() {
         let s = ProtoState.shared
-        if s.workflowMenuOpen { s.workflowMenuOpen = false; ProtoLog.line("esc: closed workflow menu"); return }
+        if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); ProtoLog.line("esc: closed tool menu"); return }
         if s.phase == .frozen { ProtoLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
         if s.phase == .countdown { cancelCountdown(); return }
         if let t = toastCtrl.items.first(where: { $0.showBar || $0.showRing }) {
@@ -574,7 +649,62 @@ final class OverlayController {
     weak var app: AppDelegate?
     var panels: [NSPanel] = []
     var toolbarPanel: NSPanel?
+    var menuPanel: NSPanel?
+    var menuMonitor: Any?
     init(app: AppDelegate) { self.app = app }
+
+    // the *visible* toolbar shape in screen coords — the click-through panel is
+    // much bigger, so hit-testing must use this, not the panel frame
+    var toolbarShapeScreenRect: CGRect? {
+        guard let p = toolbarPanel, let cv = p.contentView else { return nil }
+        return p.convertToScreen(cv.convert(ToolbarHit.rect, to: nil))
+    }
+    var pointerOverUI: Bool {
+        let m = NSEvent.mouseLocation
+        if toolbarShapeScreenRect?.contains(m) == true { return true }
+        if let mp = menuPanel, mp.frame.contains(m) { return true }
+        if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
+        return false
+    }
+    // a Tool button's frame in screen coords (from measured panel-space frames)
+    func buttonScreenRect(_ t: Tool) -> CGRect? {
+        guard let fr = ToolbarBtnFrames.rects[t], let p = toolbarPanel, let cv = p.contentView else { return nil }
+        return p.convertToScreen(cv.convert(fr, to: nil))
+    }
+
+    func syncMenu() {
+        if let t = ProtoState.shared.openMenu { TipPanel.hide(); showMenu(t) } else { hideMenu() }
+    }
+    func showMenu(_ t: Tool) {
+        guard let tp = toolbarPanel, t.hasMenu else { return }
+        hideMenu()
+        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self))
+        h.frame.size = h.fittingSize
+        var f = NSRect(origin: .zero, size: h.fittingSize)
+        let scr = tp.screen?.frame ?? NSScreen.main!.frame
+        let anchor = buttonScreenRect(t) ?? toolbarShapeScreenRect ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
+        f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
+                           y: max(scr.minY + 8, anchor.minY - f.height - 6))
+        let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
+        p.hasShadow = false
+        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+        p.contentView = h; p.orderFront(nil)
+        menuPanel = p
+        ProtoLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
+        menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
+            guard let self, let mp = self.menuPanel else { return e }
+            if !mp.frame.contains(NSEvent.mouseLocation) {
+                ProtoState.shared.openMenu = nil; self.syncMenu()
+                ProtoLog.line("menu closed (outside click)")
+            }
+            return e
+        }
+    }
+    func hideMenu() {
+        menuPanel?.close(); menuPanel = nil
+        if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
+    }
 
     func freezeAndShow(tool: Tool, t0: CFAbsoluteTime) async {
         do {
@@ -583,11 +713,16 @@ final class OverlayController {
             for screen in NSScreen.screens {
                 guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                       let disp = content.displays.first(where: { $0.displayID == num }) else { continue }
-                let cfg = SCStreamConfiguration()
+                let cfg = SCScreenshotConfiguration()
                 cfg.width = Int(disp.width); cfg.height = Int(disp.height)
-                cfg.showsCursor = true; cfg.scalesToFit = true
-                let img = try await SCScreenshotManager.captureImage(contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
+                cfg.showsCursor = true; cfg.displayIntent = .local
+                let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+                cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
+                let out = try await SCScreenshotManager.captureScreenshot(
+                    contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
+                guard let img = out.sdrImage ?? out.hdrImage else { continue }
                 var fd = FrozenDisplay(screen: screen, image: img)
+                fd.hdrImage = out.hdrImage
                 fd.windowFrames = content.windows
                     .filter { w in
                         w.isActive && w.windowLayer == 0 &&
@@ -603,12 +738,12 @@ final class OverlayController {
                            y: primaryH - sy.origin.y - f.origin.y - f.height,
                            width: f.width, height: f.height)
                 }
-                // bitmap for pixel reads
+                // bitmap for pixel reads — real sRGB so colour math is honest
                 let w = img.width, h = img.height
                 var data = [UInt8](repeating: 0, count: w * h * 4)
                 let ok = data.withUnsafeMutableBytes { ptr -> Bool in
                     guard let ctx = CGContext(data: ptr.baseAddress, width: w, height: h, bitsPerComponent: 8,
-                                              bytesPerRow: w * 4, space: CGColorSpaceCreateDeviceRGB(),
+                                              bytesPerRow: w * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
                                               bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue) else { return false }
                     ctx.draw(img, in: CGRect(x: 0, y: 0, width: w, height: h)); return true
                 }
@@ -619,7 +754,7 @@ final class OverlayController {
             let latency = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             await MainActor.run {
                 ProtoState.shared.latencyText = String(format: "%.0f ms (%d displays)", latency, Freeze.shared.displays.count)
-                let perDisplay = Freeze.shared.displays.map { "\($0.image.width)x\($0.image.height)" }.joined(separator: ", ")
+                let perDisplay = Freeze.shared.displays.map { "\($0.image.width)x\($0.image.height)\($0.hdrImage != nil ? " HDR" : "")" }.joined(separator: ", ")
                 ProtoLog.line("freeze latency \(Int(latency)) ms across \(Freeze.shared.displays.count) displays: \(perDisplay)")
                 self.showPanels(tool: tool)
                 ProtoLog.line("phase=frozen tool=\(tool.title)")
@@ -636,7 +771,6 @@ final class OverlayController {
     func showPanels(tool: Tool) {
         let s = ProtoState.shared
         s.phase = .frozen; s.tool = tool
-        if tool.kind != .util, !(s.workflows.contains(s.workflow ?? "")) { s.workflow = s.workflows.first }
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
             let p = NSPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -644,8 +778,18 @@ final class OverlayController {
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.ignoresMouseEvents = false; p.acceptsMouseMovedEvents = true
             p.hidesOnDeactivate = false
+            // the frozen frame lives in its own layer under the overlay drawing so
+            // HDR captures can render with extended dynamic range
+            let img = fd.hdrImage ?? fd.image
+            let imageView = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
+            imageView.wantsLayer = true
+            imageView.layer?.contents = img
+            imageView.layer?.contentsGravity = .resize
+            if fd.hdrImage != nil { imageView.layer?.preferredDynamicRange = .high }
             let ov = OverlayNSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size), displayIndex: i, controller: self)
-            p.contentView = ov
+            let container = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
+            container.addSubview(imageView); container.addSubview(ov)
+            p.contentView = container
             p.orderFront(nil)
             p.makeFirstResponder(ov)
             panels.append(p)
@@ -659,7 +803,7 @@ final class OverlayController {
         let idx = forced ?? Freeze.shared.displays.firstIndex { NSMouseInRect(mouse, $0.screen.frame, false) } ?? 0
         guard idx < Freeze.shared.displays.count else { return }
         let fd = Freeze.shared.displays[idx]
-        let tv = ToolbarView(displayIndex: idx)
+        let tv = ToolbarView(displayIndex: idx, ctrl: self)
         let hosting = PassthroughHostingView(rootView: tv)
         let size = NSSize(width: tv.panelW, height: tv.panelH)
         hosting.frame = NSRect(origin: .zero, size: size)
@@ -673,6 +817,16 @@ final class OverlayController {
         p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
         p.contentView = hosting; p.orderFront(nil)
         toolbarPanel = p
+        ProtoLog.line("toolbar panel \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
+    }
+    // the expanded row's true size lands after the panel is created; resize to
+    // fit it, staying centred on the display
+    func resizeToolbar(_ w: CGFloat, _ h: CGFloat) {
+        guard let p = toolbarPanel, abs(p.frame.width - w) > 1 else { return }
+        var f = p.frame; f.size = NSSize(width: w, height: h)
+        if let scr = p.screen { f.origin.x = scr.frame.midX - w / 2; f.origin.y = scr.frame.maxY - h }
+        p.contentView?.frame.size = f.size
+        p.setFrame(f, display: true)
     }
     func refreshToolbar(onDisplay forced: Int? = nil) {
         toolbarPanel?.close(); toolbarPanel = nil
@@ -680,8 +834,11 @@ final class OverlayController {
         if p == .frozen || (p == .recording && ProtoState.shared.showIslandWhileRecording) { showToolbar(onDisplay: forced) }
     }
     func closeAllPanelsOnly() {
-        panels.forEach { ($0.contentView as? OverlayNSView)?.measurePop?.close(); $0.close() }
+        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.measurePop?.close() }; $0.close() }
         panels = []
+        hideMenu()
+        if ProtoState.shared.openMenu != nil { ProtoState.shared.openMenu = nil }
+        TipPanel.hide()
         toolbarPanel?.close(); toolbarPanel = nil
     }
     func closeAll() {
@@ -720,9 +877,10 @@ final class OverlayNSView: NSView {
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
 
+    override var isOpaque: Bool { false }
     override func draw(_ r: NSRect) {
         let ctx = NSGraphicsContext.current!.cgContext
-        ctx.draw(fd.image, in: bounds)
+        ctx.clear(bounds) // the frozen frame is drawn by the layer beneath
         let t = tool, mm = measureMode
         if t == .capRegion || t == .recRegion || t == .copyText || (t == .measure && mm == "Region") {
             if let s = sel {
@@ -740,7 +898,7 @@ final class OverlayNSView: NSView {
                 NSColor.black.withAlphaComponent(0.15).setFill(); bounds.fill()
             }
         }
-        let overToolbar = ctrl?.toolbarPanel?.frame.contains(NSEvent.mouseLocation) ?? false
+        let overToolbar = ctrl?.pointerOverUI ?? false
         if !overToolbar, (t == .capWindow || t == .recWindow), let w = hoverWin,
            w.width < bounds.width * 0.9 && w.height < bounds.height * 0.9 {
             NSColor.systemBlue.withAlphaComponent(0.28).setFill()
@@ -785,28 +943,62 @@ final class OverlayNSView: NSView {
         let pt = mouseInView()
         let n = tool == .pickColour ? 15 : 11, px = 11
         let sz = CGFloat(n * px)
-        let lx = pt.x + 26 + sz > bounds.width ? pt.x - 26 - sz : pt.x + 26
-        let ly = min(bounds.height - sz - 40, pt.y + 20)
+        let c = Freeze.shared.pixel(at: pt, on: di)
+        // colour info block under the grid (Pick Colour only) — counts towards
+        // the loupe's total height for edge flipping
+        let rows: [(String, Bool)] = tool == .pickColour ? [
+            (hexString(c), ProtoState.shared.colourFmt == "Hex"),
+            (fmtRGB(c), ProtoState.shared.colourFmt == "rgb()"),
+            (fmtHSL(c), ProtoState.shared.colourFmt == "hsl()"),
+            (fmtOKLCH(c), ProtoState.shared.colourFmt == "oklch()"),
+            (fmtLAB(c), ProtoState.shared.colourFmt == "lab()"),
+        ] : []
+        let infoH: CGFloat = rows.isEmpty ? 20 : CGFloat(rows.count) * 14 + 12
+        let totalH = sz + 6 + infoH
+        // default above-right of the pointer; flip below if it crosses the top,
+        // left if it crosses the right edge; then clamp inside the screen
+        var lx = pt.x + 26, ly = pt.y + 20
+        if ly + totalH > bounds.height - 4 { ly = pt.y - 20 - totalH }
+        if lx + sz > bounds.width - 4 { lx = pt.x - 26 - sz }
+        lx = min(max(4, lx), bounds.width - sz - 4)
+        ly = min(max(4, ly), bounds.height - totalH - 4)
         let f = fd; let sx = CGFloat(f.image.width) / bounds.width, sy = CGFloat(f.image.height) / bounds.height
         // view coords are bottom-left origin; image rows are top-left origin
         let cxp = pt.x * sx, cyp = (bounds.height - pt.y) * sy
         let nf = CGFloat(n)
         let imgBounds = CGRect(x: 0, y: 0, width: f.image.width, height: f.image.height)
         let src = CGRect(x: cxp - nf / 2, y: cyp - nf / 2, width: nf, height: nf).intersection(imgBounds)
-        if let crop = f.image.cropping(to: src.integral) {
-            ctx.saveGState()
-            ctx.interpolationQuality = .none
-            ctx.draw(crop, in: CGRect(x: lx, y: ly, width: sz, height: sz))
-            ctx.restoreGState()
-            // centre pixel outline
-            let mid = CGFloat(n / 2 * px)
-            NSColor.white.setStroke()
-            NSBezierPath(rect: NSRect(x: lx + mid, y: ly + mid, width: 11, height: 11)).stroke()
-            // border
-            NSColor.black.withAlphaComponent(0.4).setStroke()
-            NSBezierPath(roundedRect: NSRect(x: lx, y: ly, width: sz, height: sz), xRadius: 8, yRadius: 8).stroke()
-            let c = Freeze.shared.pixel(at: pt, on: di)
-            drawBadge("\(Int(pt.x)), \(Int(pt.y))  \(hexString(c))", at: CGPoint(x: lx, y: ly + sz + 6))
+        guard let crop = f.image.cropping(to: src.integral) else { return }
+        ctx.saveGState()
+        ctx.interpolationQuality = .none
+        ctx.draw(crop, in: CGRect(x: lx, y: ly + infoH + 6, width: sz, height: sz))
+        ctx.restoreGState()
+        // centre pixel outline + border
+        let mid = CGFloat(n / 2 * px)
+        NSColor.white.setStroke()
+        NSBezierPath(rect: NSRect(x: lx + mid, y: ly + infoH + 6 + mid, width: 11, height: 11)).stroke()
+        NSColor.black.withAlphaComponent(0.4).setStroke()
+        NSBezierPath(roundedRect: NSRect(x: lx, y: ly, width: sz, height: totalH), xRadius: 8, yRadius: 8).stroke()
+        if rows.isEmpty {
+            drawBadge("\(Int(pt.x)), \(Int(pt.y))  \(hexString(c))", at: CGPoint(x: lx, y: ly + 2))
+            return
+        }
+        // info block: swatch + hex on row 0, then rgb/hsl/oklch/lab; the row of
+        // the active copy format is drawn brighter
+        let block = NSRect(x: lx, y: ly, width: sz, height: infoH)
+        NSColor.black.withAlphaComponent(0.75).setFill()
+        NSBezierPath(roundedRect: block, xRadius: 7, yRadius: 7).fill()
+        for (i, row) in rows.enumerated() {
+            let ry = ly + infoH - 16 - CGFloat(i) * 14
+            if i == 0 {
+                let sw = NSRect(x: lx + 8, y: ry - 1, width: 10, height: 10)
+                NSColor(calibratedRed: Double(c.0) / 255, green: Double(c.1) / 255, blue: Double(c.2) / 255, alpha: 1).setFill()
+                NSBezierPath(roundedRect: sw, xRadius: 2, yRadius: 2).fill()
+            }
+            let bright = row.1 ? 1.0 : 0.55
+            let attrs: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 9, weight: .regular),
+                                                        .foregroundColor: NSColor.white.withAlphaComponent(bright)]
+            (row.0 as NSString).draw(at: CGPoint(x: lx + 22, y: ry - 1), withAttributes: attrs)
         }
     }
     func mouseInView() -> CGPoint { convert(NSEvent.mouseLocation, from: nil) }
@@ -1020,13 +1212,17 @@ enum ToolbarHit {
     nonisolated(unsafe) static var rect = CGRect.zero
     nonisolated(unsafe) static var lastHit: Bool? = nil
 }
+// measured button frames in the toolbar panel's coordinate space, reported by
+// onGeometryChange — used for hover mapping, menu anchors and CGEvent driving
+enum ToolbarBtnFrames {
+    nonisolated(unsafe) static var rects: [Tool: CGRect] = [:]
+}
 
 struct ToolbarView: View {
     let displayIndex: Int
+    let ctrl: OverlayController
     @ObservedObject var s = ProtoState.shared
     var expanded: Bool { s.toolbarExpanded }
-    @State var tip: String? = nil
-    @State var tipTask: Task<Void, Never>? = nil
     @Namespace var ns
     var screen: NSScreen? {
         displayIndex < Freeze.shared.displays.count ? Freeze.shared.displays[displayIndex].screen : NSScreen.main
@@ -1052,85 +1248,47 @@ struct ToolbarView: View {
     var islandH: CGFloat { max(22, barH) }
     var gap: CGFloat { hasNotch ? 0 : 3 }
     var pillH: CGFloat { islandH - 2 * gap }
-    // expanded toolbar grows down from the same shape, sized to its content:
-    // square top corners on the notch, fully rounded as a floating island.
-    var contentH: CGFloat { twoRows ? 74 : 40 }
+    // expanded toolbar: 9 big circular glass buttons in three groups. The shape
+    // is sized from the *measured* row — never a hand-coded width — so the
+    // buttons can never be clipped.
+    @State var rowSize = CGSize(width: 520, height: 66)
     var contentTop: CGFloat { islandH + 6 - gap }
     var recExpandedW: CGFloat { 260 }
-    var expW: CGFloat { min(limit, (compact ? compactOptionsWidth : optionsWidth) + 430) }
-    var expH: CGFloat { islandH + 8 + contentH - gap }
+    var expW: CGFloat { min(limit, rowSize.width + 20) }
+    var expH: CGFloat { islandH + 8 + rowSize.height + 8 - gap }
     var shapeW: CGFloat { expanded ? (recording ? recExpandedW : expW) : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
-    var panelW: CGFloat { max(islandW, min(limit, baseWidth + 430)) + 48 } // room for the widest tool's options
-    var panelH: CGFloat { islandH + 6 + 74 + 100 + 28 } // island + gap + 2-row max + dropdown + tooltip band
+    var panelW: CGFloat { min(limit, expW) + 48 }
+    var panelH: CGFloat { expH + 12 } // menus and tooltips are their own panels
     var shapeRectInView: CGRect {
         CGRect(x: (panelW - shapeW) / 2, y: panelH - gap - shapeH, width: shapeW, height: shapeH)
     }
 
     var limit: CGFloat { (screen?.frame.width ?? 1280) - 40 }
-    var baseWidth: CGFloat { 420 }
-    var optionsWidth: CGFloat {
-        switch s.tool {
-        case .pickColour: 150
-        case .measure: 110
-        case .recRegion, .recWindow, .recScreen: 430
-        default: 0
-        }
-    }
-    var compactOptionsWidth: CGFloat {
-        switch s.tool {
-        case .recRegion, .recWindow, .recScreen: 260
-        default: optionsWidth
-        }
-    }
-    var compact: Bool { baseWidth + optionsWidth > limit }
-    var twoRows: Bool { baseWidth + compactOptionsWidth > limit }
 
     func syncHit() {
-        ToolbarHit.rect = s.workflowMenuOpen ? shapeRectInView.union(menuRectInView) : shapeRectInView
+        ToolbarHit.rect = shapeRectInView
         if expanded {
-            var xs = [Tool.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
-                .map { "\($0.title):\(Int(iconCenterX($0)))" }.joined(separator: " ")
-            if s.tool?.kind == .rec { xs += " countdown3:\(Int(iconCenterX(.measure) + 195))" }
+            let xs = [Tool.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
+                .compactMap { t -> String? in
+                    guard let f = ctrl.buttonScreenRect(t) else { return nil }
+                    return "\(t.title):\(Int(f.midX))"
+                }.joined(separator: " ")
             ProtoLog.line("toolbar icons @ \(xs)")
         }
     }
-    // screen-x of a Tool button's centre inside the expanded row, for test driving
-    func iconCenterX(_ t: Tool) -> CGFloat {
-        var px: CGFloat = 0
-        let bw: CGFloat = 28, div: CGFloat = 13
-        let groups: [[Tool]] = [[.capRegion, .capWindow, .capScreen], [.recRegion, .recWindow, .recScreen], [.pickColour, .copyText, .measure]]
-        var local: CGFloat = 0
-        for g in groups {
-            if let i = g.firstIndex(of: t) { local = px + CGFloat(i) * bw + bw / 2; break }
-            px += CGFloat(g.count) * bw + div
-        }
-        let sc = screen ?? NSScreen.main!
-        let shapeX = sc.frame.midX - shapeW / 2
-        // content (fixedSize) is centred inside the shape
-        let contentW = CGFloat(3 * 28 + 13) * 3 - 13 + 130 + (compact ? compactOptionsWidth : optionsWidth)
-        return shapeX + (shapeW - contentW) / 2 + 14 + local
-    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            morph.padding(.top, gap)
-            if s.workflowMenuOpen {
-                workflowMenu.padding(.top, 4)
+        morph
+            .frame(width: panelW, height: panelH, alignment: .top)
+            .coordinateSpace(name: "panel")
+            .onAppear { syncHit() }
+            .onChange(of: expanded) {
+                syncHit()
+                if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
-            if let tip, !s.workflowMenuOpen {
-                Text(tip).font(.system(size: 11)).foregroundStyle(.white)
-                    .padding(.horizontal, 9).padding(.vertical, 4)
-                    .background(Color.black.opacity(0.85), in: .rect(cornerRadius: 6))
-                    .padding(.top, 4)
-            }
-            Spacer(minLength: 0)
-        }
-        .frame(width: panelW, height: panelH)
-        .onAppear { syncHit() }
-        .onChange(of: expanded) { syncHit() }
-        .onChange(of: s.tool) { s.workflowMenuOpen = false; syncHit() }
-        .onChange(of: s.workflowMenuOpen) { syncHit() }
+            .onChange(of: s.openMenu) { ctrl.syncMenu() }
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -1153,7 +1311,8 @@ struct ToolbarView: View {
         .glassEffectID("pill", in: ns)
         .overlay(shape.fill(Color.black).opacity(expanded ? 0 : 1).allowsHitTesting(false))
         .contentShape(shape)
-        .onHover { h in ProtoLog.line("hover -> \(h)"); s.toolbarExpanded = h }
+        // an open menu holds the toolbar expanded while the pointer is in the menu
+        .onHover { h in ProtoLog.line("hover -> \(h)"); s.toolbarExpanded = h || s.openMenu != nil }
         .animation(.spring(duration: 0.35), value: expanded)
     }
 
@@ -1171,7 +1330,7 @@ struct ToolbarView: View {
     }
 
     @ViewBuilder var expandedContent: some View {
-        if recording { recControls } else { toolbarRows }
+        if recording { recControls } else { toolRow }
     }
 
     var recControls: some View {
@@ -1185,174 +1344,199 @@ struct ToolbarView: View {
         .padding(.top, contentTop)
     }
 
-    func setTip(_ text: String, _ on: Bool) {
-        if !on {
-            if tip == text { tip = nil }
-            tipTask?.cancel(); tipTask = nil
-            return
+    // click an unselected Tool to select it; click the selected Tool (or
+    // right-click any Tool that has one) to open its menu
+    func btnClicked(_ t: Tool) {
+        TipPanel.hide()
+        if s.tool == t {
+            s.openMenu = s.openMenu == t ? nil : t
+            ctrl.syncMenu()
+        } else {
+            AppDelegate.shared?.trigger(t)
         }
-        tipTask?.cancel()
-        tipTask = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled else { return }
-            tip = text
-        }
-    }
-
-    // Map an x position inside the expanded row to a Tool/button label for the
-    // tooltip (hover state per-button is unreliable inside the glass container).
-    func tipFor(x: CGFloat) -> String? {
-        var px: CGFloat = 0
-        let bw: CGFloat = 28, div: CGFloat = 13
-        let caps: [Tool] = [.capRegion, .capWindow, .capScreen]
-        let recs: [Tool] = [.recRegion, .recWindow, .recScreen]
-        let utils: [Tool] = [.pickColour, .copyText, .measure]
-        let x0 = x
-        if x0 < 0 { return nil }
-        if x0 < 3 * bw { let t = caps[Int(x0 / bw)]; return t.title + (t.shortcut.map { " " + $0 } ?? "") }
-        px = 3 * bw + div
-        if x0 < px + 3 * bw { let t = recs[Int((x0 - px) / bw)]; return t.title + (t.shortcut.map { " " + $0 } ?? "") }
-        px += 3 * bw + div
-        if x0 < px + 3 * bw { let t = utils[Int((x0 - px) / bw)]; return t.title }
-        px += 3 * bw + div
-        if x0 < px + 130 { return "Workflow" }
-        return nil
     }
 
     func tbtn(_ t: Tool) -> some View {
-        Button { AppDelegate.shared?.trigger(t) } label: {
-            Image(systemName: t.symbol).font(.system(size: 13)).frame(width: 26, height: 26)
+        // selected Tool gets the prominent glass, others plain glass; the
+        // buttons are real circles — the border shape is declared on the
+        // button, not clipped onto the label
+        let selected = s.tool == t
+        // selected: a filled light disc drawn plainly (glass clips its own
+        // overlays); unselected: the standard glass circle
+        let btn = Button { btnClicked(t) } label: {
+            ZStack {
+                if selected { Circle().fill(.white.opacity(0.92)) }
+                Image(systemName: t.symbol).font(.system(size: 22))
+                    .foregroundStyle(selected ? Color.black : Color.white)
+            }
+            .frame(width: 52, height: 52)
+            .overlay(alignment: .bottomTrailing) {
+                if t.hasMenu && selected {
+                    Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
+                        .foregroundStyle(.black.opacity(0.8)).offset(x: 5, y: 4)
+                }
+            }
         }
-        .buttonStyle(.plain)
-        .foregroundStyle(s.tool == t ? Color.white : Color.white.opacity(0.7))
-        .background(s.tool == t ? Color.white.opacity(0.25) : .clear, in: .rect(cornerRadius: 7))
+        return Group {
+            if selected { btn.buttonStyle(.plain) }
+            else { btn.buttonStyle(.glass).controlSize(.extraLarge).buttonBorderShape(.circle) }
+        }
+        .overlay(RightClickCatcher {
+            guard t.hasMenu else { return }
+            TipPanel.hide()
+            if s.tool != t { AppDelegate.shared?.trigger(t) }
+            s.openMenu = t; ctrl.syncMenu()
+        })
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
+            ToolbarBtnFrames.rects[t] = $0
+        }
     }
 
-    var toolbarRows: some View {
-        VStack(spacing: 4) {
-            Spacer(minLength: 0).frame(height: contentTop)
-            HStack(spacing: 2) {
+    var toolRow: some View {
+        GlassEffectContainer(spacing: 8) {
+            HStack(spacing: 8) {
                 ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: tbtn)
-                Divider().frame(height: 18).padding(.horizontal, 5)
+                Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
                 ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: tbtn)
-                Divider().frame(height: 18).padding(.horizontal, 5)
+                Spacer().frame(width: 8)
                 ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: tbtn)
-                Divider().frame(height: 18).padding(.horizontal, 5)
-                workflowPicker
-                if !twoRows { options }
             }
-            .onContinuousHover { phase in
+            .padding(10)
+            .fixedSize()
+            .onGeometryChange(for: CGSize.self) { $0.frame(in: .named("panel")).size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
+            // map the pointer to a Tool button using measured frames — per-button
+            // onHover is unreliable inside the glass container
+            .onContinuousHover(coordinateSpace: .named("panel")) { phase in
                 switch phase {
                 case .active(let p):
-                    if let label = tipFor(x: p.x) {
-                        if tip != label { ProtoLog.line("hover x=\(Int(p.x)) -> \(label)") }
-                        setTip(label, true)
-                    }
-                case .ended:
-                    tip = nil; tipTask?.cancel()
+                    if let t = ToolbarBtnFrames.rects.first(where: { $0.value.contains(p) })?.key {
+                        if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects.count)") }
+                        TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t) ?? .zero)
+                    } else { if TipPanel.tool != nil { ProtoLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
+                case .ended: TipPanel.hide()
                 }
             }
-            if twoRows { HStack { options } }
         }
-        .padding(.horizontal, 14)
+        .padding(.top, contentTop)
+    }
+}
+
+// catches right-clicks without blocking left ones — the view only claims the
+// hit while a rightMouseDown is being dispatched
+struct RightClickCatcher: NSViewRepresentable {
+    let action: () -> Void
+    func makeNSView(context: Context) -> RCView { let v = RCView(); v.onRight = action; return v }
+    func updateNSView(_ v: RCView, context: Context) { v.onRight = action }
+}
+final class RCView: NSView {
+    var onRight: () -> Void = {}
+    override func hitTest(_ p: NSPoint) -> NSView? { NSApp.currentEvent?.type == .rightMouseDown ? self : nil }
+    override func rightMouseDown(with e: NSEvent) { onRight() }
+}
+
+// the hover tooltip is its own borderless panel below-right of the pointer —
+// .help doesn't work in a nonactivating panel and an in-panel label can't
+// reach outside the toolbar's shape
+@MainActor
+enum TipPanel {
+    static var panel: NSPanel?
+    static var task: Task<Void, Never>?
+    static var tool: Tool? // button currently hovered, so the tip doesn't chase
+    static func hover(_ t: Tool, anchor: CGRect) {
+        tool = t
+        task?.cancel()
+        let a = anchor
+        task = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, ProtoState.shared.openMenu == nil else { return }
+            show(t, anchor: a)
+        }
+    }
+    static func show(_ t: Tool, anchor: CGRect) {
+        panel?.close()
+        let label = t.title + (t.shortcut.map { "  " + $0 } ?? "")
+        let h = NSHostingView(rootView: Text(label).font(.system(size: 11)).foregroundStyle(.white)
+            .padding(.horizontal, 9).padding(.vertical, 4)
+            .background(Color.black.opacity(0.85), in: .rect(cornerRadius: 6)))
+        h.frame.size = h.fittingSize
+        var f = NSRect(origin: CGPoint(x: anchor.maxX - 32 + 12, y: anchor.minY - 28 - h.fittingSize.height),
+                       size: h.fittingSize)
+        if let scr = NSScreen.screens.first(where: { $0.frame.contains(anchor.origin) }) {
+            f.origin.x = min(max(scr.frame.minX + 4, f.origin.x), scr.frame.maxX - f.width - 4)
+            f.origin.y = max(scr.frame.minY + 4, f.origin.y)
+        }
+        let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+        p.level = .screenSaver + 3; p.isOpaque = false; p.backgroundColor = .clear
+        p.hasShadow = false
+        p.collectionBehavior = [.canJoinAllSpaces]; p.ignoresMouseEvents = true
+        p.contentView = h; p.orderFront(nil); panel = p
+        ProtoLog.line("tip \(label) anchor=\(Int(anchor.midX)),\(Int(anchor.midY)) at \(Int(f.origin.x)),\(Int(f.origin.y))")
+    }
+    static func hide() { task?.cancel(); task = nil; tool = nil; panel?.close(); panel = nil }
+}
+
+// a Tool's dropdown menu: its own dark panel under the button. Radio rows
+// close it; toggles leave it open.
+struct ToolMenuView: View {
+    let tool: Tool
+    let ctrl: OverlayController
+    @ObservedObject var s = ProtoState.shared
+    var body: some View {
+        VStack(alignment: .leading, spacing: 2) {
+            switch tool.kind {
+            case .shot:
+                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0 }
+            case .rec:
+                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0 }
+                Text("Options").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+                    .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
+                section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
+                toggles()
+            case .util where tool == .pickColour:
+                section("Copy as", picks: ["Hex", "rgb()", "hsl()", "oklch()", "lab()", "SwiftUI"], current: s.colourFmt) { s.colourFmt = $0 }
+            case .util where tool == .measure:
+                section("", picks: ["Region", "Line", "Edges X", "Edges Y", "Edges X+Y"], current: s.measureMode) { s.measureMode = $0 }
+            default: EmptyView()
+            }
+        }
+        .padding(6)
         .fixedSize()
+        .background(Color.black.opacity(0.9), in: .rect(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.12), lineWidth: 0.5))
     }
-
-    var workflowPicker: some View {
-        HStack(spacing: 4) {
-            if s.tool?.kind == .util {
-                Text("No Workflow").font(.system(size: 11)).foregroundStyle(.white.opacity(0.45))
-            } else {
-                Button { tip = nil; s.workflowMenuOpen.toggle() } label: {
-                    HStack(spacing: 4) {
-                        Text(s.effectiveWorkflow ?? "Workflow").font(.system(size: 11))
-                        Image(systemName: "chevron.down").font(.system(size: 8))
-                    }.foregroundStyle(.white)
-                    .padding(.horizontal, 8).padding(.vertical, 4)
-                    .background(Color.white.opacity(0.12), in: .capsule)
+    @ViewBuilder func section(_ title: String, picks: [String], current: String?, pick: @escaping (String) -> Void) -> some View {
+        if !title.isEmpty {
+            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
+        }
+        ForEach(picks, id: \.self) { w in
+            Button {
+                pick(w); s.openMenu = nil; ctrl.syncMenu()
+            } label: {
+                HStack {
+                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                        .opacity(w == current ? 1 : 0)
+                    Text(w).font(.system(size: 13)).foregroundStyle(.white)
+                    Spacer()
                 }
-                .buttonStyle(.plain)
+                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+                .padding(.horizontal, 8)
+                .contentShape(Rectangle())
             }
+            .buttonStyle(.plain)
         }
     }
-    // dropdown rendered inside the toolbar panel, below the shape
-    var menuW: CGFloat { 200 }
-    var menuH: CGFloat { CGFloat(s.workflows.count) * 26 + 12 }
-    var menuRectInView: CGRect {
-        // anchored under the toolbar's bottom edge, right-aligned to the picker
-        let x = min(max(4, shapeRectInView.maxX - 16 - menuW), panelW - menuW - 4)
-        return CGRect(x: x, y: shapeRectInView.minY - menuH - 4, width: menuW, height: menuH)
-    }
-    var workflowMenu: some View {
-        VStack(alignment: .leading, spacing: 0) {
-            ForEach(s.workflows, id: \.self) { w in
-                Button {
-                    s.workflow = w; s.workflowMenuOpen = false
-                } label: {
-                    Text(w).font(.system(size: 12)).foregroundStyle(.white)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.horizontal, 12).padding(.vertical, 6)
-                        .background(w == s.effectiveWorkflow ? Color.white.opacity(0.15) : .clear)
-                }
-                .buttonStyle(.plain)
+    @ViewBuilder func toggles() -> some View {
+        let rows: [(String, Binding<Bool>)] = [
+            ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),
+            ("Click circles", $s.clickCircles), ("Show island while recording", $s.showIslandWhileRecording)]
+        ForEach(rows, id: \.0) { label, on in
+            Toggle(isOn: on) {
+                Text(label).font(.system(size: 13)).foregroundStyle(.white)
             }
-        }
-        .frame(width: menuW)
-        .background(Color.black.opacity(0.9), in: .rect(cornerRadius: 8))
-    }
-
-    func iconToggle(_ on: Binding<Bool>, _ symbol: String, _ label: String) -> some View {
-        Button { on.wrappedValue.toggle() } label: {
-            Image(systemName: symbol).font(.system(size: 12)).frame(width: 22, height: 22)
-        }
-        .buttonStyle(.plain)
-        .foregroundStyle(on.wrappedValue ? Color.white : Color.white.opacity(0.45))
-        .background(on.wrappedValue ? Color.white.opacity(0.22) : .clear, in: .rect(cornerRadius: 6))
-        .onHover { setTip(label, $0) }
-    }
-
-    @ViewBuilder var options: some View {
-        switch s.tool {
-        case .pickColour:
-            Picker("", selection: $s.colourFmt) {
-                ForEach(["Hex", "RGB", "HSL"], id: \.self) { Text($0) }
-            }.pickerStyle(.segmented).fixedSize()
-            .onHover { setTip("Colour Format", $0) }
-        case .measure:
-            Picker("", selection: $s.measureMode) {
-                ForEach(["Region", "Line", "Edges X", "Edges Y", "Edges X+Y"], id: \.self) { Text($0) }
-            }.pickerStyle(.menu).fixedSize()
-            .onHover { setTip("Measure Mode", $0) }
-        case .recRegion, .recWindow, .recScreen:
-            if compact || twoRows {
-                HStack(spacing: 4) {
-                    Picker("", selection: $s.countdown) {
-                        ForEach(["Off", "3", "5", "10"], id: \.self) { Text($0) }
-                    }.pickerStyle(.segmented).fixedSize()
-                    .onHover { setTip("Countdown", $0) }
-                    iconToggle($s.sysAudio, "speaker.wave.2", "System Audio")
-                    iconToggle($s.mic, "microphone", "Microphone")
-                    iconToggle($s.cursor, "cursorarrow.rays", "Cursor")
-                    iconToggle($s.clickCircles, "circle.dotted", "Click Circles")
-                    iconToggle($s.showIslandWhileRecording, "capsule", "Show Island While Recording")
-                }
-            } else {
-                HStack(spacing: 6) {
-                    Picker("", selection: $s.countdown) {
-                        ForEach(["Off", "3", "5", "10"], id: \.self) { Text($0) }
-                    }.pickerStyle(.segmented).frame(width: 140)
-                    .onHover { setTip("Countdown", $0) }
-                    Toggle("Audio", isOn: $s.sysAudio).toggleStyle(.checkbox).font(.system(size: 10))
-                    .onHover { setTip("System Audio", $0) }
-                    Toggle("Mic", isOn: $s.mic).toggleStyle(.checkbox).font(.system(size: 10))
-                    .onHover { setTip("Microphone", $0) }
-                    Toggle("Cursor", isOn: $s.cursor).toggleStyle(.checkbox).font(.system(size: 10))
-                    .onHover { setTip("Cursor", $0) }
-                    Toggle("Island", isOn: $s.showIslandWhileRecording).toggleStyle(.checkbox).font(.system(size: 10))
-                    .onHover { setTip("Show Island While Recording", $0) }
-                }
-            }
-        default: EmptyView()
+            .toggleStyle(.checkbox)
+            .frame(minHeight: 26)
+            .padding(.horizontal, 10)
         }
     }
 }
@@ -1411,13 +1595,12 @@ final class ToastController: ObservableObject {
         hosting.frame.size = f.size
         panel.setFrame(f, display: true)
     }
-    func start(cap: Capture) {
+    func start(cap: Capture, workflow wf: String) {
         let t = ToastItem(cap: cap)
         items.insert(t, at: 0)
         relayout()
         AppDelegate.shared?.updateEscHotkey()
         let s = ProtoState.shared
-        let wf = s.effectiveWorkflow ?? "Screenshot"
         let stepErr = s.stepErrorNext ? "Open in app failed" : nil
         s.stepErrorNext = false
         Task { @MainActor in
@@ -1615,7 +1798,7 @@ struct StateHUDView: View {
         VStack(alignment: .leading, spacing: 2) {
             Text("PROTOTYPE").font(.system(size: 9, weight: .bold)).foregroundStyle(.orange)
             Text("phase: \(String(describing: s.phase))  tool: \(s.tool?.title ?? "-")")
-            Text("workflow: \(s.effectiveWorkflow ?? "-")")
+            Text("workflow: \(s.workflowFor(s.tool) ?? "-")")
             Text("colour=\(s.colourFmt) measure=\(s.measureMode) countdown=\(s.countdown)")
             Text("audio=\(s.sysAudio ? "on" : "off")/\(s.mic ? "on" : "off") cursor=\(s.cursor ? "on" : "off") island=\(s.showIslandWhileRecording ? "on" : "off")")
             Text("rec: \(s.phase == .recording ? fmtT(s.recordingElapsed) + (s.recordingPaused ? " (paused)" : "") : "-")")
