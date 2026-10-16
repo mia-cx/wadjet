@@ -1,5 +1,4 @@
-// Throwaway prototype for mia-cx/wadjet #12 (Freeze Frame overlay and toolbar)
-// and #13 (post-capture toast). Not product code.
+// Wadjet — a ShareX-style screenshot and screen-recording utility for macOS.
 
 import AppKit
 import SwiftUI
@@ -45,8 +44,8 @@ let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under
 let dimAlpha: CGFloat = 0.4  // Freeze Frame dim outside the capture target
 
 @MainActor
-final class ProtoState: ObservableObject {
-    static let shared = ProtoState()
+final class AppState: ObservableObject {
+    static let shared = AppState()
     @Published var phase: Phase = .desktop
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
@@ -64,7 +63,7 @@ final class ProtoState: ObservableObject {
     @Published var recordingPaused = false
     @Published var lastClipboard = ""
     @Published var latencyText = "none"
-    @Published var islandMode = false        // prototype: island even with notch
+    @Published var islandMode = false        // island even with a notch
     @Published var uploadMode = 0            // 0 succeed, 1 fail, 2 offline
     @Published var stepErrorNext = false
     @Published var showStateHUD = false
@@ -248,14 +247,14 @@ func fmtColour(_ c: (UInt8, UInt8, UInt8), fmt: String) -> String {
 @MainActor
 func clipboard(_ s: String) {
     NSPasteboard.general.clearContents(); NSPasteboard.general.setString(s, forType: .string)
-    ProtoState.shared.lastClipboard = s
+    AppState.shared.lastClipboard = s
 }
 
 // MARK: - Log file
 
-enum ProtoLog {
+enum AppLog {
     static let url = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-        .appendingPathComponent("wadjet-prototype/prototype.log")
+        .appendingPathComponent("wadjet/app.log")
     @MainActor
     static func line(_ s: String) {
         try? FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -293,17 +292,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayCtrl = OverlayController(app: self)
         toastCtrl = ToastController()
         Hotkeys.register()
-        ProtoLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
+        AppLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
         buildStateHUD()
         _ = try? FileManager.default.createDirectory(at: Self.capturesDir, withIntermediateDirectories: true)
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             Task { @MainActor in self.recTick() }
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
-            ProtoLog.line("statusItem frame = \(self.statusItem.button?.window?.frame.debugDescription ?? "?")")
+            AppLog.line("statusItem frame = \(self.statusItem.button?.window?.frame.debugDescription ?? "?")")
         }
         DistributedNotificationCenter.default().addObserver(
-            forName: .init("cx.mia.wadjet.prototype.cmd"), object: nil, queue: .main
+            forName: .init("cx.mia.wadjet.cmd"), object: nil, queue: .main
         ) { [weak self] n in
             if let cmd = n.object as? String { Task { @MainActor in self?.handleCmd(cmd) } }
         }
@@ -311,9 +310,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // debug command channel, driven by tools/cmd.sh
     func handleCmd(_ cmd: String) {
-        ProtoLog.line("cmd: \(cmd)")
+        AppLog.line("cmd: \(cmd)")
         let parts = cmd.split(separator: " ").map(String.init)
-        let s = ProtoState.shared
+        let s = AppState.shared
         switch parts.first {
         case "open" where parts.count > 1:
             if let t = Tool(named: parts.dropFirst().joined(separator: " ")) { trigger(t) }
@@ -338,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "island": s.showIslandWhileRecording = val == "on"
             case "colourFormat": s.colourFmt = val
             case "measureMode": s.measureMode = val
-            default: ProtoLog.line("cmd option: unknown key \(key)")
+            default: AppLog.line("cmd option: unknown key \(key)")
             }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
         case "collapse": s.expandedDisplay = nil
@@ -350,13 +349,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "stop": if s.phase == .recording { stopRecording() }
         case "pause": if s.phase == .recording { togglePause() }
         case "esc": handleEsc()
-        default: ProtoLog.line("cmd: unhandled \(cmd)")
+        default: AppLog.line("cmd: unhandled \(cmd)")
         }
     }
 
     static var capturesDir: URL {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("wadjet-prototype/Captures")
+            .appendingPathComponent("wadjet/Captures")
     }
 
     // MARK: status menu
@@ -380,16 +379,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let it = NSMenuItem(title: t, action: nil, keyEquivalent: ""); it.isEnabled = false
             m.addItem(it)
         }
-        let proto = NSMenuItem(title: "Prototype", action: nil, keyEquivalent: "")
+        let proto = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
         let psub = NSMenu()
-        psub.addItem(mi("Island Mode Even With Notch", #selector(toggleIsland), on: ProtoState.shared.islandMode))
+        psub.addItem(mi("Island Mode Even With Notch", #selector(toggleIsland), on: AppState.shared.islandMode))
         psub.addItem(.separator())
-        psub.addItem(mi("Next Upload: Succeed", #selector(upl0), on: ProtoState.shared.uploadMode == 0))
-        psub.addItem(mi("Next Upload: Fail", #selector(upl1), on: ProtoState.shared.uploadMode == 1))
-        psub.addItem(mi("Next Upload: Offline", #selector(upl2), on: ProtoState.shared.uploadMode == 2))
+        psub.addItem(mi("Next Upload: Succeed", #selector(upl0), on: AppState.shared.uploadMode == 0))
+        psub.addItem(mi("Next Upload: Fail", #selector(upl1), on: AppState.shared.uploadMode == 1))
+        psub.addItem(mi("Next Upload: Offline", #selector(upl2), on: AppState.shared.uploadMode == 2))
         psub.addItem(.separator())
-        psub.addItem(mi("Step Error on Next Capture", #selector(toggleStepErr), on: ProtoState.shared.stepErrorNext))
-        psub.addItem(mi("Show State HUD", #selector(toggleHUD), on: ProtoState.shared.showStateHUD))
+        psub.addItem(mi("Step Error on Next Capture", #selector(toggleStepErr), on: AppState.shared.stepErrorNext))
+        psub.addItem(mi("Show State HUD", #selector(toggleHUD), on: AppState.shared.showStateHUD))
         psub.addItem(.separator())
         psub.addItem(mi("Open Screen Recording Settings", #selector(openScreenRecordingSettings), on: false))
         proto.submenu = psub; m.addItem(proto)
@@ -402,24 +401,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         i.target = self; i.state = on ? .on : .off; return i
     }
     @objc func toolItem(_ s: NSMenuItem) { if let r = s.representedObject as? String, let t = Tool(rawValue: r) { trigger(t) } }
-    @objc func toggleIsland(_ s: NSMenuItem) { ProtoState.shared.islandMode.toggle(); s.state = ProtoState.shared.islandMode ? .on : .off }
+    @objc func toggleIsland(_ s: NSMenuItem) { AppState.shared.islandMode.toggle(); s.state = AppState.shared.islandMode ? .on : .off }
     @objc func upl0(_ s: NSMenuItem) { setUpl(0) }; @objc func upl1(_ s: NSMenuItem) { setUpl(1) }; @objc func upl2(_ s: NSMenuItem) { setUpl(2) }
-    func setUpl(_ v: Int) { ProtoState.shared.uploadMode = v; rebuildMenu() }
-    @objc func toggleStepErr(_ s: NSMenuItem) { ProtoState.shared.stepErrorNext.toggle(); s.state = ProtoState.shared.stepErrorNext ? .on : .off }
-    @objc func toggleHUD(_ s: NSMenuItem) { ProtoState.shared.showStateHUD.toggle(); s.state = ProtoState.shared.showStateHUD ? .on : .off
-        hudPanel.setIsVisible(ProtoState.shared.showStateHUD) }
+    func setUpl(_ v: Int) { AppState.shared.uploadMode = v; rebuildMenu() }
+    @objc func toggleStepErr(_ s: NSMenuItem) { AppState.shared.stepErrorNext.toggle(); s.state = AppState.shared.stepErrorNext ? .on : .off }
+    @objc func toggleHUD(_ s: NSMenuItem) { AppState.shared.showStateHUD.toggle(); s.state = AppState.shared.showStateHUD ? .on : .off
+        hudPanel.setIsVisible(AppState.shared.showStateHUD) }
     @objc func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
 
     // MARK: trigger
     func trigger(_ tool: Tool) {
-        let s = ProtoState.shared
+        let s = AppState.shared
         if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
         // switching Tools while frozen keeps the same Freeze Frame
-        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); ProtoLog.line("tool switched to \(tool.title)") }; return }
-        if s.phase != .desktop { ProtoLog.line("trigger ignored: busy (\(s.phase))"); return }
-        if !CGPreflightScreenCaptureAccess() { permissionNeeded(); ProtoLog.line("screen capture preflight denied for \(tool.title)"); return }
+        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("tool switched to \(tool.title)") }; return }
+        if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
+        if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         let t0 = CFAbsoluteTimeGetCurrent()
         Task { await overlayCtrl.freezeAndShow(tool: tool, t0: t0) }
     }
@@ -427,7 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         _ = CGRequestScreenCaptureAccess()
         let a = NSAlert()
         a.messageText = "Screen Recording Permission Needed"
-        a.informativeText = "The prototype needs Screen Recording access to take a Freeze Frame. Grant it in System Settings, then relaunch."
+        a.informativeText = "Wadjet needs Screen Recording access to take a Freeze Frame. Grant it in System Settings, then relaunch."
         a.addButton(withTitle: "Open System Settings"); a.addButton(withTitle: "Cancel")
         NSApp.activate(ignoringOtherApps: true)
         if a.runModal() == .alertFirstButtonReturn {
@@ -453,19 +452,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 contentFilter: SCContentFilter(desktopIndependentWindow: scw), configuration: cfg)
             return out.hdrImage ?? out.sdrImage
         } catch {
-            ProtoLog.line("window capture \(id) failed: \(error.localizedDescription)")
+            AppLog.line("window capture \(id) failed: \(error.localizedDescription)")
             return nil
         }
     }
     func didSelectWindow(id: CGWindowID, frame: CGRect, on display: Int) {
-        let s = ProtoState.shared
+        let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
             overlayCtrl.closeAll()
             Task { @MainActor in
                 var thumb = await captureWindow(id: id, display: display)
                 if thumb == nil {
-                    ProtoLog.line("window \(id) not capturable; falling back to frozen crop")
+                    AppLog.line("window \(id) not capturable; falling back to frozen crop")
                     thumb = Freeze.shared.crop(rect: frame, on: display, hdr: true)
                 }
                 runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
@@ -478,7 +477,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func didSelect(_ rect: CGRect, on display: Int) {
-        let s = ProtoState.shared
+        let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
             // screenshots keep HDR pixels when the display provides them
@@ -490,7 +489,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     func runCapture(thumb: CGImage?, label: String, duration: TimeInterval? = nil) {
-        let wf = ProtoState.shared.workflowFor(ProtoState.shared.tool) ?? "Screenshot"
+        let wf = AppState.shared.workflowFor(AppState.shared.tool) ?? "Screenshot"
         var path: URL? = nil
         var heic: Data? = nil
         if let img = thumb {
@@ -504,7 +503,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 let rep = NSBitmapImageRep(cgImage: img)
                 try? rep.representation(using: .png, properties: [:])?.write(to: path!)
             }
-            ProtoLog.line("saved \(path!.lastPathComponent) workflow=\(wf)")
+            AppLog.line("saved \(path!.lastPathComponent) workflow=\(wf)")
         }
         toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: path, duration: duration), workflow: wf)
         if wf == "Pin", let img = thumb { openPin(image: img) }
@@ -516,10 +515,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 pb.declareTypes([heicT, .png], owner: nil)
                 pb.setData(heic, forType: heicT)
                 pb.setData(NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]), forType: .png)
-                ProtoState.shared.lastClipboard = "<heic+png \(img.width)×\(img.height)>"
+                AppState.shared.lastClipboard = "<heic+png \(img.width)×\(img.height)>"
             } else {
                 pb.writeObjects([NSImage(cgImage: img, size: .zero) as NSPasteboardWriting])
-                ProtoState.shared.lastClipboard = "<image \(img.width)×\(img.height)>"
+                AppState.shared.lastClipboard = "<image \(img.width)×\(img.height)>"
             }
         }
     }
@@ -535,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: recording (simulated)
     func startRecording(rect: CGRect, display: Int, thumb: CGImage? = nil) {
-        let s = ProtoState.shared
+        let s = AppState.shared
         let thumb = thumb ?? Freeze.shared.crop(rect: rect, on: display)
         overlayCtrl.closeAllPanelsOnly() // live screen returns
         recordingRect = rect; recordingDisplay = display; recordingThumb = thumb.map { NSImage(cgImage: $0, size: .zero) }
@@ -543,14 +542,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let n = s.countdown == "Off" ? 0 : Int(s.countdown) ?? 0
         let begin = {
             s.phase = .recording; self.recStart = Date()
-            ProtoLog.line("phase=recording")
+            AppLog.line("phase=recording")
             self.updateEscHotkey()
             self.showRecBorder(rect: rect, display: display)
             self.updateRecChrome()
         }
         if n > 0 {
             s.phase = .countdown
-            ProtoLog.line("phase=countdown (\(n))")
+            AppLog.line("phase=countdown (\(n))")
             updateEscHotkey()
             CountdownHUD.show(n)
             Task { @MainActor in
@@ -579,7 +578,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Recording is always stoppable from the status item AND the island; the
     // "Show Island While Recording" option only toggles the island part.
     func updateRecChrome() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         statusItem.button?.title = "● " + fmtT(s.recordingElapsed)
         statusItem.button?.image = nil
         let m = NSMenu()
@@ -591,36 +590,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func recPause() { togglePause() }
     @objc func recStop() { stopRecording() }
     func togglePause() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         if s.recordingPaused { pauseAcc += Date().timeIntervalSince(pauseStart!); s.recordingPaused = false }
         else { s.recordingPaused = true; pauseStart = Date() }
         updateRecChrome()
     }
     func recTick() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         guard s.phase == .recording, !s.recordingPaused, let st = recStart else { return }
         s.recordingElapsed = Date().timeIntervalSince(st) - pauseAcc
         statusItem.button?.title = "● " + fmtT(s.recordingElapsed)
     }
     // Esc during countdown cancels before the Recording starts.
     func cancelCountdown() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         guard s.phase == .countdown else { return }
         CountdownHUD.hide()
         s.phase = .desktop; recStart = nil
         overlayCtrl.closeAllPanelsOnly()
-        ProtoLog.line("esc: cancelled countdown")
+        AppLog.line("esc: cancelled countdown")
         rebuildMenu(); updateEscHotkey()
     }
     func stopRecording() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         s.recordingElapsed = recStart.map { Date().timeIntervalSince($0) - pauseAcc } ?? s.recordingElapsed
         let dur = s.recordingElapsed
         let label = "\(s.tool?.title ?? "Recording") \(fmtT(dur))"
         recordingPanel?.close(); recordingPanel = nil
         s.phase = .desktop; recStart = nil
         updateEscHotkey()
-        ProtoLog.line("phase=desktop (recording stopped, \(String(format: "%.1f", dur))s)")
+        AppLog.line("phase=desktop (recording stopped, \(String(format: "%.1f", dur))s)")
         statusItem.button?.title = ""; statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
         rebuildMenu()
         overlayCtrl.closeAllPanelsOnly()
@@ -643,7 +642,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var escHandlerInstalled = false
     // Space toggles Region <-> Window within the current kind, like macOS
     func toggleRegionWindow() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         guard s.phase == .frozen, let t = s.tool else { return }
         // not while a drag is in progress
         for p in overlayCtrl.panels {
@@ -662,13 +661,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
     func setMeasureMode(_ i: Int) {
         let modes = ["Bounds", "Spacing", "Horizontal", "Vertical"]
-        guard ProtoState.shared.tool == .measure, modes.indices.contains(i) else { return }
-        ProtoState.shared.measureMode = modes[i]
-        ProtoLog.line("measure mode -> \(modes[i])")
+        guard AppState.shared.tool == .measure, modes.indices.contains(i) else { return }
+        AppState.shared.measureMode = modes[i]
+        AppLog.line("measure mode -> \(modes[i])")
         for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
     }
     func updateEscHotkey() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         let active = s.phase == .frozen || s.phase == .countdown
             || !toastCtrl.items.isEmpty || !pins.isEmpty
         if active && !escRegistered {
@@ -694,7 +693,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let err = RegisterEventHotKey(UInt32(kVK_Escape), 0, EventHotKeyID(signature: OSType(0x77646A74), id: 10),
                                           GetApplicationEventTarget(), 0, &ref)
             escRef = ref; escRegistered = (err == noErr && ref != nil)
-            ProtoLog.line("esc hotkey registered (err=\(err))")
+            AppLog.line("esc hotkey registered (err=\(err))")
             // Ctrl+1..4 while anything is up (cheap to keep registered; only the
             // Measure tool acts on them)
             for (i, vk) in [kVK_ANSI_1, kVK_ANSI_2, kVK_ANSI_3, kVK_ANSI_4].enumerated() {
@@ -708,7 +707,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             for r in measureRefs { if let r { UnregisterEventHotKey(r) } }
             measureRefs = []
             escRef = nil; escRegistered = false
-            ProtoLog.line("esc hotkey unregistered")
+            AppLog.line("esc hotkey unregistered")
         }
         // Space is claimed only while the overlay is actually frozen — it must
         // drop as soon as we leave .frozen (e.g. a countdown starts)
@@ -725,22 +724,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // priority: overlay > countdown > in-flight toast > idle toast > pin.
     // (Recording is never here; Esc is not registered on its account.)
     func handleEsc() {
-        let s = ProtoState.shared
-        if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); ProtoLog.line("esc: closed tool menu"); return }
-        if s.phase == .frozen { ProtoLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
+        let s = AppState.shared
+        if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
+        if s.phase == .frozen { AppLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
         if s.phase == .countdown { cancelCountdown(); return }
         if let t = toastCtrl.items.first(where: { $0.showBar || $0.showRing }) {
             t.showBar = false; t.showRing = false; t.showCancel = false
             t.title = "Cancelled"; toastCtrl.startTimer(t)
-            ProtoLog.line("esc: cancelled in-flight \(t.sub.isEmpty ? t.title : t.sub)")
+            AppLog.line("esc: cancelled in-flight \(t.sub.isEmpty ? t.title : t.sub)")
             updateEscHotkey(); return
         }
         if let t = toastCtrl.items.first {
-            toastCtrl.dismiss(t); ProtoLog.line("esc: dismissed idle toast")
+            toastCtrl.dismiss(t); AppLog.line("esc: dismissed idle toast")
             updateEscHotkey(); return
         }
         if let p = pins.last {
-            p.close(); pins.removeLast(); ProtoLog.line("esc: closed pin")
+            p.close(); pins.removeLast(); AppLog.line("esc: closed pin")
             updateEscHotkey(); return
         }
         updateEscHotkey()
@@ -781,7 +780,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         p.level = .floating; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
         p.collectionBehavior = [.canJoinAllSpaces]; p.ignoresMouseEvents = true
-        h.frame.origin = .zero; p.contentView = h; if ProtoState.shared.showStateHUD { p.orderFront(nil) }
+        h.frame.origin = .zero; p.contentView = h; if AppState.shared.showStateHUD { p.orderFront(nil) }
         hudPanel = p
     }
 }
@@ -862,11 +861,11 @@ final class OverlayController {
     }
 
     func syncMenu() {
-        if let t = ProtoState.shared.openMenu { TipPanel.hide(); showMenu(t) } else { hideMenu() }
+        if let t = AppState.shared.openMenu { TipPanel.hide(); showMenu(t) } else { hideMenu() }
     }
     func showMenu(_ t: Tool) {
         // anchor to the panel of the expanded display (or the pointer's)
-        let di = ProtoState.shared.expandedDisplay ?? mouseDisplay()
+        let di = AppState.shared.expandedDisplay ?? mouseDisplay()
         guard let tp = toolbarPanels[di], t.hasMenu else { return }
         hideMenu()
         let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self))
@@ -882,12 +881,12 @@ final class OverlayController {
         p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
         p.contentView = h; p.orderFront(nil)
         menuPanel = p
-        ProtoLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
+        AppLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
         menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
             guard let self, let mp = self.menuPanel else { return e }
             if !mp.frame.contains(NSEvent.mouseLocation) {
-                ProtoState.shared.openMenu = nil; self.syncMenu()
-                ProtoLog.line("menu closed (outside click)")
+                AppState.shared.openMenu = nil; self.syncMenu()
+                AppLog.line("menu closed (outside click)")
             }
             return e
         }
@@ -949,23 +948,23 @@ final class OverlayController {
             }
             let latency = (CFAbsoluteTimeGetCurrent() - t0) * 1000
             await MainActor.run {
-                ProtoState.shared.latencyText = String(format: "%.0f ms (%d displays)", latency, Freeze.shared.displays.count)
+                AppState.shared.latencyText = String(format: "%.0f ms (%d displays)", latency, Freeze.shared.displays.count)
                 let perDisplay = Freeze.shared.displays.map { "\($0.image.width)x\($0.image.height)\($0.hdrImage != nil ? " HDR" : "")" }.joined(separator: ", ")
-                ProtoLog.line("freeze latency \(Int(latency)) ms across \(Freeze.shared.displays.count) displays: \(perDisplay)")
+                AppLog.line("freeze latency \(Int(latency)) ms across \(Freeze.shared.displays.count) displays: \(perDisplay)")
                 self.showPanels(tool: tool)
-                ProtoLog.line("phase=frozen tool=\(tool.title)")
+                AppLog.line("phase=frozen tool=\(tool.title)")
             }
         } catch {
             await MainActor.run {
-                ProtoState.shared.latencyText = "capture failed: \(error.localizedDescription)"
-                ProtoLog.line("freeze failed: \(error.localizedDescription)")
+                AppState.shared.latencyText = "capture failed: \(error.localizedDescription)"
+                AppLog.line("freeze failed: \(error.localizedDescription)")
             }
         }
     }
     var bitmapStore: [[UInt8]] = []
 
     func showPanels(tool: Tool) {
-        let s = ProtoState.shared
+        let s = AppState.shared
         s.phase = .frozen; s.tool = tool
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
@@ -1022,7 +1021,7 @@ final class OverlayController {
             p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
             p.contentView = hosting; p.orderFront(nil)
             toolbarPanels[idx] = p
-            ProtoLog.line("toolbar panel d\(idx) \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
+            AppLog.line("toolbar panel d\(idx) \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
         }
     }
     // the expanded row's true size lands after the panel is created; resize to
@@ -1037,14 +1036,14 @@ final class OverlayController {
     func refreshToolbars() {
         toolbarPanels.values.forEach { $0.close() }
         toolbarPanels = [:]
-        let p = ProtoState.shared.phase
-        if p == .frozen || (p == .recording && ProtoState.shared.showIslandWhileRecording) { showToolbars() }
+        let p = AppState.shared.phase
+        if p == .frozen || (p == .recording && AppState.shared.showIslandWhileRecording) { showToolbars() }
     }
     func closeAllPanelsOnly() {
         panels.forEach { $0.close() }
         panels = []
         hideMenu()
-        if ProtoState.shared.openMenu != nil { ProtoState.shared.openMenu = nil }
+        if AppState.shared.openMenu != nil { AppState.shared.openMenu = nil }
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
@@ -1052,9 +1051,9 @@ final class OverlayController {
     }
     func closeAll() {
         closeAllPanelsOnly()
-        if ProtoState.shared.phase != .desktop { ProtoLog.line("phase=desktop (overlay closed)") }
-        ProtoState.shared.phase = .desktop
-        ProtoState.shared.expandedDisplay = nil
+        if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
+        AppState.shared.phase = .desktop
+        AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []
         AppDelegate.shared?.updateEscHotkey()
     }
@@ -1085,8 +1084,8 @@ final class OverlayNSView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     var fd: FrozenDisplay { Freeze.shared.displays[di] }
-    var tool: Tool { ProtoState.shared.tool ?? .capRegion }
-    var measureMode: String { ProtoState.shared.measureMode }
+    var tool: Tool { AppState.shared.tool ?? .capRegion }
+    var measureMode: String { AppState.shared.measureMode }
 
     override var acceptsFirstResponder: Bool { true }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
@@ -1190,11 +1189,11 @@ final class OverlayNSView: NSView {
         // colour info block under the grid (Pick Colour only) — counts towards
         // the loupe's total height for edge flipping
         let rows: [(String, Bool)] = tool == .pickColour ? [
-            (hexString(c), ProtoState.shared.colourFmt == "Hex"),
-            (fmtRGB(c), ProtoState.shared.colourFmt == "rgb()"),
-            (fmtHSL(c), ProtoState.shared.colourFmt == "hsl()"),
-            (fmtOKLCH(c), ProtoState.shared.colourFmt == "oklch()"),
-            (fmtLAB(c), ProtoState.shared.colourFmt == "lab()"),
+            (hexString(c), AppState.shared.colourFmt == "Hex"),
+            (fmtRGB(c), AppState.shared.colourFmt == "rgb()"),
+            (fmtHSL(c), AppState.shared.colourFmt == "hsl()"),
+            (fmtOKLCH(c), AppState.shared.colourFmt == "oklch()"),
+            (fmtLAB(c), AppState.shared.colourFmt == "lab()"),
         ] : []
         let infoH: CGFloat = rows.isEmpty ? 20 : CGFloat(rows.count) * 14 + 12
         let totalH = sz + 6 + infoH
@@ -1308,7 +1307,7 @@ final class OverlayNSView: NSView {
     }
     // plain scroll cycles the selected Tool's variants, wrapping at both ends
     func cycleVariant(_ step: Int) {
-        let s = ProtoState.shared
+        let s = AppState.shared
         guard let t = s.tool else { return }
         func wrap(_ i: Int, _ n: Int) -> Int { ((i + step) % n + n) % n }
         switch t {
@@ -1333,7 +1332,7 @@ final class OverlayNSView: NSView {
     }
     override func mouseDown(with e: NSEvent) {
         let pt = convert(e.locationInWindow, from: nil)
-        ProtoLog.line("mouseDown \(tool.title) d\(di) @\(Int(pt.x)),\(Int(pt.y))")
+        AppLog.line("mouseDown \(tool.title) d\(di) @\(Int(pt.x)),\(Int(pt.y))")
         switch tool {
         case .capScreen, .recScreen:
             app?.didSelect(bounds, on: di)
@@ -1341,7 +1340,7 @@ final class OverlayNSView: NSView {
             if let w = hoverWin { app?.didSelectWindow(id: w.id, frame: w.frame, on: di) }
         case .pickColour:
             let c = Freeze.shared.pixel(at: pt, on: di)
-            let s = fmtColour(c, fmt: ProtoState.shared.colourFmt)
+            let s = fmtColour(c, fmt: AppState.shared.colourFmt)
             clipboard(s); showHUD("Copied \(s)", swatch: hexString(c))
             ctrl?.closeAll()
         case .measure where measureMode != "Bounds":
@@ -1369,7 +1368,7 @@ final class OverlayNSView: NSView {
     }
     override func mouseUp(with e: NSEvent) {
         defer { needsDisplay = true }
-        ProtoLog.line("mouseUp \(tool.title) sel=\(sel.debugDescription)")
+        AppLog.line("mouseUp \(tool.title) sel=\(sel.debugDescription)")
         if tool == .measure, measureMode == "Bounds", let s = sel, dragStart != nil, s.width > 4 && s.height > 4 {
             dragStart = nil
             copyMeasure(fmtDim(s.width) + " × " + fmtDim(s.height))
@@ -1415,7 +1414,7 @@ final class OverlayNSView: NSView {
             try? VNImageRequestHandler(cgImage: crop).perform([req])
             let lines = (req.results ?? []).compactMap { $0.topCandidates(1).first?.string }
             await MainActor.run {
-                ProtoLog.line("ocr: \(lines.count) lines -> \(lines.joined(separator: " | "))")
+                AppLog.line("ocr: \(lines.count) lines -> \(lines.joined(separator: " | "))")
                 clipboard(lines.joined(separator: "\n"))
                 item.title = "Copied \(lines.count) line\(lines.count == 1 ? "" : "s")"
                 tc.startTimer(item)
@@ -1482,7 +1481,7 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     override func hitTest(_ point: NSPoint) -> NSView? {
         let rect = ToolbarHit.rects[displayIndex] ?? .zero
         let hit = rect.contains(point)
-        if hit != ToolbarHit.lastHit[displayIndex] { ToolbarHit.lastHit[displayIndex] = hit; ProtoLog.line("hitTest d\(displayIndex) \(hit ? "in" : "out") @\(Int(point.x)),\(Int(point.y)) rect=\(rect.debugDescription)") }
+        if hit != ToolbarHit.lastHit[displayIndex] { ToolbarHit.lastHit[displayIndex] = hit; AppLog.line("hitTest d\(displayIndex) \(hit ? "in" : "out") @\(Int(point.x)),\(Int(point.y)) rect=\(rect.debugDescription)") }
         return hit ? super.hitTest(point) : nil
     }
 }
@@ -1501,7 +1500,7 @@ enum ToolbarBtnFrames {
 struct ToolbarView: View {
     let displayIndex: Int
     let ctrl: OverlayController
-    @ObservedObject var s = ProtoState.shared
+    @ObservedObject var s = AppState.shared
     var expanded: Bool { s.expandedDisplay == displayIndex }
     @Namespace var ns
     var screen: NSScreen? {
@@ -1575,7 +1574,7 @@ struct ToolbarView: View {
     }
     func syncExpanded() {
         let h = hoverInside || s.openMenu != nil || lensActive
-        if h != expanded { ProtoLog.line("hover d\(displayIndex) -> \(h)") }
+        if h != expanded { AppLog.line("hover d\(displayIndex) -> \(h)") }
         if h { s.expandedDisplay = displayIndex }
         else if s.expandedDisplay == displayIndex { s.expandedDisplay = nil }
     }
@@ -1588,7 +1587,7 @@ struct ToolbarView: View {
                     guard let f = ctrl.buttonScreenRect(t, on: displayIndex) else { return nil }
                     return "\(t.title):\(Int(f.midX))"
                 }.joined(separator: " ")
-            ProtoLog.line("toolbar icons d\(displayIndex) @ \(xs)")
+            AppLog.line("toolbar icons d\(displayIndex) @ \(xs)")
         }
     }
 
@@ -1826,7 +1825,7 @@ struct ToolbarView: View {
         .fixedSize()
         .contentShape(Rectangle()) // press anywhere in the row, gaps included
         .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH, on: displayIndex); ProtoLog.line("rowSize d\(displayIndex) -> \($0.debugDescription)") } }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH, on: displayIndex); AppLog.line("rowSize d\(displayIndex) -> \($0.debugDescription)") } }
         // press = lens pops in under the finger, flick = drag it, hold = menu
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
             .onChanged { v in
@@ -1880,9 +1879,9 @@ struct ToolbarView: View {
                 if dragging { TipPanel.hide() }
                 else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { $0.value.contains(p) })?.key {
-                    if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
+                    if TipPanel.tool != t { AppLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
                     TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
-                } else { if TipPanel.tool != nil { ProtoLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
+                } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
             case .ended: TipPanel.hide()
             }
         }
@@ -1922,7 +1921,7 @@ enum TipPanel {
         let a = anchor
         task = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, ProtoState.shared.openMenu == nil else { return }
+            guard !Task.isCancelled, AppState.shared.openMenu == nil else { return }
             show(t, anchor: a)
         }
     }
@@ -1944,7 +1943,7 @@ enum TipPanel {
         p.hasShadow = false
         p.collectionBehavior = [.canJoinAllSpaces]; p.ignoresMouseEvents = true
         p.contentView = h; p.orderFront(nil); panel = p
-        ProtoLog.line("tip \(label) anchor=\(Int(anchor.midX)),\(Int(anchor.midY)) at \(Int(f.origin.x)),\(Int(f.origin.y))")
+        AppLog.line("tip \(label) anchor=\(Int(anchor.midX)),\(Int(anchor.midY)) at \(Int(f.origin.x)),\(Int(f.origin.y))")
     }
     static func hide() { task?.cancel(); task = nil; tool = nil; panel?.close(); panel = nil }
 }
@@ -1954,7 +1953,7 @@ enum TipPanel {
 struct ToolMenuView: View {
     let tool: Tool
     let ctrl: OverlayController
-    @ObservedObject var s = ProtoState.shared
+    @ObservedObject var s = AppState.shared
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             switch tool.kind {
@@ -2074,7 +2073,7 @@ final class ToastController: ObservableObject {
         items.insert(t, at: 0)
         relayout()
         AppDelegate.shared?.updateEscHotkey()
-        let s = ProtoState.shared
+        let s = AppState.shared
         let stepErr = s.stepErrorNext ? "Open in app failed" : nil
         s.stepErrorNext = false
         Task { @MainActor in
@@ -2229,7 +2228,7 @@ struct ToastView: View {
     }
     func open() { if let u = item.cap.url { NSWorkspace.shared.open(u) } }
     func retry() {
-        let s = ProtoState.shared
+        let s = AppState.shared
         item.showRetry = false; item.err = nil
         item.title = "Uploading"; item.sub = "w.mia.cx"; item.showBar = true
         Task { @MainActor in
@@ -2267,10 +2266,10 @@ struct CountdownHUD {
 // MARK: - State HUD view
 
 struct StateHUDView: View {
-    @ObservedObject var s = ProtoState.shared
+    @ObservedObject var s = AppState.shared
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text("PROTOTYPE").font(.system(size: 9, weight: .bold)).foregroundStyle(.orange)
+            Text("WADJET").font(.system(size: 9, weight: .bold)).foregroundStyle(.orange)
             Text("phase: \(String(describing: s.phase))  tool: \(s.tool?.title ?? "-")")
             Text("workflow: \(s.workflowFor(s.tool) ?? "-")")
             Text("colour=\(s.colourFmt) measure=\(s.measureMode) countdown=\(s.countdown)")
@@ -2306,7 +2305,7 @@ enum Hotkeys {
             let id = EventHotKeyID(signature: OSType(0x77646A74), id: UInt32(i + 1)) // 'wdjt'
             let err = RegisterEventHotKey(key, mods, id, GetApplicationEventTarget(), 0, &ref)
             refs.append(ref)
-            ProtoLog.line("hotkey \(tool.title): \(err == noErr ? "registered" : "FAILED (\(err))")")
+            AppLog.line("hotkey \(tool.title): \(err == noErr ? "registered" : "FAILED (\(err))")")
         }
         InstallEventHandler(GetApplicationEventTarget(), { _, ev, _ -> OSStatus in
             var id = EventHotKeyID()

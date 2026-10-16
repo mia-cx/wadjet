@@ -7,12 +7,13 @@ It starts as a private Swift app for macOS 26+.
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
 The research, the Workflow model, the Tools, upload behavior, Recording UX, capture history, and the Wadjet Server are settled.
-A throwaway native prototype of the Freeze Frame overlay, toolbar, and toast is in review; once it settles, work moves to the real app.
+The native prototype of the Freeze Frame overlay, toolbar, and toast became the app itself: v0.0.1 lives in `apps/macos`, built by CI on every change.
+Recording, uploads, Destinations, History, and Settings are still simulated or stubbed there.
 
 ## Direction
 
 - Capture the cursor and select regions on a Freeze Frame of every screen. It looks like macOS's own screenshot UI.
-- The toolbar starts as the notch on the built-in display, or a black fake Dynamic Island on other displays, showing the current Tool. It expands on hover into Liquid Glass with touch-size Tool buttons; on displays without a notch it drops below the menu bar instead of covering it.
+- The toolbar shows on every display at once: as the notch on the built-in display, or a black fake Dynamic Island on other displays, showing the current Tool. It expands on hover into Liquid Glass with touch-size Tool buttons; on displays without a notch it drops below the menu bar instead of covering it. Only the hovered toolbar expands, and only the pointer's display shows the loupe.
 - Clicking the selected Tool opens its menu: its Workflow, Recording options, copy format, or Measure mode. Each Tool keeps its own Workflow.
 - Tooltips appear next to the pointer. The loupe flips to stay on screen.
 - Scroll cycles the selected Tool's variants: Region, Window, Screen (within Capture or within Record), Measure modes, or copy formats. Option+scroll changes the Tool's value, such as Measure's tolerance. Space toggles Region and Window, as in macOS.
@@ -49,7 +50,7 @@ A throwaway native prototype of the Freeze Frame overlay, toolbar, and toast is 
 - The protocol starts at `/.well-known/wadjet`, uploads large files in resumable parts, takes a wadjet-made thumbnail per file, and serves short links.
 - wadjet ships a Wadjet Server like Caelestis's backend: one Hono codebase for Cloudflare (Worker, R2, D1), Docker (filesystem or S3, SQLite or Postgres), and a Helm chart.
 - v1 server auth is an API key plus an external IdP (Hecate). It serves a `.sxcu` and single-file deletion links so ShareX on Windows can share it.
-- The repo is a Turborepo: the macOS app and the server live under `apps/`, shared code under `packages/`.
+- The repo is a Turborepo: the macOS app and the server live under `apps/`, shared code under `packages/`. The Turborepo tooling arrives with the server; until then `apps/macos` is a plain SwiftPM package.
 - i.mia.cx stays as it is. w.mia.cx runs the Wadjet Server once it can replace iShare.
 - S3, WebDAV, and SFTP links come from a public URL prefix the user sets. Cloud drives create an anyone-with-the-link share.
 - Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.

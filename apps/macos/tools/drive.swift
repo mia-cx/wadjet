@@ -1,5 +1,5 @@
-// Throwaway CGEvent input driver for the overlay + toast prototype (wadjet #12 #13).
-// Usage: swift tools/drive.swift move x y | drag x1 y1 x2 y2 | click x y | key <code> [cmd shift] | movesteps x y n
+// CGEvent input driver for driving the Wadjet overlay in tests.
+// Usage: swift tools/drive.swift move x y | drag x1 y1 x2 y2 | click x y | key <code> [cmd shift]
 import CoreGraphics
 import Foundation
 

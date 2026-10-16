@@ -2,9 +2,9 @@
 import PackageDescription
 
 let package = Package(
-    name: "WadjetPrototype",
+    name: "Wadjet",
     platforms: [.macOS(.v26)],
     targets: [
-        .executableTarget(name: "WadjetPrototype", path: "Sources/WadjetPrototype")
+        .executableTarget(name: "Wadjet", path: "Sources/Wadjet")
     ]
 )

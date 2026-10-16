@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    paths:
+      - 'apps/macos/**'
+      - '.github/workflows/ci.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'apps/macos/**'
+      - '.github/workflows/ci.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event_name == 'pull_request' && format('pr-{0}', github.event.pull_request.number) || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  macos:
+    name: macOS app
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Select Xcode 27 if present
+        run: |
+          # the runner image ships Xcode 27 as a preview; we build locally
+          # with the Xcode 27 beta
+          xcode=$(ls -d /Applications/Xcode_27*.app 2>/dev/null | sort -V | tail -1 || true)
+          if [ -n "$xcode" ]; then
+            sudo xcode-select -s "$xcode/Contents/Developer"
+          fi
+          xcodebuild -version
+          swift --version
+      - name: Build
+        working-directory: apps/macos
+        run: swift build -c release -Xswiftc -warnings-as-errors
+      - name: Package + verify
+        working-directory: apps/macos
+        run: |
+          WADJET_NO_OPEN=1 ./run.sh
+          plutil -lint build/Wadjet.app/Contents/Info.plist
+          codesign --verify --strict build/Wadjet.app
