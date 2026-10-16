@@ -50,7 +50,11 @@ Recording, uploads, Destinations, History, and Settings are still simulated or s
 - The protocol starts at `/.well-known/wadjet`, uploads large files in resumable parts, takes a wadjet-made thumbnail per file, and serves short links.
 - wadjet ships a Wadjet Server like Caelestis's backend: one Hono codebase for Cloudflare (Worker, R2, D1), Docker (filesystem or S3, SQLite or Postgres), and a Helm chart.
 - v1 server auth is an API key plus an external IdP (Hecate). It serves a `.sxcu` and single-file deletion links so ShareX on Windows can share it.
-- The repo is a Turborepo: the macOS app and the server live under `apps/`, shared code under `packages/`. The Turborepo tooling arrives with the server; until then `apps/macos` is a plain SwiftPM package.
+- The repo is a Turborepo: the macOS app and the server live under `apps/`, shared code under `packages/`. The Turborepo tooling arrives with the server.
+- `apps/macos` becomes an Xcode project, for the Settings window, other Apple platforms, and a possible Mac App Store build. Its UI-free core (Workflows, config, `.sxcu`, Destinations, history) is a testable library.
+- The Mac app and the Wadjet Server get separate PRDs, joined by the protocol. The Swift protocol client is hand-written.
+- v1 builds in this order: Workflows, history, Recording, Wadjet Server uploads, then the other Destinations.
+- Shortcuts use the KeyboardShortcuts package for hotkeys and the Settings recorder.
 - i.mia.cx stays as it is. w.mia.cx runs the Wadjet Server once it can replace iShare.
 - S3, WebDAV, and SFTP links come from a public URL prefix the user sets. Cloud drives create an anyone-with-the-link share.
 - Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.
@@ -59,7 +63,8 @@ Recording, uploads, Destinations, History, and Settings are still simulated or s
 - History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default.
 - History searches the text inside Screenshots, filters by kind, Destination, and date, and merges Wadjet Server listings from other Macs.
 - Include Screenshots, MP4 and GIF Recording, capture history, and every Tool above in v1.
-- Keep settings in a human-readable config file and secrets in the Keychain.
+- Keep settings in a human-readable JSON config file, reloaded live on outside edits, and secrets in the Keychain.
+- Settings is a System Settings-style sidebar window; its panes and the menu bar menu get refined after Mia has used v1.
 
 ## Starter Workflows
 
