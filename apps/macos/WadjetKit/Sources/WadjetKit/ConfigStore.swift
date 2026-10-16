@@ -134,7 +134,9 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
     }
 
     /// Applies `change`; writes the file when the value actually changed.
+    /// An outside edit the watcher hasn't delivered yet loads first, so it's never overwritten.
     public func update(_ change: (inout Config) -> Void) {
+        if (try? Data(contentsOf: file)) != lastData { load() }
         var v = value
         change(&v)
         guard v != value else { return }

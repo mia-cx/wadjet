@@ -66,6 +66,33 @@ struct ConfigStoreTests {
         #expect(try Data(contentsOf: url) == Data(content.utf8)) // never clobber a half-finished edit
     }
 
+    // an outside edit the watcher hasn't delivered yet must not be overwritten
+    // by the next update() — update() reads the file first when it changed
+    @Test func updateRightAfterOutsideEditKeepsTheEdit() throws {
+        let url = tempFile()
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        try Data(#"{"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url, options: .atomic)
+        store.update { $0.tools.measure.mode = .vertical }
+        #expect(store.value.tools.pickColour.format == .lab)
+        #expect(store.value.tools.measure.mode == .vertical)
+        let reloaded = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        #expect(reloaded.value.tools.pickColour.format == .lab)
+        #expect(reloaded.value.tools.measure.mode == .vertical)
+    }
+
+    // a half-written outside edit blocks the write instead of being clobbered
+    @Test func updateRightAfterBrokenEditLeavesTheFile() throws {
+        let url = tempFile()
+        var errors: [ConfigError] = []
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        let broken = Data(#"{"tools": "#.utf8)
+        try broken.write(to: url, options: .atomic)
+        store.update { $0.tools.measure.mode = .vertical }
+        #expect(try Data(contentsOf: url) == broken)
+        #expect(!errors.isEmpty)
+        #expect(store.value.tools.measure.mode == .vertical) // in-memory change still applies
+    }
+
     @Test func plaintextSecretLeavesForTheKeychain() throws {
         struct Vault: Codable, Equatable, Sendable { var token: Secret? = nil }
         let url = tempFile()
