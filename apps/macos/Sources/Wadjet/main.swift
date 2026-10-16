@@ -254,8 +254,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         overlayCtrl = OverlayController(app: self)
         toastCtrl = ToastController()
         Task { @MainActor in // live reload shows up in app.log
+            var lastMode = AppState.shared.config.value.tools.measure.mode
             for await c in Observations({ AppState.shared.config.value }) {
                 AppLog.line("config: colourFormat=\(c.tools.pickColour.format.rawValue) measureMode=\(c.tools.measure.mode.rawValue)")
+                // a config.json edit of the Measure mode rescans without a mouse move
+                if c.tools.measure.mode != lastMode {
+                    lastMode = c.tools.measure.mode
+                    for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
+                }
             }
         }
         Hotkeys.register()
@@ -631,7 +637,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard AppState.shared.tool == .measure, modes.indices.contains(i) else { return }
         AppState.shared.measureMode = modes[i]
         AppLog.line("measure mode -> \(modes[i])")
-        for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
+        // the config observer rescans the ruler when the mode lands
     }
     func updateEscHotkey() {
         let s = AppState.shared
