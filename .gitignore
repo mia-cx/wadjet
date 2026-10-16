@@ -4,3 +4,6 @@ DerivedData/
 xcuserdata/
 *.xcuserstate
 apps/macos/build/
+node_modules/
+dist/
+.turbo/
