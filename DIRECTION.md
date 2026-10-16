@@ -5,8 +5,7 @@ It starts as a private Swift app for macOS 26+.
 
 ## Current effort
 
-The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions needed for an implementation PRD.
-Every ticket on it is closed; the remaining fog (architecture, config and Settings, testing, platform validation) is being settled while writing the v1 PRD.
+The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions; the [macOS v1 PRD](https://github.com/mia-cx/wadjet/issues/17) turns them into a build plan. The Wadjet Server PRD comes next.
 The native prototype of the Freeze Frame overlay, toolbar, and toast became the app itself: v0.0.1 lives in `apps/macos`, built by CI on every change.
 Recording, uploads, Destinations, History, and Settings are still simulated or stubbed there.
 
@@ -43,7 +42,9 @@ Recording, uploads, Destinations, History, and Settings are still simulated or s
 - A resized window is scaled into the Recording's starting size, with bars where the shape changes.
 - MP4 resolution and fps are configurable (1920 px, 30 fps by default) with no length limit.
 - GIFs default to 960 px, 15 fps, a 60 s max, 128 colours, and ordered dithering, all configurable.
-- wadjet bundles an LGPL ffmpeg build. v1 encodes GIFs with it; a ditherette GPU encoder replaces it later.
+- GIFs are encoded by ditherette's GPU encoder, not ffmpeg. GIF Recording is in v1 but waits for that encoder; TestFlight alphas ship without it.
+- The app is sandboxed so alphas can go through TestFlight; the store listing stays a public-release concern. Screenshots save to `~/Pictures/Wadjet` and Recordings to `~/Movies/Wadjet` by default; other folders are granted through a folder picker.
+- The selection lens keeps its private glass patch behind a build flag. With the flag off, the lens sits behind the toolbar icons so blur and tint never hide them.
 - A Recording goes straight to its Workflow. An optional Trim video Step opens a trim window first.
 - v1 Destinations are Wadjet Servers, Google Drive, Dropbox, OneDrive, S3-compatible storage, WebDAV, SFTP, and Custom `.sxcu` imports. Imgur and FTP are out.
 - A Wadjet Server supports upload, list, and delete, so history can span several Macs. It authenticates with an API key or OAuth, through its own OAuth server or an external IdP.
@@ -63,7 +64,7 @@ Recording, uploads, Destinations, History, and Settings are still simulated or s
 - History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default.
 - History searches the text inside Screenshots, filters by kind, Destination, and date, and merges Wadjet Server listings from other Macs.
 - Include Screenshots, MP4 and GIF Recording, capture history, and every Tool above in v1.
-- Keep settings in a human-readable JSON config file, reloaded live on outside edits, and secrets in the Keychain.
+- Keep settings in a human-readable JSON config file in the app's container, reloaded live on outside edits, and secrets in the Keychain.
 - Settings is a System Settings-style sidebar window; its panes and the menu bar menu get refined after Mia has used v1.
 
 ## Starter Workflows
