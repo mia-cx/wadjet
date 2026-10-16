@@ -8,11 +8,15 @@ Island-style toolbar and post-capture toasts.
 
     ./run.sh
 
-Builds a release binary, wraps it as `build/Wadjet.app`, signs it (the first
+Builds the `Wadjet` Xcode scheme with xcodebuild into `build/Wadjet.app`, signs it (the first
 Apple Development identity, or ad-hoc if none; override with
-`WADJET_SIGNING_IDENTITY`), kills a running copy, and opens it.
+`WADJET_SIGNING_IDENTITY`), kills a running copy, and opens it. Extra
+arguments are forwarded to xcodebuild (`./run.sh SWIFT_TREAT_WARNINGS_AS_ERRORS=YES`).
 `WADJET_NO_OPEN=1 ./run.sh` builds and signs without launching — that is what CI
 does.
+
+`cd WadjetKit && swift test` runs the UI-free tests (colour formats, Measure
+edge finding) without building the app.
 
 Screen Recording permission is required for Freeze Frame; grant it in
 System Settings > Privacy & Security > Screen & System Audio Recording (the
