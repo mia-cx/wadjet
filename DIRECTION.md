@@ -12,13 +12,14 @@ A throwaway native prototype of the Freeze Frame overlay, toolbar, and toast is 
 ## Direction
 
 - Capture the cursor and select regions on a Freeze Frame of every screen. It looks like macOS's own screenshot UI.
-- The toolbar starts as the notch on the built-in display, or a black fake Dynamic Island on other displays, and expands on hover into Liquid Glass with touch-size Tool buttons.
+- The toolbar starts as the notch on the built-in display, or a black fake Dynamic Island on other displays, showing the current Tool. It expands on hover into Liquid Glass with touch-size Tool buttons; on displays without a notch it drops below the menu bar instead of covering it.
 - Clicking the selected Tool opens its menu: its Workflow, Recording options, copy format, or Measure mode. Each Tool keeps its own Workflow.
 - Tooltips appear next to the pointer. The loupe flips to stay on screen.
+- Scroll cycles the selected Tool's variants: Region, Window, Screen (within Capture or within Record), Measure modes, or copy formats. Option+scroll changes the Tool's value, such as Measure's tolerance. Space toggles Region and Window, as in macOS.
 - Freeze Frames and Screenshots keep HDR on HDR displays; HDR Screenshots save as HEIC with a gain map. Recordings are SDR in v1.
 - Tools are Capture region, window, and screen; Record region, window, and screen; Pick colour; Copy text; and Measure. Brushes and markup are deferred.
 - Pick colour, Copy text, and Measure put their result on the clipboard and run no Workflow.
-- Measure works by region, by line (including diagonals), or by edge detection in X, Y, or both. It shows pixels, points, inches, and centimetres.
+- Measure works like PowerToys Screen Ruler: Bounds (drag a box; Shift keeps it), Spacing, Horizontal, and Vertical, which find edges from the pointer on the Freeze Frame. Values are in points; a click copies them.
 - Pick colour's loupe shows hex, rgb, hsl, oklch, and lab. It copies hex by default; the format is set in Settings or the Tool's menu.
 - Use Workflows to control local outputs, upload, and post-upload behavior. A Workflow accepts Screenshots or Recordings, and Recording Workflows choose MP4 or GIF.
 - Mia chooses the order of Steps separately after capture and after upload.
