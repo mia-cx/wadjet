@@ -58,7 +58,7 @@ final class ProtoState: ObservableObject {
     @Published var cursor = true
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
-    @Published var toolbarExpanded = false
+    @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -323,7 +323,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             s.workflowByTool[s.tool ?? .capRegion] = parts.dropFirst().joined(separator: " ")
         case "menu" where parts.count > 1:
             if let t = Tool(named: parts.dropFirst().joined(separator: " ")), t.hasMenu {
-                s.toolbarExpanded = true; s.openMenu = t; overlayCtrl.syncMenu()
+                s.expandedDisplay = overlayCtrl.mouseDisplay(); s.openMenu = t; overlayCtrl.syncMenu()
             }
         case "closemenu":
             s.openMenu = nil; overlayCtrl.syncMenu()
@@ -340,8 +340,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             case "measureMode": s.measureMode = val
             default: ProtoLog.line("cmd option: unknown key \(key)")
             }
-        case "expand": s.toolbarExpanded = true
-        case "collapse": s.toolbarExpanded = false
+        case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
+        case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
@@ -586,7 +586,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         m.addItem(mi(s.recordingPaused ? "Resume" : "Pause", #selector(recPause), on: false))
         m.addItem(mi("Stop Recording", #selector(recStop), on: false))
         statusItem.menu = m
-        overlayCtrl.refreshToolbar(onDisplay: recordingDisplay)
+        overlayCtrl.refreshToolbars()
     }
     @objc func recPause() { togglePause() }
     @objc func recStop() { stopRecording() }
@@ -828,29 +828,36 @@ final class PinView: NSView {
 final class OverlayController {
     weak var app: AppDelegate?
     var panels: [NSPanel] = []
-    var toolbarPanel: NSPanel?
+    var toolbarPanels: [Int: NSPanel] = [:] // one per Freeze display index
     var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
     var menuPanel: NSPanel?
     var menuMonitor: Any?
     var keyMonitor: Any?
     init(app: AppDelegate) { self.app = app }
 
+    // the Freeze display under the mouse, fallback 0
+    func mouseDisplay() -> Int {
+        let m = NSEvent.mouseLocation
+        return Freeze.shared.displays.firstIndex { NSMouseInRect(m, $0.screen.frame, false) } ?? 0
+    }
     // the *visible* toolbar shape in screen coords — the click-through panel is
     // much bigger, so hit-testing must use this, not the panel frame
-    var toolbarShapeScreenRect: CGRect? {
-        guard let p = toolbarPanel, let cv = p.contentView else { return nil }
-        return p.convertToScreen(cv.convert(ToolbarHit.rect, to: nil))
+    func toolbarShapeScreenRect(on di: Int) -> CGRect? {
+        guard let p = toolbarPanels[di], let cv = p.contentView, let r = ToolbarHit.rects[di] else { return nil }
+        return p.convertToScreen(cv.convert(r, to: nil))
     }
     var pointerOverUI: Bool {
         let m = NSEvent.mouseLocation
-        if toolbarShapeScreenRect?.contains(m) == true { return true }
+        for (di, _) in toolbarPanels {
+            if toolbarShapeScreenRect(on: di)?.contains(m) == true { return true }
+        }
         if let mp = menuPanel, mp.frame.contains(m) { return true }
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
     }
     // a Tool button's frame in screen coords (from measured panel-space frames)
-    func buttonScreenRect(_ t: Tool) -> CGRect? {
-        guard let fr = ToolbarBtnFrames.rects[t], let p = toolbarPanel, let cv = p.contentView else { return nil }
+    func buttonScreenRect(_ t: Tool, on di: Int) -> CGRect? {
+        guard let fr = ToolbarBtnFrames.rects[di]?[t], let p = toolbarPanels[di], let cv = p.contentView else { return nil }
         return p.convertToScreen(cv.convert(fr, to: nil))
     }
 
@@ -858,13 +865,15 @@ final class OverlayController {
         if let t = ProtoState.shared.openMenu { TipPanel.hide(); showMenu(t) } else { hideMenu() }
     }
     func showMenu(_ t: Tool) {
-        guard let tp = toolbarPanel, t.hasMenu else { return }
+        // anchor to the panel of the expanded display (or the pointer's)
+        let di = ProtoState.shared.expandedDisplay ?? mouseDisplay()
+        guard let tp = toolbarPanels[di], t.hasMenu else { return }
         hideMenu()
         let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self))
         h.frame.size = h.fittingSize
         var f = NSRect(origin: .zero, size: h.fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
-        let anchor = buttonScreenRect(t) ?? toolbarShapeScreenRect ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
+        let anchor = buttonScreenRect(t, on: di) ?? toolbarShapeScreenRect(on: di) ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
                            y: max(scr.minY + 8, anchor.minY - f.height - 6))
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -991,44 +1000,45 @@ final class OverlayController {
             }
             return e
         }
-        showToolbar()
+        showToolbars()
         app?.updateEscHotkey()
     }
-    func showToolbar(onDisplay forced: Int? = nil) {
-        // toolbar on the display under the mouse unless overridden
-        let mouse = NSEvent.mouseLocation
-        let idx = forced ?? Freeze.shared.displays.firstIndex { NSMouseInRect(mouse, $0.screen.frame, false) } ?? 0
-        guard idx < Freeze.shared.displays.count else { return }
-        let fd = Freeze.shared.displays[idx]
-        let tv = ToolbarView(displayIndex: idx, ctrl: self)
-        let hosting = PassthroughHostingView(rootView: tv)
-        let size = NSSize(width: tv.panelW, height: tv.panelH)
-        hosting.frame = NSRect(origin: .zero, size: size)
-        let p = NSPanel(contentRect: NSRect(x: fd.screen.frame.midX - size.width / 2,
-                                            y: fd.screen.frame.maxY - size.height,
-                                            width: size.width, height: size.height),
-                        styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-        p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
-        p.hasShadow = false
-        p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
-        p.contentView = hosting; p.orderFront(nil)
-        toolbarPanel = p
-        ProtoLog.line("toolbar panel \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
+    // one toolbar panel per Freeze display — the island/notch form is chosen
+    // inside ToolbarView from its own screen
+    func showToolbars() {
+        for (idx, fd) in Freeze.shared.displays.enumerated() {
+            let tv = ToolbarView(displayIndex: idx, ctrl: self)
+            let hosting = PassthroughHostingView(rootView: tv)
+            hosting.displayIndex = idx
+            let size = NSSize(width: tv.panelW, height: tv.panelH)
+            hosting.frame = NSRect(origin: .zero, size: size)
+            let p = NSPanel(contentRect: NSRect(x: fd.screen.frame.midX - size.width / 2,
+                                                y: fd.screen.frame.maxY - size.height,
+                                                width: size.width, height: size.height),
+                            styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
+            p.hasShadow = false
+            p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+            p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
+            p.contentView = hosting; p.orderFront(nil)
+            toolbarPanels[idx] = p
+            ProtoLog.line("toolbar panel d\(idx) \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
+        }
     }
     // the expanded row's true size lands after the panel is created; resize to
     // fit it, staying centred on the display
-    func resizeToolbar(_ w: CGFloat, _ h: CGFloat) {
-        guard let p = toolbarPanel, abs(p.frame.width - w) > 1 else { return }
+    func resizeToolbar(_ w: CGFloat, _ h: CGFloat, on di: Int) {
+        guard let p = toolbarPanels[di], abs(p.frame.width - w) > 1 else { return }
         var f = p.frame; f.size = NSSize(width: w, height: h)
         if let scr = p.screen { f.origin.x = scr.frame.midX - w / 2; f.origin.y = scr.frame.maxY - h }
         p.contentView?.frame.size = f.size
         p.setFrame(f, display: true)
     }
-    func refreshToolbar(onDisplay forced: Int? = nil) {
-        toolbarPanel?.close(); toolbarPanel = nil
+    func refreshToolbars() {
+        toolbarPanels.values.forEach { $0.close() }
+        toolbarPanels = [:]
         let p = ProtoState.shared.phase
-        if p == .frozen || (p == .recording && ProtoState.shared.showIslandWhileRecording) { showToolbar(onDisplay: forced) }
+        if p == .frozen || (p == .recording && ProtoState.shared.showIslandWhileRecording) { showToolbars() }
     }
     func closeAllPanelsOnly() {
         panels.forEach { $0.close() }
@@ -1037,13 +1047,14 @@ final class OverlayController {
         if ProtoState.shared.openMenu != nil { ProtoState.shared.openMenu = nil }
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
-        toolbarPanel?.close(); toolbarPanel = nil
+        toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
+        ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]; ToolbarBtnFrames.blobRect = [:]
     }
     func closeAll() {
         closeAllPanelsOnly()
         if ProtoState.shared.phase != .desktop { ProtoLog.line("phase=desktop (overlay closed)") }
         ProtoState.shared.phase = .desktop
-        ProtoState.shared.toolbarExpanded = false
+        ProtoState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []
         AppDelegate.shared?.updateEscHotkey()
     }
@@ -1455,30 +1466,32 @@ final class OverlayNSView: NSView {
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     // Everything outside the current island/toolbar shape is click-through, so
     // the panel never shadows the selection layer underneath it.
+    var displayIndex = 0
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? {
-        let hit = ToolbarHit.rect.contains(point)
-        if hit != ToolbarHit.lastHit { ToolbarHit.lastHit = hit; ProtoLog.line("hitTest \(hit ? "in" : "out") @\(Int(point.x)),\(Int(point.y)) rect=\(ToolbarHit.rect.debugDescription)") }
+        let rect = ToolbarHit.rects[displayIndex] ?? .zero
+        let hit = rect.contains(point)
+        if hit != ToolbarHit.lastHit[displayIndex] { ToolbarHit.lastHit[displayIndex] = hit; ProtoLog.line("hitTest d\(displayIndex) \(hit ? "in" : "out") @\(Int(point.x)),\(Int(point.y)) rect=\(rect.debugDescription)") }
         return hit ? super.hitTest(point) : nil
     }
 }
 
 enum ToolbarHit {
-    nonisolated(unsafe) static var rect = CGRect.zero
-    nonisolated(unsafe) static var lastHit: Bool? = nil
+    nonisolated(unsafe) static var rects: [Int: CGRect] = [:] // per display index
+    nonisolated(unsafe) static var lastHit: [Int: Bool] = [:]
 }
-// measured button frames in the toolbar panel's coordinate space, reported by
+// measured button frames in each toolbar panel's coordinate space, reported by
 // onGeometryChange — used for hover mapping, menu anchors and CGEvent driving
 enum ToolbarBtnFrames {
-    nonisolated(unsafe) static var rects: [Tool: CGRect] = [:]
-    nonisolated(unsafe) static var blobRect: CGRect? = nil // menu droplet on the selected button
+    nonisolated(unsafe) static var rects: [Int: [Tool: CGRect]] = [:]
+    nonisolated(unsafe) static var blobRect: [Int: CGRect] = [:] // menu droplet per display
 }
 
 struct ToolbarView: View {
     let displayIndex: Int
     let ctrl: OverlayController
     @ObservedObject var s = ProtoState.shared
-    var expanded: Bool { s.toolbarExpanded }
+    var expanded: Bool { s.expandedDisplay == displayIndex }
     @Namespace var ns
     var screen: NSScreen? {
         displayIndex < Freeze.shared.displays.count ? Freeze.shared.displays[displayIndex].screen : NSScreen.main
@@ -1543,7 +1556,7 @@ struct ToolbarView: View {
 
     // the pointer in the panel view's coords, against hoverRect
     func pointerInside() -> Bool {
-        guard let p = ctrl.toolbarPanel else { return false }
+        guard let p = ctrl.toolbarPanels[displayIndex] else { return false }
         // the content view fills the panel, so view coords = screen - origin
         let q = CGPoint(x: NSEvent.mouseLocation.x - p.frame.minX,
                         y: NSEvent.mouseLocation.y - p.frame.minY)
@@ -1551,19 +1564,20 @@ struct ToolbarView: View {
     }
     func syncExpanded() {
         let h = hoverInside || s.openMenu != nil || lensActive
-        if h != s.toolbarExpanded { ProtoLog.line("hover -> \(h)") }
-        s.toolbarExpanded = h
+        if h != expanded { ProtoLog.line("hover d\(displayIndex) -> \(h)") }
+        if h { s.expandedDisplay = displayIndex }
+        else if s.expandedDisplay == displayIndex { s.expandedDisplay = nil }
     }
 
     func syncHit() {
-        ToolbarHit.rect = hoverRect
+        ToolbarHit.rects[displayIndex] = hoverRect
         if expanded {
             let xs = [Tool.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
                 .compactMap { t -> String? in
-                    guard let f = ctrl.buttonScreenRect(t) else { return nil }
+                    guard let f = ctrl.buttonScreenRect(t, on: displayIndex) else { return nil }
                     return "\(t.title):\(Int(f.midX))"
                 }.joined(separator: " ")
-            ProtoLog.line("toolbar icons @ \(xs)")
+            ProtoLog.line("toolbar icons d\(displayIndex) @ \(xs)")
         }
     }
 
@@ -1594,7 +1608,7 @@ struct ToolbarView: View {
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
-            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect = nil; syncHit() }
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -1733,7 +1747,7 @@ struct ToolbarView: View {
                         .glassEffectID("menu-\(t)", in: ns)
                         .contentShape(Circle())
                         .highPriorityGesture(TapGesture().onEnded { openToolMenu(t) })
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect = $0 }
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect[displayIndex] = $0 }
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
                         .offset(x: 6, y: -8) // ~4 pt inside the capsule's corner
                 }
@@ -1745,7 +1759,7 @@ struct ToolbarView: View {
                 if !lensActive, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + toolD / 2 }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
-                ToolbarBtnFrames.rects[t] = $0
+                ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = $0
             }
     }
 
@@ -1801,7 +1815,7 @@ struct ToolbarView: View {
         .fixedSize()
         .contentShape(Rectangle()) // press anywhere in the row, gaps included
         .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH, on: displayIndex); ProtoLog.line("rowSize d\(displayIndex) -> \($0.debugDescription)") } }
         // press = lens pops in under the finger, flick = drag it, hold = menu
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
             .onChanged { v in
@@ -1853,10 +1867,10 @@ struct ToolbarView: View {
             switch phase {
             case .active(let p):
                 if dragging { TipPanel.hide() }
-                else if let b = ToolbarBtnFrames.blobRect, b.contains(p) { TipPanel.hide() }
-                else if let t = ToolbarBtnFrames.rects.first(where: { $0.value.contains(p) })?.key {
-                    if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects.count)") }
-                    TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t) ?? .zero)
+                else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
+                else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { $0.value.contains(p) })?.key {
+                    if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
+                    TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
                 } else { if TipPanel.tool != nil { ProtoLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
             case .ended: TipPanel.hide()
             }
