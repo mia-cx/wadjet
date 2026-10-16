@@ -51,8 +51,16 @@ final class AppState: ObservableObject {
     @Published var phase: Phase = .desktop
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
-    @Published var colourFmt = "Hex" // Hex, rgb(), hsl(), oklch(), lab(), SwiftUI
-    @Published var measureMode = "Spacing" // Bounds, Spacing, Horizontal, Vertical
+    let config = ConfigStore(file: AppLog.url.deletingLastPathComponent().appendingPathComponent("config.json"), defaults: WadjetConfig(), keychain: SystemKeychain(service: "cx.mia.wadjet"), onError: reportConfigError)
+    // both live in config.json; SwiftUI views track them through the store's Observation
+    var colourFmt: String { // Hex, rgb(), hsl(), oklch(), lab(), SwiftUI
+        get { config.value.tools.pickColour.format.rawValue }
+        set { if let f = ColourFormat(rawValue: newValue) { config.update { $0.tools.pickColour.format = f } } }
+    }
+    var measureMode: String { // Bounds, Spacing, Horizontal, Vertical
+        get { config.value.tools.measure.mode.rawValue }
+        set { if let m = MeasureMode(rawValue: newValue) { config.update { $0.tools.measure.mode = m } } }
+    }
     @Published var countdown = "Off" // Off 3 5 10
     @Published var sysAudio = false
     @Published var mic = false
@@ -207,6 +215,19 @@ enum AppLog {
     }
 }
 
+@MainActor
+func reportConfigError(_ e: ConfigError) {
+    AppLog.line("config: \(e)")
+    Task { @MainActor in
+        // the first load runs when AppState.shared is first touched, before the
+        // toast controller exists — defer until ToastController.shared is set
+        guard let tc = ToastController.shared else { return }
+        let t = tc.pending("Couldn't read config.json")
+        t.sub = e.location.map { "\($0): \(e.message)" } ?? e.message
+        tc.startTimer(t)
+    }
+}
+
 // MARK: - App
 
 @MainActor
@@ -235,6 +256,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         rebuildMenu()
         overlayCtrl = OverlayController(app: self)
         toastCtrl = ToastController()
+        Task { @MainActor in // live reload shows up in app.log
+            var lastMode = AppState.shared.config.value.tools.measure.mode
+            for await c in Observations({ AppState.shared.config.value }) {
+                AppLog.line("config: colourFormat=\(c.tools.pickColour.format.rawValue) measureMode=\(c.tools.measure.mode.rawValue)")
+                // a config.json edit of the Measure mode rescans without a mouse move
+                if c.tools.measure.mode != lastMode {
+                    lastMode = c.tools.measure.mode
+                    for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
+                }
+            }
+        }
         Hotkeys.register()
         AppLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
         buildStateHUD()
@@ -611,7 +643,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         guard AppState.shared.tool == .measure, modes.indices.contains(i) else { return }
         AppState.shared.measureMode = modes[i]
         AppLog.line("measure mode -> \(modes[i])")
-        for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
+        // the config observer rescans the ruler when the mode lands
     }
     func updateEscHotkey() {
         let s = AppState.shared

@@ -17,13 +17,14 @@ does.
 
 The app runs in the App Sandbox, so its data (Captures, log) lives in its
 container: `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/`.
+Settings live in `config.json` in that folder and are picked up live when you edit it.
 
 `WADJET_CLEAR_GLASS=0 ./run.sh` builds the store variant without the private
 clear-glass lens patch (the lens then sits behind the toolbar icons with
 regular glass).
 
 `cd WadjetKit && swift test` runs the UI-free tests (colour formats, Measure
-edge finding) without building the app.
+edge finding, config store) without building the app.
 
 Screen Recording permission is required for Freeze Frame; grant it in
 System Settings > Privacy & Security > Screen & System Audio Recording (the

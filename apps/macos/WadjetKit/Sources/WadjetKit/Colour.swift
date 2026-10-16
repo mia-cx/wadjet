@@ -4,7 +4,7 @@ import Foundation
 public typealias RGB8 = (r: UInt8, g: UInt8, b: UInt8)
 
 /// How Pick colour writes a colour. The raw value is the label the app shows and stores.
-public enum ColourFormat: String, CaseIterable, Sendable {
+public enum ColourFormat: String, CaseIterable, Codable, Sendable {
     case hex = "Hex", rgb = "rgb()", hsl = "hsl()", oklch = "oklch()", lab = "lab()", swiftUI = "SwiftUI"
 
     /// `c` written in this format, e.g. `#33D694` or `oklch(0.779 0.162 160.6)`.
