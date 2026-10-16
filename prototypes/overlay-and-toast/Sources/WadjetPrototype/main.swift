@@ -1627,9 +1627,8 @@ struct ToolbarView: View {
     }
 
     var toolRow: some View {
-        // the capsule/lens lives in the HStack's .background — inside a
-        // GlassEffectContainer the glass composites above sibling views, so a
-        // ZStack would put it over the icons
+        // rest highlight sits below the icons in .background; the glass lens is
+        // added as the topmost layer below (it must refract the icons)
         HStack(spacing: 8) {
             ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: cell)
             Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
@@ -1641,24 +1640,10 @@ struct ToolbarView: View {
         .padding(.horizontal, 20).padding(.vertical, 10)
         .coordinateSpace(name: "row")
         .background {
-            GlassEffectContainer(spacing: 8) {
-                ZStack {
-                    // rest: subtle translucent capsule (no glass)
-                    Capsule().fill(.white.opacity(0.10))
-                        .frame(width: selW, height: selH)
-                        .opacity(lensActive ? 0 : 1)
-                        .position(x: blobX, y: blobY)
-                    // pressed/dragging: a clear lens, ~1.15×
-                    if lensActive {
-                        Capsule().fill(.clear)
-                            .frame(width: selW * 1.15, height: selH * 1.15) // sized, not scaled, so the glass grows too
-                            .glassEffect(.clear.interactive(), in: .capsule)
-                            .glassEffectID("lens", in: ns)
-                            .position(x: blobX, y: blobY)
-                            .transition(.scale(scale: 0.6).combined(with: .opacity))
-                    }
-                }
-            }
+            // rest: subtle translucent highlight (no glass)
+            Capsule().fill(.white.opacity(lensActive ? 0 : 0.10))
+                .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+                .position(x: blobX, y: blobY)
         }
         // the accent tint follows the lens, clipped to its shape — the icon row
         // is drawn a second time in accent, masked to a capsule at blobX
@@ -1679,6 +1664,16 @@ struct ToolbarView: View {
             .mask(selShape.position(x: blobX, y: blobY))
             .foregroundStyle(Color.wadjetAccent)
             .allowsHitTesting(false)
+        }
+        // the glass lens, always present and topmost: identity glass at rest,
+        // clear glass while pressing — animating the effect, never inserted
+        .overlay {
+            Capsule().fill(.clear)
+                .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+                .glassEffect(lensActive ? .clear.interactive() : .identity, in: .capsule)
+                .glassEffectTransition(.materialize)
+                .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
+                .allowsHitTesting(false)
         }
         .fixedSize()
         .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
