@@ -75,5 +75,14 @@ See [the macOS app README](apps/macos/README.md#debug-command-channel) for the d
 
 ## Repo layout
 
-`apps/macos/` contains the Swift macOS app, currently a plain SwiftPM package.
-The Wadjet Server will join it under `apps/`; Turborepo tooling arrives with the server.
+`apps/macos/` contains the Swift macOS app. It builds with Xcode and stays outside the pnpm workspace.
+
+`packages/protocol/` holds the [Wadjet Server protocol](packages/protocol/PROTOCOL.md), its fixtures, and Effect Schemas for every request and response.
+The Wadjet Server will join under `apps/server/`.
+
+The TypeScript side is a pnpm Turborepo. From the repo root, with Node 24+:
+
+```sh
+pnpm install
+pnpm lint && pnpm build && pnpm test
+```
