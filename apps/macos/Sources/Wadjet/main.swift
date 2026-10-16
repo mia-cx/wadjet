@@ -845,7 +845,9 @@ final class OverlayController {
                 guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                       let disp = content.displays.first(where: { $0.displayID == num }) else { continue }
                 let cfg = SCScreenshotConfiguration()
-                cfg.width = Int(disp.width); cfg.height = Int(disp.height)
+                // native pixels, not SCDisplay's point size — a 2x display freezes sharp
+                cfg.width = Int((screen.frame.width * screen.backingScaleFactor).rounded())
+                cfg.height = Int((screen.frame.height * screen.backingScaleFactor).rounded())
                 cfg.showsCursor = true; cfg.displayIntent = .local
                 let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
                 cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
