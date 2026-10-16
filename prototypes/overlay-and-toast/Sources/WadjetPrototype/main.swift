@@ -1340,6 +1340,7 @@ final class OverlayNSView: NSView {
 final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     // Everything outside the current island/toolbar shape is click-through, so
     // the panel never shadows the selection layer underneath it.
+    override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let hit = ToolbarHit.rect.contains(point)
         if hit != ToolbarHit.lastHit { ToolbarHit.lastHit = hit; ProtoLog.line("hitTest \(hit ? "in" : "out") @\(Int(point.x)),\(Int(point.y)) rect=\(ToolbarHit.rect.debugDescription)") }
@@ -1413,11 +1414,20 @@ struct ToolbarView: View {
     var shapeRectInView: CGRect {
         CGRect(x: (panelW - shapeW) / 2, y: panelH - shapeTop - shapeH, width: shapeW, height: shapeH)
     }
+    // one rect drives both click-through and the expand decision. Expanded on
+    // an island display: shape ∪ collapsed island ∪ a bridge strip, so resting
+    // on the island or sliding down into the toolbar doesn't collapse it.
+    var hoverRect: CGRect {
+        let sh = shapeRectInView
+        if hasNotch || !expanded { return sh }
+        let isl = CGRect(x: (panelW - islandW) / 2, y: panelH - gap - pillH, width: islandW, height: pillH)
+        return sh.union(isl).union(CGRect(x: isl.minX, y: sh.maxY, width: isl.width, height: max(0, isl.minY - sh.maxY)))
+    }
 
     var limit: CGFloat { (screen?.frame.width ?? 1280) - 40 }
 
     func syncHit() {
-        ToolbarHit.rect = shapeRectInView
+        ToolbarHit.rect = hoverRect
         if expanded {
             let xs = [Tool.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
                 .compactMap { t -> String? in
@@ -1432,7 +1442,23 @@ struct ToolbarView: View {
         morph
             .frame(width: panelW, height: panelH, alignment: .top)
             .coordinateSpace(name: "panel")
+            // expand/collapse driven by hoverRect — pointer can rest on the
+            // collapsed island or move down into the shape without flapping
+            .onContinuousHover(coordinateSpace: .named("panel")) { phase in
+                switch phase {
+                case .active(let p):
+                    // p is in SwiftUI coords (top-left); hoverRect is in the
+                    // view's coords — convert
+                    let q = CGPoint(x: p.x, y: panelH - p.y)
+                    let h = hoverRect.contains(q)
+                    if h != s.toolbarExpanded { ProtoLog.line("hover -> \(h)") }
+                    s.toolbarExpanded = h || s.openMenu != nil
+                case .ended:
+                    if s.openMenu == nil { s.toolbarExpanded = false }
+                }
+            }
             .onAppear { syncHit() }
+            .onChange(of: rowSize) { syncHit() }
             .onChange(of: expanded) {
                 syncHit()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
@@ -1455,15 +1481,16 @@ struct ToolbarView: View {
             expandedContent
                 .opacity(expanded ? 1 : 0)
                 .scaleEffect(expanded ? 1 : 0.7, anchor: .top)
+                .frame(width: shapeW, height: shapeH, alignment: .top)
             islandContent
                 .opacity(expanded ? 0 : 1)
+                .frame(width: shapeW, height: shapeH)
         }
         .frame(width: shapeW, height: shapeH)
+        .clipShape(shape) // nothing may draw outside the island/toolbar shape
         .glassEffect(.regular.tint(.black.opacity(0.4)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
-        // an open menu holds the toolbar expanded while the pointer is in the menu
-        .onHover { h in ProtoLog.line("hover -> \(h)"); s.toolbarExpanded = h || s.openMenu != nil }
         .padding(.top, shapeTop)
         .animation(.spring(duration: 0.35), value: expanded)
     }
@@ -1503,12 +1530,17 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
-    // click selects a Tool; menus open via the chevron blob, right-click, or a
-    // long press — a plain click on the already-selected Tool does nothing
-    func btnClicked(_ t: Tool) {
-        TipPanel.hide()
-        if s.tool != t { AppDelegate.shared?.trigger(t) }
-    }
+    // tab-bar state: cell centres measured in row space, blob x in row space
+    @State var cellCentres: [Tool: CGPoint] = [:]
+    @State var blobX: CGFloat = 0
+    @State var blobY: CGFloat = 0
+    @State var dragging = false
+    @State var pressX: CGFloat = 0
+    @State var pressTool: Tool?
+    @State var pressActive = false
+    @State var menuByHold = false
+    @State var holdTask: Task<Void, Never>?
+
     func openToolMenu(_ t: Tool) {
         guard t.hasMenu else { return }
         TipPanel.hide()
@@ -1516,71 +1548,124 @@ struct ToolbarView: View {
         s.openMenu = s.openMenu == t ? nil : t
         ctrl.syncMenu()
     }
+    // cell under a row-space x (group gaps return nil)
+    func tool(atRowX x: CGFloat) -> Tool? { cellCentres.first { abs($0.value.x - x) <= toolD / 2 }?.key }
+    func nearestTool(to x: CGFloat) -> Tool? { cellCentres.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key }
+    var rowEnds: (CGFloat, CGFloat) {
+        let xs = cellCentres.values.map(\.x)
+        return (xs.min() ?? 0, xs.max() ?? 0)
+    }
 
-    // every button has the same structure in both states so switching Tools
-    // animates properties only — no view insertion/removal in the glass row
-    func tbtn(_ t: Tool) -> some View {
+    // one cell of the tab bar: plain icon, no per-cell glass
+    func cell(_ t: Tool) -> some View {
         let selected = s.tool == t
-        return Button { btnClicked(t) } label: {
-            ZStack {
-                Circle().fill(.white.opacity(selected ? 0.92 : 0))
-                Image(systemName: t.symbol).font(.system(size: 22))
-                    .foregroundStyle(selected ? Color.black : Color.white)
-            }
+        return Image(systemName: t.symbol).font(.system(size: 22))
+            .foregroundStyle(selected && !dragging ? Color.black : Color.white.opacity(0.75))
             .frame(width: toolD, height: toolD)
-            .glassEffect(.regular.interactive(), in: .circle)
-            .glassEffectID(t, in: ns)
-        }
-        .buttonStyle(.plain)
-        .overlay(alignment: .bottomTrailing) {
-            // a glass droplet budding off the selected menu-capable button;
-            // its own Button + glassEffectID so it never flies across the row
-            if t.hasMenu && selected {
-                Button { openToolMenu(t) } label: {
+            .overlay(alignment: .bottomTrailing) {
+                // the menu droplet budding off the selected cell — hidden while
+                // dragging; a high-priority tap so the row's drag can't take it
+                if t.hasMenu && selected && !dragging {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
                         .glassEffect(.regular.interactive(), in: .circle)
                         .glassEffectID("menu-\(t)", in: ns)
+                        .contentShape(Circle())
+                        .highPriorityGesture(TapGesture().onEnded { openToolMenu(t) })
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect = $0 }
+                        .transition(.scale(scale: 0.6).combined(with: .opacity))
+                        .offset(x: 9, y: 9) // centre ~4 pt inside the cell's corner
                 }
-                .buttonStyle(.plain)
-                .transition(.scale(scale: 0.6).combined(with: .opacity))
-                .offset(x: 9, y: 9) // centre ~4 pt inside the button's corner
             }
-        }
-        .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in openToolMenu(t) })
-        .overlay(RightClickCatcher { openToolMenu(t) })
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
-            ToolbarBtnFrames.rects[t] = $0
-        }
+            .overlay(RightClickCatcher { openToolMenu(t) })
+            .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
+                // keep the whole frame's centre in row space
+                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + toolD / 2)
+                if !dragging, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + toolD / 2 }
+            }
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
+                ToolbarBtnFrames.rects[t] = $0
+            }
     }
 
     var toolRow: some View {
-        GlassEffectContainer(spacing: 8) {
-            HStack(spacing: 8) {
-                ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: tbtn)
-                Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
-                ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: tbtn)
-                Spacer().frame(width: 8)
-                ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: tbtn)
+        // the blob lives in the HStack's .background — inside a
+        // GlassEffectContainer the glass composites above sibling views, so a
+        // ZStack would put it over the icons
+        HStack(spacing: 8) {
+            ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: cell)
+            Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
+            ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: cell)
+            Spacer().frame(width: 8)
+            ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: cell)
+        }
+        .padding(10)
+        .coordinateSpace(name: "row")
+        .background {
+            GlassEffectContainer(spacing: 8) {
+                Circle().fill(.white.opacity(dragging ? 0.15 : 0.92))
+                    .frame(width: toolD, height: toolD)
+                    .scaleEffect(dragging ? 1.12 : 1)
+                    .glassEffect(.regular.interactive(), in: .circle)
+                    .glassEffectID("selection", in: ns)
+                    .position(x: blobX, y: blobY)
             }
-            .padding(10)
-            .fixedSize()
-            .animation(.smooth(duration: 0.2), value: s.tool) // selection crossfades; nothing is inserted/removed
-            .onGeometryChange(for: CGSize.self) { $0.frame(in: .named("panel")).size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
-            // map the pointer to a Tool button using measured frames — per-button
-            // onHover is unreliable inside the glass container
-            .onContinuousHover(coordinateSpace: .named("panel")) { phase in
-                switch phase {
-                case .active(let p):
-                    if let b = ToolbarBtnFrames.blobRect, b.contains(p) { TipPanel.hide() }
-                    else if let t = ToolbarBtnFrames.rects.first(where: { $0.value.contains(p) })?.key {
-                        if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects.count)") }
-                        TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t) ?? .zero)
-                    } else { if TipPanel.tool != nil { ProtoLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
-                case .ended: TipPanel.hide()
+        }
+        .fixedSize()
+        .animation(.smooth(duration: 0.15), value: dragging) // lens on/off
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
+        // click = tap on a cell, flick = drag the blob, hold = menu
+        .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
+            .onChanged { v in
+                if !pressActive { // first event of the press
+                    pressActive = true
+                    pressX = v.startLocation.x
+                    pressTool = tool(atRowX: v.startLocation.x)
+                    holdTask = Task { @MainActor in
+                        try? await Task.sleep(for: .milliseconds(400))
+                        if !Task.isCancelled, let t = pressTool, !dragging { menuByHold = true; openToolMenu(t) }
+                    }
                 }
+                if !dragging, abs(v.location.x - pressX) > 4 {
+                    dragging = true; holdTask?.cancel(); TipPanel.hide()
+                    if let t = pressTool, t != s.tool { AppDelegate.shared?.trigger(t) }
+                }
+                if dragging {
+                    let (lo, hi) = rowEnds
+                    blobX = min(hi, max(lo, v.location.x))
+                }
+            }
+            .onEnded { v in
+                holdTask?.cancel()
+                if dragging {
+                    dragging = false
+                    if let n = nearestTool(to: v.location.x) {
+                        if n != s.tool { AppDelegate.shared?.trigger(n) }
+                        withAnimation(.spring(response: 0.28, dampingFraction: 0.8)) { blobX = cellCentres[n]?.x ?? blobX }
+                    }
+                } else if !menuByHold, let t = tool(atRowX: v.location.x), t != s.tool {
+                    AppDelegate.shared?.trigger(t)
+                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = cellCentres[t]?.x ?? blobX }
+                }
+                pressTool = nil; pressActive = false; menuByHold = false
+            })
+        // map the pointer to a Tool cell using measured frames
+        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
+            switch phase {
+            case .active(let p):
+                if dragging { TipPanel.hide() }
+                else if let b = ToolbarBtnFrames.blobRect, b.contains(p) { TipPanel.hide() }
+                else if let t = ToolbarBtnFrames.rects.first(where: { $0.value.contains(p) })?.key {
+                    if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects.count)") }
+                    TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t) ?? .zero)
+                } else { if TipPanel.tool != nil { ProtoLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
+            case .ended: TipPanel.hide()
+            }
+        }
+        .onChange(of: s.tool) {
+            if !dragging, let t = s.tool, let c = cellCentres[t] {
+                withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x; blobY = c.y }
             }
         }
         .padding(.top, contentTop)
