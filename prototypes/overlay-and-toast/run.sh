@@ -29,4 +29,5 @@ cat > "$APP/Contents/Info.plist" <<'PLIST'
 PLIST
 
 codesign --force --sign "$IDENTITY" "$APP"
+pkill -x WadjetPrototype && sleep 0.5 || true # open alone would just focus the old build
 open "$APP"

@@ -1252,10 +1252,13 @@ struct ToolbarView: View {
     // is sized from the *measured* row — never a hand-coded width — so the
     // buttons can never be clipped.
     @State var rowSize = CGSize(width: 520, height: 66)
-    var contentTop: CGFloat { islandH + 6 - gap }
+    // Notched display: the row clears the notch. Island: the row hugs the shape
+    // with the same margin on every side, leaving no empty band over the menu bar.
+    var rowInset: CGFloat { 10 }
+    var contentTop: CGFloat { hasNotch ? islandH + 6 : rowInset }
     var recExpandedW: CGFloat { 260 }
-    var expW: CGFloat { min(limit, rowSize.width + 20) }
-    var expH: CGFloat { islandH + 8 + rowSize.height + 8 - gap }
+    var expW: CGFloat { min(limit, rowSize.width + 2 * rowInset) }
+    var expH: CGFloat { hasNotch ? islandH + 16 + rowSize.height : rowSize.height + 2 * rowInset }
     var shapeW: CGFloat { expanded ? (recording ? recExpandedW : expW) : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
     var panelW: CGFloat { min(limit, expW) + 48 }
