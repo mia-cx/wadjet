@@ -1,0 +1,32 @@
+{
+  "name": "32-start-upload-to-expire",
+  "request": {
+    "method": "POST",
+    "path": "/v1/uploads",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+      "Content-Type": "application/json",
+      "Idempotency-Key": "e517a5ce-dc99-4282-9dd7-7018ed73e995"
+    },
+    "body": {
+      "filename": "Recording 2026-10-16 at 14.32.51.mp4",
+      "kind": "recording",
+      "contentType": "video/mp4",
+      "size": 3000,
+      "device": "Mia's MacBook Pro"
+    }
+  },
+  "response": {
+    "status": 201,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:33:00 GMT"
+    },
+    "body": {
+      "id": "Hn4Rt8",
+      "partBytes": 1024,
+      "partCount": 3,
+      "expiresAt": "2026-10-17T12:33:00Z"
+    }
+  }
+}

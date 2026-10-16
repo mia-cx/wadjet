@@ -1,0 +1,28 @@
+{
+  "name": "10-get-upload",
+  "request": {
+    "method": "GET",
+    "path": "/v1/uploads/Uq7Lm2",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:05:58 GMT"
+    },
+    "body": {
+      "id": "Uq7Lm2",
+      "partBytes": 1024,
+      "partCount": 3,
+      "expiresAt": "2026-10-17T12:05:42Z",
+      "receivedParts": [
+        1,
+        3
+      ]
+    }
+  }
+}

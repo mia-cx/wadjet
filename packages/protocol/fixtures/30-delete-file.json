@@ -1,0 +1,18 @@
+{
+  "name": "30-delete-file",
+  "request": {
+    "method": "DELETE",
+    "path": "/v1/files/Uq7Lm2",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 204,
+    "headers": {
+      "Date": "Fri, 16 Oct 2026 12:32:00 GMT"
+    },
+    "body": null
+  }
+}

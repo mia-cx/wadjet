@@ -1,0 +1,26 @@
+{
+  "name": "33-upload-part-expired",
+  "request": {
+    "method": "PUT",
+    "path": "/v1/uploads/Hn4Rt8/parts/1",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+      "Content-Type": "application/octet-stream",
+      "Content-Length": "1024"
+    },
+    "body": "recording.part1.bin"
+  },
+  "response": {
+    "status": 410,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Sat, 17 Oct 2026 12:33:01 GMT"
+    },
+    "body": {
+      "error": {
+        "code": "upload_expired",
+        "message": "This upload expired at 2026-10-17T12:33:00Z."
+      }
+    }
+  }
+}

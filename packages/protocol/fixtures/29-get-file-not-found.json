@@ -1,0 +1,22 @@
+{
+  "name": "29-get-file-not-found",
+  "request": {
+    "method": "GET",
+    "path": "/aB3xK9.png",
+    "headers": {},
+    "body": null
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:31:06 GMT"
+    },
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "No file aB3xK9."
+      }
+    }
+  }
+}

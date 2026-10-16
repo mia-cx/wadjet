@@ -1,0 +1,39 @@
+{
+  "name": "01-discovery",
+  "request": {
+    "method": "GET",
+    "path": "/.well-known/wadjet",
+    "headers": {},
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:00:00 GMT"
+    },
+    "body": {
+      "protocol": "wadjet",
+      "versions": [
+        1
+      ],
+      "auth": {
+        "apiKey": true,
+        "oauth": {
+          "issuer": "https://hecate.example",
+          "clientId": "wadjet",
+          "scopes": [
+            "openid",
+            "wadjet"
+          ]
+        }
+      },
+      "limits": {
+        "maxRequestBytes": 4096,
+        "partBytes": 1024,
+        "maxFileBytes": null,
+        "maxThumbnailBytes": 1024
+      }
+    }
+  }
+}

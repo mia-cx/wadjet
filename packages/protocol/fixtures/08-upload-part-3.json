@@ -1,0 +1,24 @@
+{
+  "name": "08-upload-part-3",
+  "request": {
+    "method": "PUT",
+    "path": "/v1/uploads/Uq7Lm2/parts/3",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g",
+      "Content-Type": "application/octet-stream",
+      "Content-Length": "469"
+    },
+    "body": "recording.part3.bin"
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:05:44 GMT"
+    },
+    "body": {
+      "number": 3,
+      "size": 469
+    }
+  }
+}

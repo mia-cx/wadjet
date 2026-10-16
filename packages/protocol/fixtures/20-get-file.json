@@ -1,0 +1,22 @@
+{
+  "name": "20-get-file",
+  "request": {
+    "method": "GET",
+    "path": "/aB3xK9.png",
+    "headers": {},
+    "body": null
+  },
+  "response": {
+    "status": 200,
+    "headers": {
+      "Content-Type": "image/png",
+      "Content-Length": "126",
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=300, s-maxage=31536000",
+      "Content-Disposition": "inline; filename*=UTF-8''Screenshot%202026-10-16%20at%2014.02.11.png",
+      "X-Content-Type-Options": "nosniff",
+      "Date": "Fri, 16 Oct 2026 12:21:00 GMT"
+    },
+    "body": "screenshot.png"
+  }
+}

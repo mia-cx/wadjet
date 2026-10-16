@@ -1,0 +1,24 @@
+{
+  "name": "16-get-upload-not-found",
+  "request": {
+    "method": "GET",
+    "path": "/v1/uploads/Pz2Wc5",
+    "headers": {
+      "Authorization": "Bearer wdj_jFAhjraITcvwgTG2w28qJ_fO36gbfqY4N8OCjtmCJ3g"
+    },
+    "body": null
+  },
+  "response": {
+    "status": 404,
+    "headers": {
+      "Content-Type": "application/json",
+      "Date": "Fri, 16 Oct 2026 12:07:06 GMT"
+    },
+    "body": {
+      "error": {
+        "code": "not_found",
+        "message": "No upload Pz2Wc5."
+      }
+    }
+  }
+}
