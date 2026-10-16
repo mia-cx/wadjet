@@ -29,6 +29,18 @@ Screen Recording permission is required for Freeze Frame; grant it in
 System Settings > Privacy & Security > Screen & System Audio Recording (the
 permission alert has a shortcut to that pane) and trigger again.
 
+## Store build
+
+    xcodebuild archive -project Wadjet.xcodeproj -scheme Wadjet -configuration Release \
+        -destination 'generic/platform=macOS' -archivePath build/Wadjet.xcarchive \
+        CODE_SIGN_IDENTITY="Apple Development"
+    xcodebuild -exportArchive -archivePath build/Wadjet.xcarchive \
+        -exportOptionsPlist ExportOptions.plist -exportPath build/export
+
+The archive builds without CLEAR_GLASS_PATCH, so the private lens patch is
+compiled out. Export needs an Apple Distribution certificate and a Mac App
+Store provisioning profile for `cx.mia.wadjet`.
+
 ## Hotkeys
 
 - ⌘⇧4 Capture Region, ⌘⇧3 Capture Screen, ⌘⇧5 Record Region (press again to stop a recording).
