@@ -356,15 +356,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: trigger
-    func trigger(_ tool: Tool) {
+    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now) {
         let s = AppState.shared
         if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
         // switching Tools while frozen keeps the same Freeze Frame
         if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("tool switched to \(tool.title)") }; return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
-        let t0 = CFAbsoluteTimeGetCurrent()
-        Task { await overlayCtrl.freezeAndShow(tool: tool, t0: t0) }
+        Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
     }
     func permissionNeeded() {
         _ = CGRequestScreenCaptureAccess()
@@ -845,9 +844,13 @@ final class OverlayController {
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
     }
 
-    func freezeAndShow(tool: Tool, t0: CFAbsoluteTime) async {
+    var freezeLatencies: [Double] = [] // hotkey-to-Freeze-Frame ms, one per open
+
+    func freezeAndShow(tool: Tool, start: ContinuousClock.Instant) async {
+        func ms(_ d: Duration) -> Int { Int(d / .milliseconds(1)) }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+            let tContent = start.duration(to: .now)
             Freeze.shared.displays = []
             scWindows = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
             // displays stay sequential: FrozenDisplay holds a raw bitmap
@@ -856,12 +859,25 @@ final class OverlayController {
             for screen in NSScreen.screens {
                 if let fd = await frozenDisplay(on: screen, from: content) { Freeze.shared.displays.append(fd) }
             }
-            let latency = (CFAbsoluteTimeGetCurrent() - t0) * 1000
+            // "capture" includes pixel prep: the sRGB bitmap is drawn inside
+            // the same per-display work as the screenshots
+            let tCapture = start.duration(to: .now)
             await MainActor.run {
-                AppState.shared.latencyText = String(format: "%.0f ms (%d displays)", latency, Freeze.shared.displays.count)
-                let perDisplay = Freeze.shared.displays.map { "\($0.image.width)x\($0.image.height)\($0.hdrImage != nil ? " HDR" : "")" }.joined(separator: ", ")
-                AppLog.line("freeze latency \(Int(latency)) ms across \(Freeze.shared.displays.count) displays: \(perDisplay)")
                 self.showPanels(tool: tool)
+                CATransaction.flush() // commit the Freeze Frame layers, then stop the clock
+                let total = start.duration(to: .now)
+                let totalMs = ms(total)
+                self.freezeLatencies.append(Double(totalMs))
+                AppState.shared.latencyText = String(format: "%.0f ms (%d displays)", Double(totalMs), Freeze.shared.displays.count)
+                AppLog.line("freeze \(totalMs) ms (content \(ms(tContent)), capture \(ms(tCapture - tContent)), present \(ms(total - tCapture)))")
+                for (i, fd) in Freeze.shared.displays.enumerated() {
+                    let img = fd.hdrImage ?? fd.image
+                    let f = fd.screen.frame
+                    AppLog.line("freeze d\(i) \(fd.screen.localizedName): \(Int(f.width))×\(Int(f.height)) pt @\(Int(fd.screen.backingScaleFactor))x → \(img.width)×\(img.height) px\(fd.hdrImage != nil ? " HDR" : "")")
+                }
+                if let p50 = self.freezeLatencies.percentile(50), let p95 = self.freezeLatencies.percentile(95) {
+                    AppLog.line("freeze p50 \(Int(p50)) ms, p95 \(Int(p95)) ms over \(self.freezeLatencies.count) opens (target p95 ≤ 200 ms)")
+                }
                 AppLog.line("phase=frozen tool=\(tool.title)")
                 self.measureWindowCorners()
             }
@@ -2344,7 +2360,8 @@ enum Hotkeys {
             guard id.id >= 1 && id.id <= 3 else { return OSStatus(eventNotHandledErr) }
             let tools = [Tool.capRegion, .capScreen, .recRegion]
             let t = tools[Int(id.id) - 1]
-            DispatchQueue.main.async { AppDelegate.shared?.trigger(t) }
+            let start = ContinuousClock.now // hotkey press -> Freeze Frame latency starts here
+            DispatchQueue.main.async { AppDelegate.shared?.trigger(t, at: start) }
             return noErr
         }, 1, &type, nil, nil)
     }
