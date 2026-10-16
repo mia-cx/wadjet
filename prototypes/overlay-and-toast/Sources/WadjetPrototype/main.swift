@@ -136,7 +136,9 @@ final class Freeze {
 // blur fill and a tinted face. SwiftUI drives glass via a private `CAFilter`
 // (type "glassBackground") re-set through `CABackdropLayer.setFilters:` every
 // animation frame, so hooking that setter zeroes blur/fill/face on every frame,
-// including transitions. Private API — fine for private use, not App Store.
+// including transitions, and pins the layer's `scale` to 1 (native-res
+// sampling; the default 0.5 looks soft once the blur is gone).
+// Private API — fine for private use, not App Store.
 enum ClearGlassPatch {
     static let identityFill = CGColor(red: 1, green: 1, blue: 1, alpha: 0)
     static func install() {
@@ -171,6 +173,7 @@ enum ClearGlassPatch {
                 f.setValue(4 * min(1, abs(refraction) / 48.1), forKey: "inputAberrationAmount")
                 f.setValue(37, forKey: "inputAberrationHeight")
                 f.setValue(3, forKey: "inputAberrationOffset")
+                me.setValue(1, forKey: "scale") // native-res backdrop sampling
             }
             origFn(me, sel, arr)
         }
@@ -1484,6 +1487,20 @@ struct ToolbarView: View {
 
     var limit: CGFloat { (screen?.frame.width ?? 1280) - 40 }
 
+    // the pointer in the panel view's coords, against hoverRect
+    func pointerInside() -> Bool {
+        guard let p = ctrl.toolbarPanel else { return false }
+        // the content view fills the panel, so view coords = screen - origin
+        let q = CGPoint(x: NSEvent.mouseLocation.x - p.frame.minX,
+                        y: NSEvent.mouseLocation.y - p.frame.minY)
+        return hoverRect.contains(q)
+    }
+    func syncExpanded() {
+        let h = hoverInside || s.openMenu != nil || lensActive
+        if h != s.toolbarExpanded { ProtoLog.line("hover -> \(h)") }
+        s.toolbarExpanded = h
+    }
+
     func syncHit() {
         ToolbarHit.rect = hoverRect
         if expanded {
@@ -1500,28 +1517,29 @@ struct ToolbarView: View {
         morph
             .frame(width: panelW, height: panelH, alignment: .top)
             .coordinateSpace(name: "panel")
-            // expand/collapse driven by hoverRect — pointer can rest on the
-            // collapsed island or move down into the shape without flapping
+            // hoverInside tracks the pointer; the bar stays expanded while it
+            // is inside, a menu is open, or the selection lens is pressed
             .onContinuousHover(coordinateSpace: .named("panel")) { phase in
                 switch phase {
                 case .active(let p):
                     // p is in SwiftUI coords (top-left); hoverRect is in the
                     // view's coords — convert
-                    let q = CGPoint(x: p.x, y: panelH - p.y)
-                    let h = hoverRect.contains(q)
-                    if h != s.toolbarExpanded { ProtoLog.line("hover -> \(h)") }
-                    s.toolbarExpanded = h || s.openMenu != nil
+                    hoverInside = hoverRect.contains(CGPoint(x: p.x, y: panelH - p.y))
                 case .ended:
-                    if s.openMenu == nil { s.toolbarExpanded = false }
+                    // hover events can stop during a drag — recompute from the
+                    // live pointer position, in the view's coords
+                    hoverInside = pointerInside()
                 }
             }
+            .onChange(of: hoverInside) { syncExpanded() }
+            .onChange(of: lensActive) { syncExpanded() }
             .onAppear { syncHit() }
             .onChange(of: rowSize) { syncHit() }
             .onChange(of: expanded) {
                 syncHit()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
-            .onChange(of: s.openMenu) { ctrl.syncMenu() }
+            .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect = nil; syncHit() }
     }
 
@@ -1608,6 +1626,7 @@ struct ToolbarView: View {
     @State var pressActive = false
     @State var menuByHold = false
     @State var holdTask: Task<Void, Never>?
+    @State var hoverInside = false
     var lensActive: Bool { pressing || dragging }
 
     func openToolMenu(_ t: Tool) {
@@ -1617,8 +1636,6 @@ struct ToolbarView: View {
         s.openMenu = s.openMenu == t ? nil : t
         ctrl.syncMenu()
     }
-    // cell under a row-space x (group gaps return nil)
-    func tool(atRowX x: CGFloat) -> Tool? { cellCentres.first { abs($0.value.x - x) <= toolD / 2 }?.key }
     func nearestTool(to x: CGFloat) -> Tool? { cellCentres.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key }
     var rowEnds: (CGFloat, CGFloat) {
         let xs = cellCentres.values.map(\.x)
@@ -1642,6 +1659,7 @@ struct ToolbarView: View {
         return Image(systemName: t.symbol).font(.system(size: 22))
             .foregroundStyle(.white)
             .frame(width: toolD, height: toolD)
+            .contentShape(Rectangle()) // whole cell, not just the glyph
             .mask {
                 ZStack {
                     Rectangle()
@@ -1727,6 +1745,7 @@ struct ToolbarView: View {
                 .allowsHitTesting(false)
         }
         .fixedSize()
+        .contentShape(Rectangle()) // press anywhere in the row, gaps included
         .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
         .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
         // press = lens pops in under the finger, flick = drag it, hold = menu
@@ -1735,7 +1754,7 @@ struct ToolbarView: View {
                 if !pressActive { // first event of the press: lens in at once
                     pressActive = true; pressing = true
                     pressX = v.startLocation.x
-                    pressTool = tool(atRowX: v.startLocation.x)
+                    pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
                     // it slides to the pressed cell with the click spring
                     if let t = pressTool, let c = cellCentres[t], c.x != blobX {
                         withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x }
@@ -1760,13 +1779,16 @@ struct ToolbarView: View {
                 holdTask?.cancel()
                 let wasDragging = dragging
                 pressing = false; dragging = false
+                // hover events may not have arrived during the drag — refresh
+                // before lensActive falls, so releasing outside collapses
+                hoverInside = pointerInside()
                 if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
                         // shrink back to the rest capsule on the chosen cell
                         withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { blobX = cellCentres[n]?.x ?? blobX }
                     }
-                } else if !menuByHold, let t = tool(atRowX: v.location.x), t != s.tool {
+                } else if !menuByHold, let t = nearestTool(to: v.location.x), t != s.tool {
                     AppDelegate.shared?.trigger(t)
                     withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = cellCentres[t]?.x ?? blobX }
                 }
