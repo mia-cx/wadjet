@@ -380,9 +380,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: selection -> capture or recording
     // a live shot of one window, "through" the Freeze Frame; nil if SCK can't
     // find it anymore — callers fall back to cropping the frozen image
-    func captureWindow(id: CGWindowID, display: Int) async -> CGImage? {
+    func captureWindow(id: CGWindowID, screen: NSScreen) async -> CGImage? {
         guard let scw = overlayCtrl.scWindows[id] else { return nil }
-        let screen = Freeze.shared.displays[display].screen
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
         let sc = screen.backingScaleFactor
         let cfg = SCScreenshotConfiguration()
@@ -403,19 +402,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
+            // read the screen and the frozen-crop fallback before closeAll
+            // clears the Freeze Frame — afterwards both would be gone
+            let screen = Freeze.shared.displays[display].screen
+            let fallback = Freeze.shared.crop(rect: frame, on: display, hdr: true)
             overlayCtrl.closeAll()
             Task { @MainActor in
-                var thumb = await captureWindow(id: id, display: display)
+                var thumb = await captureWindow(id: id, screen: screen)
                 if thumb == nil {
                     AppLog.line("window \(id) not capturable; falling back to frozen crop")
-                    thumb = Freeze.shared.crop(rect: frame, on: display, hdr: true)
+                    thumb = fallback
                 }
                 runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
             }
         } else {
             recordingWindowID = id // kept for the real SCStream later
+            let screen = Freeze.shared.displays[display].screen
             Task { @MainActor in
-                startRecording(rect: frame, display: display, thumb: await captureWindow(id: id, display: display))
+                startRecording(rect: frame, display: display, thumb: await captureWindow(id: id, screen: screen))
             }
         }
     }
