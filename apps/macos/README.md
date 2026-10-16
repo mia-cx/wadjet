@@ -38,8 +38,8 @@ permission alert has a shortcut to that pane) and trigger again.
         -exportOptionsPlist ExportOptions.plist -exportPath build/export
 
 The archive builds without CLEAR_GLASS_PATCH, so the private lens patch is
-compiled out. Export needs an Apple Distribution certificate and a Mac App
-Store provisioning profile for `cx.mia.wadjet`.
+compiled out. Export needs Apple Distribution and Mac Installer Distribution
+certificates and a Mac App Store provisioning profile for `cx.mia.wadjet`.
 
 ## Hotkeys
 
