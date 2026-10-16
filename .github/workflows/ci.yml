@@ -39,6 +39,16 @@ jobs:
       - name: Test WadjetKit
         working-directory: apps/macos/WadjetKit
         run: swift test -Xswiftc -warnings-as-errors
+      - name: Build store variant
+        working-directory: apps/macos
+        run: |
+          WADJET_CLEAR_GLASS=0 WADJET_NO_OPEN=1 ./run.sh SWIFT_TREAT_WARNINGS_AS_ERRORS=YES SWIFT_SUPPRESS_WARNINGS=NO
+          # the store variant must not reference the private glass API
+          # (the literals are inlined as immediates under -O, so check the
+          # swizzle imports and ClearGlassPatch symbols, not just strings)
+          ! strings build/Wadjet.app/Contents/MacOS/Wadjet | grep -E 'CABackdropLayer|glassBackground|setFilters:'
+          ! nm -u build/Wadjet.app/Contents/MacOS/Wadjet | grep -E 'class_addMethod|method_setImplementation|imp_implementationWithBlock'
+          ! nm build/Wadjet.app/Contents/MacOS/Wadjet | grep ClearGlassPatch
       - name: Build + verify
         working-directory: apps/macos
         run: |

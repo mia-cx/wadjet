@@ -18,6 +18,10 @@ does.
 The app runs in the App Sandbox, so its data (Captures, log) lives in its
 container: `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/`.
 
+`WADJET_CLEAR_GLASS=0 ./run.sh` builds the store variant without the private
+clear-glass lens patch (the lens then sits behind the toolbar icons with
+regular glass).
+
 `cd WadjetKit && swift test` runs the UI-free tests (colour formats, Measure
 edge finding) without building the app.
 

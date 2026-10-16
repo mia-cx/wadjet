@@ -129,13 +129,14 @@ final class Freeze {
     }
 }
 
+#if CLEAR_GLASS_PATCH
 // SwiftUI `Glass` has no knob for "refraction only" — `.clear` still carries a
 // blur fill and a tinted face. SwiftUI drives glass via a private `CAFilter`
 // (type "glassBackground") re-set through `CABackdropLayer.setFilters:` every
 // animation frame, so hooking that setter zeroes blur/fill/face on every frame,
 // including transitions, and pins the layer's `scale` to 1 (native-res
 // sampling; the default 0.5 looks soft once the blur is gone).
-// Private API — fine for private use, not App Store.
+// Private API, so only CLEAR_GLASS_PATCH builds (run.sh) compile it; store builds leave it out.
 enum ClearGlassPatch {
     static let identityFill = CGColor(red: 1, green: 1, blue: 1, alpha: 0)
     static func install() {
@@ -180,6 +181,7 @@ enum ClearGlassPatch {
         }
     }
 }
+#endif
 
 @MainActor
 func clipboard(_ s: String) {
@@ -221,7 +223,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var recordingPanel: NSPanel?
 
     func applicationDidFinishLaunching(_ n: Notification) {
+        #if CLEAR_GLASS_PATCH
         ClearGlassPatch.install()
+        #endif
         NSApp.setActivationPolicy(.accessory)
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
@@ -1653,6 +1657,15 @@ struct ToolbarView: View {
         Capsule().frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
     }
 
+    func lens(_ glass: Glass) -> some View {
+        Capsule().fill(.clear)
+            .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+            .glassEffect(lensActive ? glass : .identity, in: .capsule)
+            .glassEffectTransition(.materialize)
+            .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
+            .allowsHitTesting(false)
+    }
+
     // one cell of the tab bar: plain white icon, cut out wherever the
     // capsule/lens covers it — the accent overlay row draws that part
     func cell(_ t: Tool) -> some View {
@@ -1698,8 +1711,9 @@ struct ToolbarView: View {
     }
 
     var toolRow: some View {
-        // rest highlight sits below the icons in .background; the glass lens is
-        // added as the topmost layer below (it must refract the icons)
+        // rest highlight sits below the icons in .background; the glass lens
+        // goes on top with the clear-glass patch (it must refract the icons)
+        // and behind them without it
         HStack(spacing: 8) {
             ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: cell)
             Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
@@ -1736,16 +1750,15 @@ struct ToolbarView: View {
             .foregroundStyle(Color.wadjetAccent)
             .allowsHitTesting(false)
         }
-        // the glass lens, always present and topmost: identity glass at rest,
-        // clear glass while pressing — animating the effect, never inserted
-        .overlay {
-            Capsule().fill(.clear)
-                .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
-                .glassEffect(lensActive ? .clear : .identity, in: .capsule)
-                .glassEffectTransition(.materialize)
-                .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
-                .allowsHitTesting(false)
-        }
+        // the glass lens: identity glass at rest, glass while pressing —
+        // animating the effect, never inserted. With the clear-glass patch it
+        // sits on top and refracts the icons; without it, glass would blur and
+        // tint them, so regular glass sits behind the icons instead
+        #if CLEAR_GLASS_PATCH
+        .overlay { lens(.clear) }
+        #else
+        .background { lens(.regular) }
+        #endif
         .fixedSize()
         .contentShape(Rectangle()) // press anywhere in the row, gaps included
         .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
