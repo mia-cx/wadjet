@@ -1,14 +1,16 @@
 # wadjet
 
-A customisable, macOS-native screenshot and screen-recording utility, in the spirit of ShareX. Swift, macOS 26+.
+## Building and testing the app
 
-## Build and run
+- Build through `apps/macos/run.sh`, not bare `swift run`: macOS ties the Screen Recording grant to the bundle's signing identity, so only the Apple Development signature keeps the grant across rebuilds. An ad-hoc build re-prompts every time.
+- Local builds use the Xcode beta (`run.sh` sets `DEVELOPER_DIR`); CI builds with the runner's stable Xcode 26 and warnings as errors. Keep the code compiling on both.
+- Drive the running app with `apps/macos/tools/cmd.sh` and read the result in `~/Library/Application Support/wadjet/app.log`, because the overlay can't be inspected while you sit outside it.
+- Get Mia's go-ahead before any screenshot, screen recording, or synthetic mouse input: her screens show work.
 
-The app lives in `apps/macos` (SwiftPM, one Swift target). `apps/macos/run.sh` builds,
-signs and launches `build/Wadjet.app`; `WADJET_NO_OPEN=1` skips launching (CI's path).
-`apps/macos/tools/cmd.sh <command>` posts a debug command to the running app via
-DistributedNotificationCenter — see `apps/macos/README.md` for the command list.
-Logs land in `~/Library/Application Support/wadjet/app.log`.
+## Code gotchas
+
+- The selection lens strips Liquid Glass blur and tint by swizzling the private `CABackdropLayer.setFilters:` (`ClearGlassPatch` in `main.swift`). SwiftUI offers no public control for it, so keep the patch and recheck it after each macOS update.
+- Each display has its own Freeze Frame panel. Convert `NSEvent.mouseLocation` with `window.convertPoint(fromScreen:)` before using it in a view, because raw screen coordinates are only correct on the display at origin 0,0.
 
 ## Agent skills
 
