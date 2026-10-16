@@ -1501,7 +1501,7 @@ struct ToolbarView: View {
     // the rounded end cap (its centre pillH/2 from the edge). Frozen: the
     // current Tool's icon only. Recording: red dot leading, elapsed trailing.
     // island: items sit concentric with the end caps; notch: centred in the ears
-    var islandSlot: CGFloat { hasNotch ? earW : pillH }
+    var islandSlot: CGFloat { hasNotch ? earW : pillH + 6 }
     var islandContent: some View {
         HStack(spacing: 0) {
             if recording {
@@ -1509,7 +1509,7 @@ struct ToolbarView: View {
                     .frame(width: islandSlot, height: pillH)
             } else {
                 Image(systemName: (s.tool ?? .capRegion).symbol)
-                    .font(.system(size: min(pillH * 0.62, islandSlot - 10)))
+                    .font(.system(size: min(pillH * 0.45, islandSlot - 14)))
                     .frame(width: islandSlot, height: pillH)
             }
             Spacer(minLength: 0)
