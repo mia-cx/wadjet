@@ -87,15 +87,21 @@ final class Freeze {
     var displays: [FrozenDisplay] = []
     var panels: [NSPanel] = []
     var capturedAt = Date()
-    func pixel(at pt: CGPoint, on d: Int) -> (UInt8, UInt8, UInt8) {
-        guard d < displays.count, let bm = displays[d].bitmap else { return (0, 0, 0) }
+    // the bitmap pixel under a view point — shared by the colour readout, the
+    // loupe and the ruler so they always agree (y is top-down)
+    func pointerPixel(_ pt: CGPoint, on d: Int) -> (x: Int, y: Int) {
         let f = displays[d]
         let sx = CGFloat(f.bitmapWidth) / f.screen.frame.width
         let sy = CGFloat(f.bitmapHeight) / f.screen.frame.height
         // pt is in view coords (bottom-left origin); image rows are top-left origin
-        let x = min(max(0, Int(pt.x * sx)), f.bitmapWidth - 1)
-        let y = min(max(0, Int((f.screen.frame.height - pt.y) * sy)), f.bitmapHeight - 1)
-        let i = (y * f.bitmapWidth + x) * 4
+        return (min(max(0, Int((pt.x * sx).rounded(.down))), f.bitmapWidth - 1),
+                min(max(0, Int(((f.screen.frame.height - pt.y) * sy).rounded(.down))), f.bitmapHeight - 1))
+    }
+    func pixel(at pt: CGPoint, on d: Int) -> (UInt8, UInt8, UInt8) {
+        guard d < displays.count, let bm = displays[d].bitmap else { return (0, 0, 0) }
+        let f = displays[d]
+        let p = pointerPixel(pt, on: d)
+        let i = (p.y * f.bitmapWidth + p.x) * 4
         return (bm[i + 1], bm[i + 2], bm[i + 3]) // ARGB -> RGB
     }
     // direct read in bitmap-pixel coords (x right, y down from the top)
@@ -1071,21 +1077,31 @@ final class OverlayNSView: NSView {
         if lx + sz > bounds.width - 4 { lx = pt.x - 26 - sz }
         lx = min(max(4, lx), bounds.width - sz - 4)
         ly = min(max(4, ly), bounds.height - totalH - 4)
-        let f = fd; let sx = CGFloat(f.image.width) / bounds.width, sy = CGFloat(f.image.height) / bounds.height
-        // view coords are bottom-left origin; image rows are top-left origin
-        let cxp = pt.x * sx, cyp = (bounds.height - pt.y) * sy
-        let nf = CGFloat(n)
-        let imgBounds = CGRect(x: 0, y: 0, width: f.image.width, height: f.image.height)
-        let src = CGRect(x: cxp - nf / 2, y: cyp - nf / 2, width: nf, height: nf).intersection(imgBounds)
-        guard let crop = f.image.cropping(to: src.integral) else { return }
-        ctx.saveGState()
-        ctx.interpolationQuality = .none
-        ctx.draw(crop, in: CGRect(x: lx, y: ly + infoH + 6, width: sz, height: sz))
-        ctx.restoreGState()
-        // centre pixel outline + border
+        // exactly n×n bitmap pixels centred on the pointer's pixel; at image
+        // edges the crop is drawn at its matching cell offset so the centre
+        // cell always shows the pointer's pixel
+        let f = fd
+        let pp = Freeze.shared.pointerPixel(pt, on: di)
+        let n2 = n / 2
+        let x0 = pp.x - n2, y0 = pp.y - n2
+        let ix0 = max(0, x0), iy0 = max(0, y0)
+        let ix1 = min(f.image.width - 1, x0 + n - 1), iy1 = min(f.image.height - 1, y0 + n - 1)
+        let cell = CGFloat(px), gridY = ly + infoH + 6
+        if ix1 >= ix0, iy1 >= iy0,
+           let crop = f.image.cropping(to: CGRect(x: ix0, y: iy0, width: ix1 - ix0 + 1, height: iy1 - iy0 + 1)) {
+            ctx.saveGState()
+            ctx.interpolationQuality = .none
+            ctx.draw(crop, in: CGRect(x: lx + CGFloat(ix0 - x0) * cell,
+                                     y: gridY + sz - CGFloat(iy1 - y0 + 1) * cell,
+                                     width: CGFloat(ix1 - ix0 + 1) * cell,
+                                     height: CGFloat(iy1 - iy0 + 1) * cell))
+            ctx.restoreGState()
+        }
+        // centre pixel outline + border — stroke inset so it stays inside the cell
         let mid = CGFloat(n / 2 * px)
         NSColor.white.setStroke()
-        NSBezierPath(rect: NSRect(x: lx + mid, y: ly + infoH + 6 + mid, width: 11, height: 11)).stroke()
+        let cc = NSBezierPath(rect: NSRect(x: lx + mid + 0.5, y: gridY + mid + 0.5, width: cell - 1, height: cell - 1))
+        cc.lineWidth = 1; cc.stroke()
         NSColor.black.withAlphaComponent(0.4).setStroke()
         NSBezierPath(roundedRect: NSRect(x: lx, y: ly, width: sz, height: totalH), xRadius: 8, yRadius: 8).stroke()
         if rows.isEmpty {
@@ -1275,8 +1291,7 @@ final class OverlayNSView: NSView {
     func scanRuler(at pt: CGPoint) {
         let f = fd
         let sx = CGFloat(f.bitmapWidth) / bounds.width, sy = CGFloat(f.bitmapHeight) / bounds.height
-        let px = min(max(0, Int(pt.x * sx)), f.bitmapWidth - 1)
-        let py = min(max(0, Int((bounds.height - pt.y) * sy)), f.bitmapHeight - 1) // bitmap rows are top-down
+        let (px, py) = Freeze.shared.pointerPixel(pt, on: di)
         let c0 = Freeze.shared.pixelXY(px, py, on: di)
         func diff(_ x: Int, _ y: Int) -> Bool {
             let c = Freeze.shared.pixelXY(x, y, on: di)
@@ -1340,6 +1355,7 @@ enum ToolbarHit {
 // onGeometryChange — used for hover mapping, menu anchors and CGEvent driving
 enum ToolbarBtnFrames {
     nonisolated(unsafe) static var rects: [Tool: CGRect] = [:]
+    nonisolated(unsafe) static var blobRect: CGRect? = nil // menu droplet on the selected button
 }
 
 struct ToolbarView: View {
@@ -1379,7 +1395,6 @@ struct ToolbarView: View {
     // is sized from the *measured* row — never a hand-coded width — so the
     // buttons can never be clipped.
     @State var rowSize = CGSize(width: 520, height: 66)
-    @State var glassD: CGFloat = 72 // measured glass button diameter
     // The row sits rowGap below the menu bar on every display. Notched display:
     // the shape hangs from the top edge and its top band holds the notch.
     // Island: the expanded shape drops below the menu bar, covering none of it.
@@ -1423,7 +1438,7 @@ struct ToolbarView: View {
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu() }
-            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect = nil; syncHit() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -1487,53 +1502,55 @@ struct ToolbarView: View {
         .padding(.top, contentTop)
     }
 
-    // click an unselected Tool to select it; click the selected Tool (or
-    // right-click any Tool that has one) to open its menu
+    let toolD: CGFloat = 72
+    // click selects a Tool; menus open via the chevron blob, right-click, or a
+    // long press — a plain click on the already-selected Tool does nothing
     func btnClicked(_ t: Tool) {
         TipPanel.hide()
-        if s.tool == t {
-            s.openMenu = s.openMenu == t ? nil : t
-            ctrl.syncMenu()
-        } else {
-            AppDelegate.shared?.trigger(t)
-        }
+        if s.tool != t { AppDelegate.shared?.trigger(t) }
+    }
+    func openToolMenu(_ t: Tool) {
+        guard t.hasMenu else { return }
+        TipPanel.hide()
+        if s.tool != t { AppDelegate.shared?.trigger(t) }
+        s.openMenu = s.openMenu == t ? nil : t
+        ctrl.syncMenu()
     }
 
+    // every button has the same structure in both states so switching Tools
+    // animates properties only — no view insertion/removal in the glass row
     func tbtn(_ t: Tool) -> some View {
-        // selected Tool gets the prominent glass, others plain glass; the
-        // buttons are real circles — the border shape is declared on the
-        // button, not clipped onto the label
         let selected = s.tool == t
-        // selected: a filled light disc drawn plainly (glass clips its own
-        // overlays) sized to the measured glass diameter; unselected: the
-        // standard glass circle
-        let btn = Button { btnClicked(t) } label: {
+        return Button { btnClicked(t) } label: {
             ZStack {
-                if selected { Circle().fill(.white.opacity(0.92)) }
+                Circle().fill(.white.opacity(selected ? 0.92 : 0))
                 Image(systemName: t.symbol).font(.system(size: 22))
                     .foregroundStyle(selected ? Color.black : Color.white)
             }
-            .frame(width: selected ? glassD : 52, height: selected ? glassD : 52)
-            .overlay(alignment: .bottomTrailing) {
-                if t.hasMenu && selected {
-                    Image(systemName: "chevron.down").font(.system(size: 7, weight: .bold))
-                        .foregroundStyle(.black.opacity(0.8)).offset(x: -glassD * 0.08, y: -glassD * 0.08)
+            .frame(width: toolD, height: toolD)
+            .glassEffect(.regular.interactive(), in: .circle)
+            .glassEffectID(t, in: ns)
+        }
+        .buttonStyle(.plain)
+        .overlay(alignment: .bottomTrailing) {
+            // a glass droplet budding off the selected menu-capable button;
+            // its own Button + glassEffectID so it never flies across the row
+            if t.hasMenu && selected {
+                Button { openToolMenu(t) } label: {
+                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 26, height: 26)
+                        .glassEffect(.regular.interactive(), in: .circle)
+                        .glassEffectID("menu-\(t)", in: ns)
+                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect = $0 }
                 }
+                .buttonStyle(.plain)
+                .transition(.scale(scale: 0.6).combined(with: .opacity))
+                .offset(x: 9, y: 9) // centre ~4 pt inside the button's corner
             }
         }
-        return Group {
-            if selected { btn.buttonStyle(.plain) }
-            else {
-                btn.buttonStyle(.glass).controlSize(.extraLarge).buttonBorderShape(.circle)
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { if abs(glassD - $0) > 1 { glassD = $0 } }
-            }
-        }
-        .overlay(RightClickCatcher {
-            guard t.hasMenu else { return }
-            TipPanel.hide()
-            if s.tool != t { AppDelegate.shared?.trigger(t) }
-            s.openMenu = t; ctrl.syncMenu()
-        })
+        .simultaneousGesture(LongPressGesture(minimumDuration: 0.4).onEnded { _ in openToolMenu(t) })
+        .overlay(RightClickCatcher { openToolMenu(t) })
         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
             ToolbarBtnFrames.rects[t] = $0
         }
@@ -1550,13 +1567,15 @@ struct ToolbarView: View {
             }
             .padding(10)
             .fixedSize()
+            .animation(.smooth(duration: 0.2), value: s.tool) // selection crossfades; nothing is inserted/removed
             .onGeometryChange(for: CGSize.self) { $0.frame(in: .named("panel")).size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH); ProtoLog.line("rowSize -> \($0.debugDescription)") } }
             // map the pointer to a Tool button using measured frames — per-button
             // onHover is unreliable inside the glass container
             .onContinuousHover(coordinateSpace: .named("panel")) { phase in
                 switch phase {
                 case .active(let p):
-                    if let t = ToolbarBtnFrames.rects.first(where: { $0.value.contains(p) })?.key {
+                    if let b = ToolbarBtnFrames.blobRect, b.contains(p) { TipPanel.hide() }
+                    else if let t = ToolbarBtnFrames.rects.first(where: { $0.value.contains(p) })?.key {
                         if TipPanel.tool != t { ProtoLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects.count)") }
                         TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t) ?? .zero)
                     } else { if TipPanel.tool != nil { ProtoLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
