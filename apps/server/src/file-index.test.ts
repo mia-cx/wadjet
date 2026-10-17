@@ -66,6 +66,19 @@ const contract = (name: string, index: () => FileIndex) =>
       expect(await files.findByIdempotencyKey('mia', 'other-key')).toBeUndefined()
     })
 
+    it('resolves an idempotency-key conflict to the first row and rejects a taken id', async () => {
+      const files = index()
+      const first = row('aaaa01', T1, 'mia', { idempotencyKey: 'key-1' })
+      await files.insert(first)
+
+      const second = row('bbbb02', T2, 'mia', { idempotencyKey: 'key-1' })
+      expect(await files.insert(second)).toEqual(first)
+      expect((await files.list('mia', 10)).map((r) => r.id)).toEqual(['aaaa01'])
+
+      const taken = row('aaaa01', T3, 'mia')
+      await expect(files.insert(taken)).rejects.toThrow()
+    })
+
     it('gets and deletes by id', async () => {
       const files = index()
       await files.insert(row('aaaa01', T1))

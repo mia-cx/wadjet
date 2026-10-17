@@ -28,7 +28,12 @@ export const canonicalName = (row: Pick<FileRow, 'id' | 'extension'>): string =>
   row.extension ? `${row.id}.${row.extension}` : row.id
 
 export interface FileIndex {
-  insert(row: FileRow): Promise<void>
+  /**
+   * Returns the row the index now holds for the owner's idempotency key:
+   * `row` itself, or the owner's earlier row with the same key. Throws when
+   * `row.id` is taken.
+   */
+  insert(row: FileRow): Promise<FileRow>
   get(id: string): Promise<FileRow | undefined>
   findByIdempotencyKey(owner: string, key: string): Promise<FileRow | undefined>
   /** The owner's files newest first by (createdAt desc, id desc), strictly after `after`, at most `limit`. */
@@ -41,8 +46,16 @@ export const memoryFileIndex = (): FileIndex => {
   const rows = new Map<string, FileRow>()
   return {
     insert(row) {
+      if (rows.has(row.id)) return Promise.reject(new Error(`File ${row.id} already exists`))
+      const existing =
+        row.idempotencyKey === null
+          ? undefined
+          : [...rows.values()].find(
+              (r) => r.owner === row.owner && r.idempotencyKey === row.idempotencyKey,
+            )
+      if (existing) return Promise.resolve(existing)
       rows.set(row.id, row)
-      return Promise.resolve()
+      return Promise.resolve(row)
     },
     get(id) {
       return Promise.resolve(rows.get(id))

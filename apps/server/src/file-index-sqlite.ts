@@ -15,7 +15,22 @@ export const sqliteFileIndex = (path: string): FileIndex => {
 
   return {
     async insert(row) {
-      db.insert(files).values(row).run()
+      const inserted = db
+        .insert(files)
+        .values(row)
+        .onConflictDoNothing({ target: [files.owner, files.idempotencyKey] })
+        .returning()
+        .get()
+      const key = row.idempotencyKey
+      if (inserted || key === null) return inserted ?? row
+      // The (owner, idempotency_key) conflict lost to an earlier row; hand it back.
+      const earlier = db
+        .select()
+        .from(files)
+        .where(and(eq(files.owner, row.owner), eq(files.idempotencyKey, key)))
+        .get()
+      if (!earlier) throw new Error(`Insert of ${row.id} conflicted but no earlier row exists`)
+      return earlier
     },
     async get(id) {
       const row = db.select().from(files).where(eq(files.id, id)).get()

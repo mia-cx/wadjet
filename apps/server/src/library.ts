@@ -32,6 +32,9 @@ export interface UploadInput {
 
 const FILENAME_EXTENSION = /\.([0-9A-Za-z]{1,10})$/
 
+const MAX_ID_ATTEMPTS = 5
+const BLOB_KEY_TOKEN_CHARS = 16
+
 const cursorSchema = Schema.fromJsonString(Schema.Tuple([Time, Id]))
 
 const base64url = (text: string): string =>
@@ -80,8 +83,15 @@ export const createLibrary = (deps: LibraryDeps) => {
         if (existing) return { file: { ...toFile(existing), deleteUrl: null }, created: false }
       }
 
-      const id = deps.ids()
       const token = deps.tokens()
+      const deleteTokenHash = await sha256Hex(token)
+      let id = ''
+      for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {
+        id = deps.ids()
+        if ((await deps.files.get(id)) === undefined) break
+        if (attempt === MAX_ID_ATTEMPTS - 1)
+          throw new Error(`Could not draw a free id in ${MAX_ID_ATTEMPTS} attempts`)
+      }
       const createdAt = new Date(Math.floor(deps.clock().getTime() / 1000) * 1000)
       const extension =
         input.filename?.match(FILENAME_EXTENSION)?.[1]?.toLowerCase() ??
@@ -89,7 +99,8 @@ export const createLibrary = (deps: LibraryDeps) => {
         null
       const filename = input.filename ?? (extension ? `${id}.${extension}` : id)
       const kind = input.kind ?? kindFor(input.contentType)
-      const blobKey = `files/${id}`
+      // The attempt's token makes the key unique even if two uploads draw the same id.
+      const blobKey = `files/${id}-${deleteTokenHash.slice(0, BLOB_KEY_TOKEN_CHARS)}`
       const row: FileRow = {
         id,
         owner: input.owner,
@@ -101,16 +112,22 @@ export const createLibrary = (deps: LibraryDeps) => {
         device: input.device ?? null,
         createdAt,
         blobKey,
-        deleteTokenHash: await sha256Hex(token),
+        deleteTokenHash,
         idempotencyKey: input.idempotencyKey ?? null,
       }
 
       await deps.blobs.put(blobKey, input.body, input.size, input.contentType)
+      let stored: FileRow
       try {
-        await deps.files.insert(row)
+        stored = await deps.files.insert(row)
       } catch (error) {
         await deps.blobs.delete(blobKey)
         throw error
+      }
+      if (stored.id !== row.id) {
+        // An overlapping upload with the same idempotency key won; drop our blob.
+        await deps.blobs.delete(blobKey)
+        return { file: { ...toFile(stored), deleteUrl: null }, created: false }
       }
       return { file: { ...toFile(row), deleteUrl: `${deps.baseUrl}/d/${token}` }, created: true }
     },
