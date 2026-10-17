@@ -13,6 +13,18 @@ const dir = mkdtempSync(join(tmpdir(), 'wadjet-blobs-'))
 afterAll(() => rmSync(dir, { recursive: true, force: true }))
 blobStoreContract('filesystemBlobStore', () => filesystemBlobStore(dir))
 
+describe('filesystemBlobStore root', () => {
+  it('rejects keys that resolve outside the root', async () => {
+    const blobs = filesystemBlobStore(dir)
+    const empty = () => new ReadableStream({ start: (ctl) => ctl.close() })
+    await expect(blobs.put('../outside', empty(), 0, 'image/webp')).rejects.toThrow()
+    await expect(blobs.delete('../../escape')).rejects.toThrow()
+    // '..' in a stored upload id can't escape either.
+    await expect(blobs.putPart('files/x', '../../up', 1, empty(), 0)).rejects.toThrow()
+    await expect(blobs.abortMultipart('files/x', '../../up')).rejects.toThrow()
+  })
+})
+
 describe('s3BlobStore complete', () => {
   // aws4fetch signs and then calls the global fetch — stub it, keep signing.
   const stubbed = (completeBody: string, completeStatus = 200, headStatus = 404) => {

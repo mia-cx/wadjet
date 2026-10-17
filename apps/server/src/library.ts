@@ -252,6 +252,10 @@ export const createLibrary = (deps: LibraryDeps) => {
       // Write first, publish second: the row only ever points at bytes that
       // exist. The blob key carries a fresh token (not the version) — a
       // superseded blob can't be addressed by the version formula anymore.
+      // The row check comes before the write: an unknown file gets nothing
+      // staged, and the key never reaches storage for a bad id.
+      const first = await deps.files.get(id)
+      if (!first || first.owner !== owner || first.deletedAt) throw notFound(`No file ${id}.`)
       const blobKey = `thumbnails/${id}-${crypto.randomUUID()}`
       await deps.blobs.put(blobKey, body, size, contentType)
       for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {
@@ -428,11 +432,11 @@ export const createLibrary = (deps: LibraryDeps) => {
       // One completer at a time: the loser 409s and retries, a crashed
       // completer's lease expires so the session never locks.
       const now = deps.clock()
-      const claimed = await deps.uploads.claimCompletion(
-        id,
-        now,
-        new Date(now.getTime() + COMPLETE_LEASE_MS),
-      )
+      // Whole seconds: indexes persist completing_until at second precision
+      // (drizzle mode 'timestamp'), so the takeover fence below can compare
+      // for equality without millisecond drift between memory and stored.
+      const until = new Date(Math.floor((now.getTime() + COMPLETE_LEASE_MS) / 1000) * 1000)
+      const claimed = await deps.uploads.claimCompletion(id, now, until)
       if (claimed === null)
         throw new ProtocolError(
           409,

@@ -7,6 +7,7 @@ import { filesystemBlobStore } from './blob-store-fs.ts'
 import type { CachePurger } from './ports.ts'
 import { testApp, upload } from './test-helpers.ts'
 import { memoryUploadIndex, type UploadRow } from './upload-index.ts'
+import { sqliteUploadIndex } from './upload-index-sqlite.ts'
 
 const AUTH = { Authorization: 'Bearer wdj_test' }
 
@@ -226,6 +227,72 @@ describe('multipart sessions', () => {
     await startUpload(app, 3)
     expect(aborted).toBe(1)
     expect((await uploads.get(id))?.state).toBe('expired')
+  })
+
+  it('completes on a seconds-precision index under a millisecond clock', async () => {
+    // SQLite stores completing_until at whole seconds; a clock with
+    // milliseconds used to make the takeover fence reject every real claim.
+    const dir = mkdtempSync(join(tmpdir(), 'wadjet-test-'))
+    const { app } = testApp({
+      uploads: sqliteUploadIndex(':memory:'),
+      clock: () => new Date('2026-10-16T12:00:00.123Z'),
+    })
+    const started = await startUpload(app, 3)
+    const { id } = (await started.json()) as { id: string }
+    await putPart(app, id, 1, new Uint8Array([1, 2, 3]))
+    expect((await complete(app, id)).status).toBe(201)
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('a route id that is not an Id is 404 and never reaches storage', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wadjet-blobs-'))
+    try {
+      const blobs = filesystemBlobStore(dir)
+      const { app } = testApp({ blobs })
+      const put = await app.request('/v1/files/..%2F..%2Foutside/thumbnail', {
+        method: 'PUT',
+        headers: { ...AUTH, 'Content-Type': 'image/webp', 'Content-Length': '2' },
+        body: new Uint8Array([9, 9]),
+      })
+      expect(put.status).toBe(404)
+      expect(await put.json()).toMatchObject({ error: { code: 'not_found' } })
+      expect((await app.request('/v1/uploads/..%2Fetc%2Fpasswd', { headers: AUTH })).status).toBe(
+        404,
+      )
+      expect(
+        (
+          await app.request('/v1/uploads/..%2F..%2Fout/parts/1', {
+            method: 'PUT',
+            headers: { ...AUTH, 'Wadjet-Part-ETag': 'e', 'Content-Length': '0' },
+          })
+        ).status,
+      ).toBe(404)
+      // Nothing landed inside or outside the root.
+      const { readdirSync } = await import('node:fs')
+      expect(readdirSync(dir)).toEqual([])
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it('a thumbnail PUT on a foreign or missing file writes no blob', async () => {
+    const blobs = memoryBlobStore()
+    let puts = 0
+    const inner = blobs.put.bind(blobs)
+    blobs.put = async (key, body, length, contentType) => {
+      if (key.startsWith('thumbnails/')) puts++
+      return inner(key, body, length, contentType)
+    }
+    const { app } = testApp({ blobs })
+
+    expect((await putThumbnail(app, 'zzzzzz', new Uint8Array([9]))).status).toBe(404)
+
+    const uploaded = await upload(app, { body: new Uint8Array([1, 2, 3]) })
+    const { id } = (await uploaded.json()) as { id: string }
+    // Tombstoned: the row exists but the file was deleted.
+    await app.request(`/v1/files/${id}`, { method: 'DELETE', headers: AUTH })
+    expect((await putThumbnail(app, id, new Uint8Array([9]))).status).toBe(404)
+    expect(puts).toBe(0)
   })
 
   it("a crashed completer's stale lease is taken over", async () => {

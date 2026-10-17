@@ -5,6 +5,7 @@ import {
   FilePage,
   File as FileSchema,
   Health,
+  Id,
   ListQuery,
   PartHeaders,
   PartReceipt,
@@ -21,7 +22,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { apiKeyAuth } from './auth.ts'
 import type { BlobStore } from './blob-store.ts'
 import { type AppConfig, discoveryOf } from './config.ts'
-import { invalidRequest, ProtocolError, tooLarge, unauthorized } from './errors.ts'
+import { invalidRequest, notFound, ProtocolError, tooLarge, unauthorized } from './errors.ts'
 import type { FileIndex } from './file-index.ts'
 import { createLibrary } from './library.ts'
 import type { CachePurger, Clock, IdGenerator, TokenGenerator } from './ports.ts'
@@ -44,6 +45,14 @@ export interface AppDeps {
 type Env = { Variables: { owner: string } }
 
 /** Decode a request part with a protocol schema; failures become 400 invalid_request. */
+/** A route `:id` must be an Id, not just any path segment — an invalid one
+ * is 404 like an unknown one, and never reaches a blob key. */
+const idParam = (c: Context<Env>): string => {
+  const id = c.req.param('id')
+  if (!Schema.is(Id)(id)) throw notFound('No such id.')
+  return id
+}
+
 const decode = <S extends Schema.ConstraintDecoder<unknown>>(
   schema: S,
   value: unknown,
@@ -155,11 +164,12 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
   })
 
   app.delete('/v1/files/:id', async (c) => {
-    await library.delete(c.get('owner'), c.req.param('id'))
+    await library.delete(c.get('owner'), idParam(c))
     return c.body(null, 204)
   })
 
   app.put('/v1/files/:id/thumbnail', async (c) => {
+    const id = idParam(c)
     decode(BearerHeaders, c.req.header())
     const contentType = c.req.header('content-type')
     if (contentType !== 'image/webp' && contentType !== 'image/jpeg' && contentType !== 'image/png')
@@ -173,7 +183,7 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
       throw invalidRequest('Content-Length is missing or not a number.')
     const file = await library.setThumbnail(
       c.get('owner'),
-      c.req.param('id'),
+      id,
       c.req.raw.body ?? new ReadableStream({ start: (ctl) => ctl.close() }),
       size,
       contentType,
@@ -201,17 +211,19 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
   })
 
   app.get('/v1/uploads/:id', async (c) => {
+    const id = idParam(c)
     decode(BearerHeaders, c.req.header())
-    const status = await library.getUpload(c.get('owner'), c.req.param('id'))
+    const status = await library.getUpload(c.get('owner'), id)
     return json(c, UploadStatus, status, 200)
   })
 
   app.put('/v1/uploads/:id/parts/:n', async (c) => {
+    const id = idParam(c)
     const headers = decode(PartHeaders, c.req.header())
     const n = Number(c.req.param('n'))
     const receipt = await library.uploadPart(
       c.get('owner'),
-      c.req.param('id'),
+      id,
       n,
       c.req.raw.body ?? new ReadableStream({ start: (ctl) => ctl.close() }),
       Number(headers['content-length']),
@@ -220,14 +232,16 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
   })
 
   app.post('/v1/uploads/:id/complete', async (c) => {
+    const id = idParam(c)
     decode(BearerHeaders, c.req.header())
-    const { file, created } = await library.completeUpload(c.get('owner'), c.req.param('id'))
+    const { file, created } = await library.completeUpload(c.get('owner'), id)
     return json(c, UploadedFile, file, created ? 201 : 200)
   })
 
   app.delete('/v1/uploads/:id', async (c) => {
+    const id = idParam(c)
     decode(BearerHeaders, c.req.header())
-    await library.abortUpload(c.get('owner'), c.req.param('id'))
+    await library.abortUpload(c.get('owner'), id)
     return c.body(null, 204)
   })
 
