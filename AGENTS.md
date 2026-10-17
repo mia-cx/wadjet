@@ -4,7 +4,8 @@
 
 - Build through `apps/macos/run.sh`, not Xcode's Run button or a bare `xcodebuild`: macOS ties the Screen Recording grant to the bundle's signing identity, and only run.sh signs with Apple Development (the project defaults to ad-hoc). An ad-hoc build re-prompts every time.
 - `Sources/Wadjet` is a folder-synced group: add Swift files on disk and never edit `project.pbxproj` for them.
-- `swift test` in `apps/macos/WadjetKit` tests the UI-free code (colour formats, Measure edge finding, config store, workflow runner) without the app.
+- `swift test` in `apps/macos/WadjetKit` tests the UI-free code (colour formats, Measure edge finding, config store, workflow runner, shortcut parsing) without the app.
+- Global Shortcuts live in config.json (`shortcuts`, none by default — wadjet ships none). Add one by hand, e.g. `{"keys":"ctrl+opt+cmd+9","tool":"pickColour"}`; the file is watched live. `defaultWorkflows.screenshot`/`.recording` name each kind's default Workflow.
 - Local builds use the Xcode beta (`run.sh` sets `DEVELOPER_DIR`); CI builds with the runner's stable Xcode 26 and warnings as errors. Keep the code compiling on both.
 - Drive the running app with `apps/macos/tools/cmd.sh` and read the result in `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/wadjet/app.log`, because the overlay can't be inspected while you sit outside it.
 - Get Mia's go-ahead before any screenshot, screen recording, or synthetic mouse input: her screens show work.
