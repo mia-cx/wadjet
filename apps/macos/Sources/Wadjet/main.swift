@@ -903,7 +903,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in
                 for i in stride(from: n - 1, through: 0, by: -1) {
                     try? await Task.sleep(for: .seconds(1))
-                    guard s.phase == .countdown, attempt == self.recAttempt else { CountdownHUD.hide(); return }
+                    guard attempt == self.recAttempt else { return } // a newer attempt owns the HUD
+                    guard s.phase == .countdown else { CountdownHUD.hide(); return }
                     CountdownHUD.show(i)
                 }
                 CountdownHUD.hide()
@@ -996,6 +997,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             self.updateRecChrome()
         } catch {
             AppLog.line("record: stream failed to start: \(error.localizedDescription)")
+            guard live() else { return } // a cancelled attempt must not reset a newer one
             s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
             errorToast("Couldn't record", error.localizedDescription)
         }
