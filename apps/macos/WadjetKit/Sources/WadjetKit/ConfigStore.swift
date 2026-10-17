@@ -43,6 +43,9 @@ public struct Secret: Codable, Hashable, Sendable {
 
 extension CodingUserInfoKey {
     static let secretMigration = CodingUserInfoKey(rawValue: "cx.mia.wadjet.secretMigration")!
+    /// Top-level keys the file omitted (defaults were merged in). Lets a
+    /// decoder tell an absent section from one explicitly set.
+    static let omittedKeys = CodingUserInfoKey(rawValue: "cx.mia.wadjet.omittedKeys")!
 }
 
 /// Carries the Keychain and a "migrated" flag into one decode.
@@ -171,6 +174,8 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
             let decoder = JSONDecoder()
             let migration = SecretMigrationBox(keychain: keychain)
             decoder.userInfo[.secretMigration] = migration
+            let fileKeys = (parsed as? [String: Any])?.keys.map { $0 } ?? []
+            decoder.userInfo[.omittedKeys] = Set((base as? [String: Any])?.keys.map { $0 } ?? []).subtracting(fileKeys)
             let v = try decoder.decode(Config.self, from: merged)
             if v != value { value = v }
             raw = parsed

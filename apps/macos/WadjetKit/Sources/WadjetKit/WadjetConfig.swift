@@ -59,14 +59,17 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
             try lookup(wf, recording: produces.isRecording, path: path)
         }
         // legacy configs without `defaultWorkflows` merge the factory names in —
-        // if those names went away with the workflows, take the first of the kind
-        // instead of rejecting the file; an explicit dangling name still errors
-        for (key, name, recording, factory) in [
-            (CodingKeys.screenshot, defaultWorkflows.screenshot, false, DefaultWorkflows().screenshot),
-            (CodingKeys.recording, defaultWorkflows.recording, true, DefaultWorkflows().recording),
+        // if those names went away with the workflows, take the first of the
+        // kind instead of rejecting the file. ConfigStore marks omitted keys via
+        // userInfo so an explicitly dangling name (even a factory one) still errors.
+        let omitted = (decoder.userInfo[.omittedKeys] as? Set<String>)?.contains("defaultWorkflows")
+            ?? !c.contains(.defaultWorkflows)
+        for (key, name, recording) in [
+            (CodingKeys.screenshot, defaultWorkflows.screenshot, false),
+            (CodingKeys.recording, defaultWorkflows.recording, true),
         ] {
             let ok = workflows.contains { $0.name == name && (recording ? $0.takes.isRecording : $0.takes == .screenshot) }
-            if !ok && name == factory, let first = workflows.first(where: { recording ? $0.takes.isRecording : $0.takes == .screenshot }) {
+            if !ok && omitted, let first = workflows.first(where: { recording ? $0.takes.isRecording : $0.takes == .screenshot }) {
                 if recording { defaultWorkflows.recording = first.name } else { defaultWorkflows.screenshot = first.name }
             } else {
                 try lookup(name, recording: recording, path: [CodingKeys.defaultWorkflows, key])
