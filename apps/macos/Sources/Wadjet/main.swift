@@ -2197,6 +2197,21 @@ struct ToolbarView: View {
         }
         .frame(width: shapeW, height: shapeH)
         .clipShape(shape) // nothing may draw outside the island/toolbar shape
+        #if CLEAR_GLASS_PATCH
+        .overlay {
+            // the pressed lens overhangs the bar's edges (drawn after the
+            // clip), refracting the edge itself; invisible when idle
+            Capsule().fill(.clear)
+                .frame(width: lensSize.width, height: lensSize.height)
+                .scaleEffect(x: stretchX, y: stretchY)
+                .glassEffect(lensActive ? .clear : .identity, in: .capsule)
+                .glassEffectTransition(.materialize)
+                .position(x: (shapeW - rowSize.width) / 2 + blobX,
+                          y: contentTop + blobY)
+                .opacity(expanded ? 1 : 0)
+                .allowsHitTesting(false)
+        }
+        #endif
         .glassEffect(.regular.tint(.black.opacity(0.4)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
@@ -2288,13 +2303,25 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
-    let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size; lens = ×1.15
+    let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
+    // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
+    // inside it and gets refracted (iOS tab-bar lens); the mask follows it
+    let lensOverhang: CGFloat = 4
+    var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
+    var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
+    var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
     // tab-bar state: cell centres measured in row space, capsule centre same
     @State var cellCentres: [Tool: CGPoint] = [:]
     @State var blobX: CGFloat = 0
     @State var blobY: CGFloat = 0
     @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
+    /// Velocity stretch while dragging; relaxes to 1 on a debounce (the
+    /// gesture sends nothing while the pointer is still).
+    @State var stretchX: CGFloat = 1
+    @State var stretchY: CGFloat = 1
+    @State var stretchTask: Task<Void, Never>?
+    var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     @State var pressX: CGFloat = 0
     @State var pressTool: Tool?
     @State var pressActive = false
@@ -2322,12 +2349,15 @@ struct ToolbarView: View {
     }
 
     var selShape: some View {
-        Capsule().frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+        Capsule()
+            .frame(width: lensSize.width, height: lensSize.height)
+            .scaleEffect(x: stretchX, y: stretchY) // with the lens, never against it
     }
 
     func lens(_ glass: Glass) -> some View {
         Capsule().fill(.clear)
-            .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+            .frame(width: lensSize.width, height: lensSize.height)
+            .scaleEffect(x: stretchX, y: stretchY)
             .glassEffect(lensActive ? glass : .identity, in: .capsule)
             .glassEffectTransition(.materialize)
             .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
@@ -2400,7 +2430,7 @@ struct ToolbarView: View {
         .background {
             // rest: subtle translucent highlight (no glass)
             Capsule().fill(.white.opacity(lensActive ? 0 : 0.10))
-                .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+                .frame(width: lensSize.width, height: lensSize.height)
                 .position(x: blobX, y: blobY)
         }
         // the accent tint follows the lens, clipped to its shape — the icon row
@@ -2427,9 +2457,10 @@ struct ToolbarView: View {
         // animating the effect, never inserted. With the clear-glass patch it
         // sits on top and refracts the icons; without it, glass would blur and
         // tint them, so regular glass sits behind the icons instead
-        #if CLEAR_GLASS_PATCH
-        .overlay { lens(.clear) }
-        #else
+        // With the patch the lens also lives outside the bar's clip (see
+        // morph) so it can overhang; without it the lens stays behind the
+        // icons and clipped to the shape.
+        #if !CLEAR_GLASS_PATCH
         .background { lens(.regular) }
         #endif
         .fixedSize()
@@ -2460,11 +2491,36 @@ struct ToolbarView: View {
                 }
                 if dragging {
                     let (lo, hi) = rowEnds
-                    blobX = min(hi, max(lo, v.location.x))
+                    if reduceMotion {
+                        blobX = min(hi, max(lo, v.location.x))
+                    } else {
+                        // the lens trails the pointer a touch (momentum)
+                        withAnimation(.interactiveSpring(response: 0.18, dampingFraction: 0.75)) {
+                            blobX = min(hi, max(lo, v.location.x))
+                        }
+                        // stretch with horizontal velocity, ~volume-preserving;
+                        // the pointer going still gets no events, so relax on
+                        // a debounce 60 ms after the last change
+                        let sx = 1 + min(abs(v.velocity.width) / 1800, 0.35)
+                        stretchX = sx; stretchY = 1 - 0.5 * (sx - 1)
+                        stretchTask?.cancel()
+                        stretchTask = Task { @MainActor in
+                            try? await Task.sleep(for: .milliseconds(60))
+                            if !Task.isCancelled {
+                                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
+                                    stretchX = 1; stretchY = 1
+                                }
+                            }
+                        }
+                    }
                 }
             }
             .onEnded { v in
-                holdTask?.cancel()
+                holdTask?.cancel(); stretchTask?.cancel()
+                withAnimation(reduceMotion ? .easeOut(duration: 0.15)
+                                           : .spring(response: 0.35, dampingFraction: 0.55)) {
+                    stretchX = 1; stretchY = 1
+                }
                 let wasDragging = dragging
                 pressing = false; dragging = false
                 // hover events may not have arrived during the drag — refresh
@@ -2473,8 +2529,9 @@ struct ToolbarView: View {
                 if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
-                        // shrink back to the rest capsule on the chosen cell
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { blobX = cellCentres[n]?.x ?? blobX }
+                        // snap to the chosen cell with a slight overshoot
+                        withAnimation(reduceMotion ? .easeOut(duration: 0.2)
+                                                   : .spring(response: 0.3, dampingFraction: 0.7)) { blobX = cellCentres[n]?.x ?? blobX }
                     }
                 } else if !menuByHold, let t = nearestTool(to: v.location.x), t != s.tool {
                     AppDelegate.shared?.trigger(t)
@@ -2528,7 +2585,6 @@ enum TipPanel {
     static func hover(_ t: Tool, anchor: CGRect) {
         tool = t
         task?.cancel()
-        let a = anchor
         task = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled, AppState.shared.openMenu == nil else { return }
