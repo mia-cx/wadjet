@@ -30,6 +30,16 @@ public struct RecordingTimeline: Sendable {
         pauseStart = nil
     }
 
+    /// The output PTS for the moment recording stops: while paused, the time
+    /// the pause began (a paused tail is absent, like the rest of the pause);
+    /// never earlier than the last emitted output; nil before any sample.
+    /// `endSession` stamps this on the file so a still screen's tail is kept.
+    public func endTime(at t: CMTime) -> CMTime? {
+        guard let origin else { return nil }
+        let end = (pauseStart ?? t) - origin - pausedTotal
+        return max(end, lastOut)
+    }
+
     /// The output PTS for a sample taken at host time `sample`, or nil to drop
     /// it: samples during a pause, and any sample whose output time would not
     /// increase (late or duplicated frames).

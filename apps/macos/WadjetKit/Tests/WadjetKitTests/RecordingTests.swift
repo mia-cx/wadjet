@@ -51,6 +51,30 @@ func timeline(_ events: [Ev], _ expected: [Double?]) {
     }
 }
 
+@Test("endTime maps the stop moment onto the output", arguments: [
+    // plain: output for the stop time
+    ([Ev.sample(10), .sample(10.5)], 12.0, 2.0 as Double?),
+    // paused at stop: the pause's beginning, not the stop wall time
+    ([.sample(0), .sample(0.4), .pause(0.5)], 2.0, 0.5 as Double?),
+    // before the first sample there is no end
+    ([Ev.pause(1)], 2.0, nil as Double?),
+    // never earlier than the last emitted output
+    ([.sample(0), .sample(1.0), .pause(0.5)], 0.8, 1.0 as Double?),
+])
+func endTime(_ events: [Ev], _ stopAt: Double, _ expected: Double?) {
+    var tl = RecordingTimeline()
+    for e in events {
+        switch e {
+        case .pause(let t): tl.pause(at: CMTime(seconds: t, preferredTimescale: 600))
+        case .resume(let t): tl.resume(at: CMTime(seconds: t, preferredTimescale: 600))
+        case .sample(let t): _ = tl.outputTime(for: CMTime(seconds: t, preferredTimescale: 600))
+        }
+    }
+    let got = tl.endTime(at: CMTime(seconds: stopAt, preferredTimescale: 600))?.seconds
+    if let got, let expected { #expect(abs(got - expected) < 0.001) }
+    else { #expect(got == nil && expected == nil) }
+}
+
 // MARK: - MP4Writer
 
 private func makePixelBuffer(_ w: Int, _ h: Int, seed: UInt8) throws -> CVPixelBuffer {
@@ -83,7 +107,8 @@ private func makePixelBuffer(_ w: Int, _ h: Int, seed: UInt8) throws -> CVPixelB
         writer.append(try makePixelBuffer(320, 240, seed: seed), at: CMTime(seconds: t, preferredTimescale: 600))
         seed &+= 7
     }
-    let out = try await writer.finish()
+    // Stop well past the last frame; the still tail must reach the file.
+    let out = try await writer.finish(at: CMTime(seconds: 2, preferredTimescale: 600))
 
     let asset = AVURLAsset(url: out)
     let track = try #require(try await asset.loadTracks(withMediaType: .video).first)
@@ -102,4 +127,36 @@ private func makePixelBuffer(_ w: Int, _ h: Int, seed: UInt8) throws -> CVPixelB
     let maxGap = zip(pts, pts.dropFirst()).map { $1 - $0 }.max() ?? 0
     #expect(pts.count >= 29 && pts.count <= 31)
     #expect(maxGap <= 1.5 / 30)
+}
+
+@Test func finishKeepsTheStillTail() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("r.mp4")
+
+    let writer = try MP4Writer(url: url, width: 320, height: 240, fps: 30)
+    var seed: UInt8 = 0
+    for frame in 0..<30 { // one second of frames, then the screen goes still
+        writer.append(try makePixelBuffer(320, 240, seed: seed), at: CMTime(seconds: Double(frame) / 30, preferredTimescale: 600))
+        seed &+= 7
+    }
+    let out = try await writer.finish(at: CMTime(seconds: 3, preferredTimescale: 600))
+    let asset = AVURLAsset(url: out)
+    let duration = try await asset.load(.duration).seconds
+    #expect(abs(duration - 3.0) < 1.0 / 15)
+}
+
+@Test func finishWithNoFramesThrowsAndDeletes() async throws {
+    let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: dir) }
+    let url = dir.appendingPathComponent("r.mp4")
+
+    let writer = try MP4Writer(url: url, width: 320, height: 240, fps: 30)
+    var threw: Error?
+    do { _ = try await writer.finish(at: CMTime(seconds: 1, preferredTimescale: 600)) }
+    catch { threw = error }
+    guard case .noFrames = (threw as? MP4WriterError) else { Issue.record(Comment(rawValue: "wrong error: \(String(describing: threw))")); return }
+    #expect(!FileManager.default.fileExists(atPath: url.path))
 }

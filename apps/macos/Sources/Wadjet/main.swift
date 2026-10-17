@@ -270,6 +270,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var recordingPanel: NSPanel?
     var recStream: SCStream?
     var recWriter: MP4Writer?
+    var recOutput: RecOutput?
     /// The stream's frame queue — SCStream calls back here, the actor serializes writes.
     let recQueue = DispatchQueue(label: "wadjet.recstream")
 
@@ -864,6 +865,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         overlayCtrl.closeAllPanelsOnly() // live screen returns
         recordingRect = rect; recordingDisplay = display
         pauseAcc = 0; s.recordingElapsed = 0; s.recordingPaused = false
+        // .countdown holds until beginStream lands .recording or .desktop —
+        // setup can await, and a Shortcut press meanwhile must not trigger.
+        s.phase = .countdown
         let n = s.countdown == "Off" ? 0 : Int(s.countdown) ?? 0
         let begin = {
             _ = Task { @MainActor in
@@ -871,7 +875,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         }
         if n > 0 {
-            s.phase = .countdown
             AppLog.line("phase=countdown (\(n))")
             updateEscHotkey()
             CountdownHUD.show(n)
@@ -912,16 +915,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func recPause() { togglePause() }
     @objc func recStop() { stopRecording() }
+    /// A lost Recording must be visible, not just logged — a toast with the
+    /// reason and no thumbnail.
+    func errorToast(_ title: String, _ detail: String) {
+        let t = ToastItem(cap: Capture(thumb: nil, label: title, url: nil, duration: nil))
+        t.title = title; t.err = detail
+        toastCtrl.items.insert(t, at: 0)
+        toastCtrl.relayout()
+        toastCtrl.startTimer(t)
+    }
+
     /// Build and start the SCStream + MP4Writer once any countdown finishes.
+    /// .countdown stays the phase through setup — a Shortcut press is ignored
+    /// and an Esc cancel lands us back on .desktop, which the guards catch.
     /// A failure (no Screen Recording permission, a gone window) closes the
-    /// chrome and lands back on the desktop — the log has the reason.
+    /// chrome, lands back on the desktop, and toasts the reason.
     func beginStream() async {
         let s = AppState.shared
         let cfg = AppState.shared.config.value
-        guard let (filter, sourcePixels, sourceRect) = await recordSource(display: recordingDisplay),
+        guard s.phase == .countdown,
+              let (filter, sourcePixels, sourceRect) = await recordSource(display: recordingDisplay),
+              s.phase == .countdown, // an Esc could have cancelled mid-setup
               let file = try? captureFiles.newFile(ext: "mp4") else {
+            guard s.phase == .countdown else { return } // cancelled: nothing to report
             AppLog.line("record: could not resolve the source or name the file")
             s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            errorToast("Couldn't record", "No capture source — Screen Recording permission may be off.")
             return
         }
         let size = recSize(sourcePixels)
@@ -937,9 +956,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             let writer = try MP4Writer(url: file, width: conf.width, height: conf.height, fps: cfg.recording.fps)
             let stream = SCStream(filter: filter, configuration: conf, delegate: nil)
-            try stream.addStreamOutput(RecOutput(writer: writer), type: .screen, sampleHandlerQueue: recQueue)
+            let output = RecOutput(writer: writer)
+            try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: recQueue)
             try await stream.startCapture()
-            recStream = stream; recWriter = writer
+            recStream = stream; recWriter = writer; recOutput = output
             s.phase = .recording; self.recStart = Date()
             AppLog.line("phase=recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
             self.updateEscHotkey()
@@ -948,6 +968,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             AppLog.line("record: stream failed to start: \(error.localizedDescription)")
             s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            errorToast("Couldn't record", error.localizedDescription)
         }
     }
 
@@ -986,8 +1007,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.recordingElapsed = recStart.map { Date().timeIntervalSince($0) - pauseAcc } ?? s.recordingElapsed
         let dur = s.recordingElapsed
         let label = "\(s.tool?.title ?? "Recording") \(fmtT(dur))"
+        let stoppedAt = hostNow()
         let stream = recStream, writer = recWriter
-        recStream = nil; recWriter = nil
+        recStream = nil; recWriter = nil; recOutput = nil
         recordingPanel?.close(); recordingPanel = nil
         s.phase = .desktop; recStart = nil
         updateEscHotkey()
@@ -999,10 +1021,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard let writer else { return }
             do {
                 try await stream?.stopCapture()
-                let file = try await writer.finish()
+                let file = try await writer.finish(at: stoppedAt)
                 runCapture(file: file, kind: .mp4, label: label)
             } catch {
                 AppLog.line("record: finish failed: \(error.localizedDescription)")
+                errorToast("Recording was lost", error.localizedDescription)
             }
         }
     }

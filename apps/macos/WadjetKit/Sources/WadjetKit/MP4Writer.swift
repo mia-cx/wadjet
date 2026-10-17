@@ -4,12 +4,13 @@ import CoreVideo
 import Foundation
 
 public enum MP4WriterError: LocalizedError {
-    case cannotAddInput, writerFailed(Error?)
+    case cannotAddInput, writerFailed(Error?), noFrames
 
     public var errorDescription: String? {
         switch self {
         case .cannotAddInput: "the asset writer rejected the video input"
         case .writerFailed(let e): e?.localizedDescription ?? "the asset writer failed"
+        case .noFrames: "no frames were recorded"
         }
     }
 }
@@ -70,14 +71,19 @@ public final class MP4Writer: @unchecked Sendable {
     public func pause(at t: CMTime) { q.sync { timeline.pause(at: t) } }
     public func resume(at t: CMTime) { q.sync { timeline.resume(at: t) } }
 
-    /// Close the writer and return the finished file's URL. Runs after every
-    /// queued frame; a recording that never produced one leaves an empty file.
-    @discardableResult public func finish() async throws -> URL {
+    /// Close the writer and return the finished file's URL. `hostTime` is the
+    /// stop moment: SCK only sends frames when the screen changes, so the
+    /// session is stamped to end there — a still tail is kept in the file.
+    /// A recording with no frames throws `noFrames` and its empty file is gone.
+    @discardableResult public func finish(at hostTime: CMTime) async throws -> URL {
         try await withCheckedThrowingContinuation { cont in
             q.async {
                 self.finished = true
-                self.input.markAsFinished()
                 if self.started {
+                    self.input.markAsFinished()
+                    if let end = self.timeline.endTime(at: hostTime) {
+                        self.writer.endSession(atSourceTime: end)
+                    }
                     self.writer.finishWriting {
                         if self.writer.status == .failed {
                             cont.resume(throwing: MP4WriterError.writerFailed(self.writer.error))
@@ -87,7 +93,8 @@ public final class MP4Writer: @unchecked Sendable {
                     }
                 } else {
                     self.writer.cancelWriting()
-                    cont.resume(returning: self.writer.outputURL)
+                    try? FileManager.default.removeItem(at: self.writer.outputURL)
+                    cont.resume(throwing: MP4WriterError.noFrames)
                 }
             }
         }
