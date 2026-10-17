@@ -412,9 +412,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
-    @objc func openConfigFile() {
-        NSWorkspace.shared.open(AppState.shared.config.file)
-    }
     var settingsWindow: NSWindow?
     @objc func openSettings() {
         if settingsWindow == nil {
@@ -439,7 +436,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             url.stopAccessingSecurityScopedResource()
             grantedFolders.removeValue(forKey: path)
         }
-        var moved: [String: URL] = [:]
         for (path, data) in marks where grantedFolders[path] == nil {
             var stale = false
             guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope,
@@ -453,41 +449,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if url.startAccessingSecurityScopedResource() {
                 grantedFolders[path] = url
                 AppLog.line("bookmark \(path): granted")
-                if url.path != expandingTilde(path).path { moved[path] = url }
+                // a moved folder resolves at its new location; the grant holds,
+                // but the config path still points at the dead one — saves
+                // there fail with their own toast error until re-picked
+                if url.path != expandingTilde(path).path {
+                    AppLog.line("bookmark \(path): folder moved to \(url.path); choose it again in Settings")
+                }
             } else {
                 AppLog.line("bookmark \(path): access denied")
             }
-        }
-        // a folder that moved since the bookmark was made resolves at its new
-        // location — point config at it so saves don't hit the dead path.
-        // Apply all moves at once: swapped paths would otherwise rewrite each
-        // other's already-migrated references depending on iteration order.
-        guard !moved.isEmpty else { return }
-        let home = expandingTilde("~").path
-        let remap = moved.mapValues { url in
-            url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
-        }
-        AppState.shared.config.update { c in
-            // each default remaps once from its original value, not in the
-            // old-key loop where a later pair could re-hit a rewritten value
-            if let new = remap[c.folders.screenshots] { c.folders.screenshots = new }
-            if let new = remap[c.folders.recordings] { c.folders.recordings = new }
-            c.workflows = c.workflows.map { w in
-                var w = w
-                w.steps = w.steps.map { st in
-                    if case .saveFile(let f) = st, let f, let new = remap[f] { return .saveFile(folder: new) }
-                    return st
-                }
-                return w
-            }
-            // two original paths can converge on one destination; keep the
-            // first entry seen for it rather than trapping
-            var newMarks: [String: Data] = [:], newGrants: [String: URL] = [:]
-            for (p, d) in c.bookmarks { newMarks[remap[p] ?? p] = newMarks[remap[p] ?? p] ?? d }
-            for (p, u) in grantedFolders { newGrants[remap[p] ?? p] = newGrants[remap[p] ?? p] ?? u }
-            c.bookmarks = newMarks
-            grantedFolders = newGrants
-            AppLog.line("bookmarks: \(moved.count) moved folder(s) re-pointed in config")
         }
     }
 

@@ -112,7 +112,9 @@ enum SettingsPanes: String, CaseIterable {
             LabeledContent("Recordings") { FolderRow(key: \.recordings) }
         }
         Section {
-            Button("Reveal config.json") { AppDelegate.shared?.openConfigFile() }
+            Button("Reveal config.json") {
+                NSWorkspace.shared.activateFileViewerSelecting([AppState.shared.config.file])
+            }
         }
     }
 }
@@ -259,9 +261,9 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                 HStack {
                     Menu("+") {
                         ForEach(CaptureKind.allCases, id: \.self) { k in
-                            Button(k.rawValue.capitalized) {
+                            Button(k.title) {
                                 edit {
-                                    $0.workflows.append(Workflow(name: uniqueName("New \(k.rawValue.capitalized) Workflow", in: $0), takes: k, steps: [.showToast]))
+                                    $0.workflows.append(Workflow(name: uniqueName("New \(k.title) Workflow", in: $0), takes: k, steps: [.showToast]))
                                 }
                             }
                         }
@@ -312,7 +314,7 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                         edit { $0.renameWorkflow(from: wf.name, to: uniqueName(name, in: $0, skipping: i)) }
                     }
                     .onAppear { name = wf.name }
-                Text(wf.takes.rawValue.capitalized).foregroundStyle(.secondary)
+                Text(wf.takes.title).foregroundStyle(.secondary)
             }
             Section("Steps") {
                 List {
