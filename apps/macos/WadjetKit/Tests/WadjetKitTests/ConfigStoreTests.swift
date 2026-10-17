@@ -93,6 +93,61 @@ struct ConfigStoreTests {
         #expect(store.value.tools.measure.mode == .vertical) // in-memory change still applies
     }
 
+    // the initial load normalizes: a file missing newer keys gains them
+    @Test func firstLoadAddsMissingKeys() throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url)
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(obj?["folders"] != nil)
+        #expect(obj?["workflows"] != nil)
+        #expect((obj?["tools"] as? [String: Any])?["pickColour"] != nil) // her values kept
+    }
+
+    // once running, a live edit is never rewritten — odd formatting stays
+    @Test func liveEditKeepsItsBytes() async throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"folders":{}}"#.utf8).write(to: url)
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        let written = Data(#"{ "tools" : { "measure" : { "mode" : "Vertical" } } }"#.utf8)
+        try written.write(to: url, options: .atomic)
+        #expect(await eventually { store.value.tools.measure.mode == .vertical })
+        #expect(try Data(contentsOf: url) == written) // the file she just saved is untouched
+    }
+
+    // a key this version doesn't model survives normalize AND later writes
+    @Test func unknownKeysSurvive() throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"future":{"x":1},"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url)
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        var obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(obj?["future"] != nil && obj?["folders"] != nil) // first load wrote both
+        store.update { $0.tools.measure.mode = .vertical }
+        obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(obj?["future"] != nil) // our own writes keep it too
+    }
+
+    // clearing a nested optional inside a modelled section stays cleared
+    @Test func clearedNestedOptionalStaysGone() throws {
+        struct Cfg: Codable, Equatable, Sendable {
+            var tools = Tools()
+            struct Tools: Codable, Equatable, Sendable { var token: String? = nil }
+        }
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"tools":{"token":"abc"},"future":7}"#.utf8).write(to: url)
+        let store = ConfigStore(file: url, defaults: Cfg(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        store.update { $0.tools.token = nil }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(!text.contains("abc") && !text.contains("\"token\""))
+        #expect(text.contains("future")) // unknown top-level keys still kept
+        let reloaded = ConfigStore(file: url, defaults: Cfg(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        #expect(reloaded.value.tools.token == nil)
+    }
+
     @Test func plaintextSecretLeavesForTheKeychain() throws {
         struct Vault: Codable, Equatable, Sendable { var token: Secret? = nil }
         let url = tempFile()
@@ -107,5 +162,11 @@ struct ConfigStoreTests {
         #expect(!file.contains("hunter2"))
         let parsed = try JSONSerialization.jsonObject(with: Data(file.utf8)) as? [String: Any]
         #expect(parsed?["token"] as? [String: String] == ["keychain": account])
+        // clearing the optional must remove it, not resurrect the raw key
+        store.update { $0.token = nil }
+        let cleared = try String(contentsOf: url, encoding: .utf8)
+        #expect(!cleared.contains("hunter2") && !cleared.contains("\"token\""))
+        let reloaded = ConfigStore(file: url, defaults: Vault(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        #expect(reloaded.value.token == nil)
     }
 }
