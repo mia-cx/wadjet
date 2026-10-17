@@ -439,6 +439,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             url.stopAccessingSecurityScopedResource()
             grantedFolders.removeValue(forKey: path)
         }
+        var moved: [String: URL] = [:]
         for (path, data) in marks where grantedFolders[path] == nil {
             var stale = false
             guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope,
@@ -452,9 +453,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if url.startAccessingSecurityScopedResource() {
                 grantedFolders[path] = url
                 AppLog.line("bookmark \(path): granted")
+                if url.path != expandingTilde(path).path { moved[path] = url }
             } else {
                 AppLog.line("bookmark \(path): access denied")
             }
+        }
+        // a folder that moved since the bookmark was made resolves at its new
+        // location — point config at it so saves don't hit the dead path
+        guard !moved.isEmpty else { return }
+        let home = expandingTilde("~").path
+        AppState.shared.config.update { c in
+            for (old, url) in moved {
+                let new = url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
+                if c.folders.screenshots == old { c.folders.screenshots = new }
+                if c.folders.recordings == old { c.folders.recordings = new }
+                c.workflows = c.workflows.map { w in
+                    var w = w
+                    w.steps = w.steps.map { $0 == .saveFile(folder: old) ? .saveFile(folder: new) : $0 }
+                    return w
+                }
+                let mark = c.bookmarks.removeValue(forKey: old)
+                c.bookmarks[new] = mark
+                grantedFolders[new] = grantedFolders.removeValue(forKey: old) ?? url
+            }
+            AppLog.line("bookmarks: \(moved.count) moved folder(s) re-pointed in config")
         }
     }
 

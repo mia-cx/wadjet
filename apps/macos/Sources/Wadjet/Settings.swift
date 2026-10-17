@@ -149,10 +149,12 @@ enum SettingsPanes: String, CaseIterable {
         return AnyView(VStack(alignment: .leading, spacing: 6) {
             HStack {
                 KeyboardShortcuts.Recorder(for: .init("shortcut.\(i)")) { ks in
-                    if let ks, let keys = KeyCombo(keyCode: ks.carbonKeyCode, carbonModifiers: ks.carbonModifiers) {
+                    if ks == nil {
+                        edit { guard i < $0.shortcuts.count else { return }; $0.shortcuts.remove(at: i) }
+                    } else if let keys = KeyCombo(keyCode: ks!.carbonKeyCode, carbonModifiers: ks!.carbonModifiers) {
                         edit { guard i < $0.shortcuts.count else { return }; $0.shortcuts[i].keys = keys }
                     } else {
-                        edit { guard i < $0.shortcuts.count else { return }; $0.shortcuts.remove(at: i) }
+                        AppLog.line("shortcut \(i): recorded key isn't a config KeyCombo — keeping the old one")
                     }
                 }
                 // changing the Tool drops a Workflow the new Tool can't run,
