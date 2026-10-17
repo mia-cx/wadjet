@@ -39,9 +39,6 @@ export interface Replayable {
 // Issues #51-#53 own these fixtures; they run as todo until those land.
 const todos = new Map<string, string>([
   ['01-discovery', '#53: discovery advertises OAuth'],
-  ['26-get-sharex-config', '#52'],
-  ['27-get-deletion-page', '#52'],
-  ['28-delete-by-link', '#52'],
   ['29-get-file-not-found', "#52: the file is gone only after 28's delete-by-link"],
 ])
 

@@ -110,6 +110,27 @@ export const createLibrary = (deps: LibraryDeps) => {
       row.thumbnailVersion > 0 ? `${deps.baseUrl}/t/${row.id}?v=${row.thumbnailVersion}` : null,
   })
 
+  /** The full delete teardown — tombstone, purge, blobs, row — shared by
+   *  owner deletes and deletion links. */
+  const removeFile = async (row: FileRow): Promise<void> => {
+    // Tombstone first: GETs 404 so nothing refills the edge cache during the purge,
+    // and any failure below leaves the tombstone for a retried DELETE to finish.
+    if (!row.deletedAt) await deps.files.markDeleted(row.id, deps.clock())
+    const urls = [fileUrl(row)]
+    // Every version ever attached: a superseded thumbnail whose cleanup
+    // failed earlier must still be purged and freed now.
+    for (let v = 1; v <= row.thumbnailVersion; v++)
+      urls.push(`${deps.baseUrl}/t/${row.id}?v=${v}`)
+    await deps.purger.purge(urls)
+    // Blob last: a failure here leaves an unreachable blob, never a row that 500s.
+    await deps.blobs.delete(row.blobKey)
+    // Thumbnail blob keys are random now — only the current one is
+    // addressable; a superseded blob whose best-effort delete failed
+    // earlier stays a small orphan.
+    if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
+    await deps.files.delete(row.id)
+  }
+
   const uploadExpired = (row: UploadRow) =>
     new ProtocolError(410, 'upload_expired', `This upload expired at ${toTime(row.expiresAt)}.`)
 
@@ -296,22 +317,16 @@ export const createLibrary = (deps: LibraryDeps) => {
     async delete(owner: string, id: string): Promise<void> {
       const row = await deps.files.get(id)
       if (!row || row.owner !== owner) throw notFound(`No file ${id}.`)
-      // Tombstone first: GETs 404 so nothing refills the edge cache during the purge,
-      // and any failure below leaves the tombstone for a retried DELETE to finish.
-      if (!row.deletedAt) await deps.files.markDeleted(id, deps.clock())
-      const urls = [fileUrl(row)]
-      // Every version ever attached: a superseded thumbnail whose cleanup
-      // failed earlier must still be purged and freed now.
-      for (let v = 1; v <= row.thumbnailVersion; v++)
-        urls.push(`${deps.baseUrl}/t/${row.id}?v=${v}`)
-      await deps.purger.purge(urls)
-      // Blob last: a failure here leaves an unreachable blob, never a row that 500s.
-      await deps.blobs.delete(row.blobKey)
-      // Thumbnail blob keys are random now — only the current one is
-      // addressable; a superseded blob whose best-effort delete failed
-      // earlier stays a small orphan.
-      if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
-      await deps.files.delete(id)
+      await removeFile(row)
+    },
+
+    async deleteByToken(token: string): Promise<FileRow> {
+      const row = await deps.files.findByDeleteTokenHash(await sha256Hex(token))
+      if (!row) throw notFound('This link is dead.')
+      // A tombstoned row is a teardown that died mid-flight: run it again —
+      // removeFile resumes (purge + blob + row delete are all idempotent).
+      await removeFile(row)
+      return row
     },
 
     async startUpload(

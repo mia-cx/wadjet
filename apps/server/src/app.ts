@@ -9,6 +9,7 @@ import {
   ListQuery,
   PartHeaders,
   PartReceipt,
+  ShareXConfig,
   StartUpload,
   StartUploadHeaders,
   UploadedFile,
@@ -22,6 +23,7 @@ import type { ContentfulStatusCode } from 'hono/utils/http-status'
 import { apiKeyAuth } from './auth.ts'
 import type { BlobStore } from './blob-store.ts'
 import { type AppConfig, discoveryOf } from './config.ts'
+import { sha256Hex } from './crypto.ts'
 import { invalidRequest, notFound, ProtocolError, tooLarge, unauthorized } from './errors.ts'
 import type { FileIndex } from './file-index.ts'
 import { createLibrary } from './library.ts'
@@ -92,6 +94,39 @@ const percentDecode = (value: string | undefined): string | undefined => {
   }
 }
 
+const PAGE_SECURITY_HEADERS: Record<string, string> = {
+  'Cache-Control': 'no-store',
+  'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'; form-action 'self'",
+}
+
+const escapeHtml = (text: string): string =>
+  text
+    .replaceAll('&', '&amp;')
+    .replaceAll('<', '&lt;')
+    .replaceAll('>', '&gt;')
+    .replaceAll('"', '&quot;')
+
+const deletionPage = (filename: string, host: string): string =>
+  `<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width">
+<title>Delete ${escapeHtml(filename)}</title>
+<form method="post">
+<p>Delete ${escapeHtml(filename)} from ${escapeHtml(host)}?</p>
+<button>Delete</button>
+</form>
+`
+
+const deletedPage = (filename: string, host: string): string =>
+  `<!doctype html>
+<meta charset="utf-8">
+<meta name="robots" content="noindex">
+<meta name="viewport" content="width=device-width">
+<title>Deleted ${escapeHtml(filename)}</title>
+<p>Deleted ${escapeHtml(filename)} from ${escapeHtml(host)}.</p>
+`
+
 export const createApp = (deps: AppDeps): Hono<Env> => {
   const app = new Hono<Env>()
   const library = createLibrary({ ...deps, baseUrl: deps.config.baseUrl })
@@ -118,6 +153,30 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
 
   app.get('/healthz', (c) => json(c, Health, { status: 'ok' }, 200))
 
+  // Deletion links are unauthenticated — the token is the credential. GET only
+  // renders; link previews and prefetchers can't delete anything.
+  const lookupLink = async (token: string) => {
+    const row = await deps.files.findByDeleteTokenHash(await sha256Hex(token))
+    if (!row || row.deletedAt) throw notFound('This link is dead.')
+    return row
+  }
+  const host = new URL(deps.config.baseUrl).host
+
+  app.get('/d/:token', async (c) => {
+    const row = await lookupLink(c.req.param('token'))
+    c.header('Content-Type', 'text/html; charset=utf-8')
+    for (const [k, v] of Object.entries(PAGE_SECURITY_HEADERS)) c.header(k, v)
+    return c.body(deletionPage(row.filename, host), 200)
+  })
+
+  app.post('/d/:token', async (c) => {
+    const row = await lookupLink(c.req.param('token'))
+    await library.deleteByToken(c.req.param('token'))
+    c.header('Content-Type', 'text/html; charset=utf-8')
+    for (const [k, v] of Object.entries(PAGE_SECURITY_HEADERS)) c.header(k, v)
+    return c.body(deletedPage(row.filename, host), 200)
+  })
+
   app.use('/v1/*', async (c, next) => {
     const authorization = c.req.header('authorization')
     const owner = await authenticate(authorization)
@@ -129,6 +188,31 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
     }
     c.set('owner', owner)
     await next()
+  })
+
+  // A ready-made ShareX custom uploader with the caller's API key embedded.
+  // An OAuth token gets 400 once #53 exists — non-`wdj_` credentials are 401 today.
+  app.get('/v1/sharex.sxcu', async (c) => {
+    const key = c.req.header('authorization')!.replace(/^Bearer\s+/, '')
+    const base = deps.config.baseUrl
+    const body = {
+      Version: '21.0.0',
+      Name: `Wadjet (${host})`,
+      DestinationType: 'ImageUploader, FileUploader',
+      RequestMethod: 'POST' as const,
+      RequestURL: `${base}/v1/files`,
+      Body: 'Binary' as const,
+      Headers: {
+        Authorization: `Bearer ${key}`,
+        'Wadjet-Filename': '{filename}',
+        'Wadjet-Device': 'ShareX',
+      },
+      URL: '{json:url}',
+      DeletionURL: '{json:deleteUrl}',
+      ErrorMessage: '{json:error.message}',
+    }
+    c.header('Content-Disposition', `attachment; filename="${host}.sxcu"`)
+    return json(c, ShareXConfig, body, 200)
   })
 
   app.post('/v1/files', async (c) => {

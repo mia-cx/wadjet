@@ -43,6 +43,10 @@ export const postgresFileIndex = async (pool: pg.Pool): Promise<FileIndex> => {
       if (!earlier[0]) throw new Error(`Insert of ${row.id} conflicted but no earlier row exists`)
       return earlier[0]
     },
+    async findByDeleteTokenHash(hash) {
+      const rows = await db.select().from(files).where(eq(files.deleteTokenHash, hash))
+      return rows[0]
+    },
     async get(id) {
       const rows = await db.select().from(files).where(eq(files.id, id))
       return rows[0]
