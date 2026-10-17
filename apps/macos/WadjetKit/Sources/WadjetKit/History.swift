@@ -62,26 +62,26 @@ import SwiftData
 
     /// Records a finished Capture and persists it immediately.
     @discardableResult
-    public func record(kind: CaptureKind, createdAt: Date, file: URL?, errors: [String] = []) -> HistoryEntry {
+    public func record(kind: CaptureKind, createdAt: Date, file: URL?, errors: [String] = []) throws -> HistoryEntry {
         let entry = HistoryEntry(kind: kind, createdAt: createdAt, file: file, errors: errors)
         container.mainContext.insert(entry)
-        try? container.mainContext.save()
+        try container.mainContext.save()
         return entry
     }
 
     /// Attaches recognized text to a Screenshot entry after OCR finishes.
-    public func setOCR(_ text: String, for id: UUID) {
+    public func setOCR(_ text: String, for id: UUID) throws {
         var fetch = FetchDescriptor<HistoryEntry>(predicate: #Predicate { $0.id == id })
         fetch.fetchLimit = 1
-        guard let entry = try? container.mainContext.fetch(fetch).first else { return }
+        guard let entry = try container.mainContext.fetch(fetch).first else { return }
         entry.ocrText = text
-        try? container.mainContext.save()
+        try container.mainContext.save()
     }
 
     /// The newest `limit` Captures, newest first.
-    public func recent(limit: Int = 10) -> [HistoryEntry] {
+    public func recent(limit: Int = 10) throws -> [HistoryEntry] {
         var fetch = FetchDescriptor<HistoryEntry>(sortBy: [SortDescriptor(\.createdAt, order: .reverse)])
         fetch.fetchLimit = limit
-        return (try? container.mainContext.fetch(fetch)) ?? []
+        return try container.mainContext.fetch(fetch)
     }
 }

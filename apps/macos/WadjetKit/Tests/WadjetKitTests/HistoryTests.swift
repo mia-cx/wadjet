@@ -17,9 +17,9 @@ private final class Clock: @unchecked Sendable { var t = Date(timeIntervalSince1
 @Test @MainActor func recentReturnsNewestFirstUpToTheLimit() throws {
     let store = try HistoryStore.inMemory()
     for i in 0..<12 {
-        store.record(kind: .screenshot, createdAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(i)), file: nil)
+        try store.record(kind: .screenshot, createdAt: Date(timeIntervalSince1970: 1_700_000_000 + Double(i)), file: nil)
     }
-    let recent = store.recent()
+    let recent = try store.recent()
     #expect(recent.count == 10)
     #expect(recent.first!.createdAt > recent.last!.createdAt)
     #expect(recent.first!.createdAt == Date(timeIntervalSince1970: 1_700_000_000 + 11))
@@ -28,12 +28,12 @@ private final class Clock: @unchecked Sendable { var t = Date(timeIntervalSince1
 @Test @MainActor func entryKeepsItsStepErrorsAndFile() throws {
     let store = try HistoryStore.inMemory()
     let file = try mkFile(tempDir())
-    let entry = store.record(
+    let entry = try store.record(
         kind: .screenshot, createdAt: Date(), file: file,
         errors: ["Save file: disk full", "Show toast: no window"])
     #expect(entry.errors == ["Save file: disk full", "Show toast: no window"])
     #expect(entry.existingFile == file)
-    #expect(store.recent().first?.id == entry.id)
+    #expect(try store.recent().first?.id == entry.id)
 }
 
 @Test @MainActor func sweepKeepsTheEntryWhenTheTempFileAgesOut() throws {
@@ -45,14 +45,14 @@ private final class Clock: @unchecked Sendable { var t = Date(timeIntervalSince1
     try FileManager.default.setAttributes([.modificationDate: clock.t], ofItemAtPath: temp.path)
 
     let store = try HistoryStore.inMemory()
-    let tempEntry = store.record(kind: .screenshot, createdAt: clock.t, file: temp)
+    let tempEntry = try store.record(kind: .screenshot, createdAt: clock.t, file: temp)
     let saved = try mkFile(tempDir(), "saved.png") // a Save file copy outside the sweep dir
-    let savedEntry = store.record(kind: .screenshot, createdAt: clock.t, file: saved)
+    let savedEntry = try store.record(kind: .screenshot, createdAt: clock.t, file: saved)
 
     clock.t += 120 // past retention
     try files.sweep()
 
-    let ids = store.recent().map(\.id)
+    let ids = try store.recent().map(\.id)
     #expect(ids.contains(tempEntry.id) && ids.contains(savedEntry.id))
     #expect(tempEntry.existingFile == nil)   // swept, entry remains
     #expect(savedEntry.existingFile == saved) // Save file copies are never swept
@@ -85,9 +85,9 @@ private final class Clock: @unchecked Sendable { var t = Date(timeIntervalSince1
 
 @Test @MainActor func setOCRStoresTextOnTheRightEntry() throws {
     let store = try HistoryStore.inMemory()
-    let a = store.record(kind: .screenshot, createdAt: Date(), file: nil)
-    let b = store.record(kind: .screenshot, createdAt: Date(), file: nil)
-    store.setOCR("hello world", for: a.id)
-    #expect(store.recent().first { $0.id == a.id }?.ocrText == "hello world")
-    #expect(store.recent().first { $0.id == b.id }?.ocrText == nil)
+    let a = try store.record(kind: .screenshot, createdAt: Date(), file: nil)
+    let b = try store.record(kind: .screenshot, createdAt: Date(), file: nil)
+    try store.setOCR("hello world", for: a.id)
+    #expect(try store.recent().first { $0.id == a.id }?.ocrText == "hello world")
+    #expect(try store.recent().first { $0.id == b.id }?.ocrText == nil)
 }

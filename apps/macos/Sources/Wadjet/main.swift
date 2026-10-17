@@ -405,7 +405,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         m.addItem(.separator())
         let recent = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
-        let rsub = NSMenu(); rsub.delegate = self // filled lazily in menuNeedsUpdate
+        let rsub = NSMenu()
+        rsub.autoenablesItems = false // a swept entry must stay disabled, not auto-enabled
+        rsub.delegate = self // filled lazily in menuNeedsUpdate
         recent.submenu = rsub; m.addItem(recent)
         m.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
@@ -495,7 +497,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// no menu rebuild needed after each capture.
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
-        let entries = history?.recent(limit: 10) ?? []
+        let entries: [HistoryEntry]
+        do {
+            entries = try history?.recent(limit: 10) ?? []
+        } catch {
+            AppLog.line("history: recent failed: \(error.localizedDescription)")
+            entries = []
+        }
         guard !entries.isEmpty else {
             menu.addItem(NSMenuItem(title: "No Captures Yet", action: nil, keyEquivalent: ""))
             return
@@ -508,13 +516,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let it = NSMenuItem(title: "\(e.kind.title) · \(when)", action: #selector(recentItem(_:)), keyEquivalent: "")
             it.target = self
             it.representedObject = e.id.uuidString
-            if let file = e.existingFile, let img = NSImage(contentsOf: file) {
+            // ImageIO thumbnail at ~64px (32pt @2x); decoding the full
+            // HEIC/PNG for every menu item on every open is far too heavy.
+            if let file = e.existingFile,
+               let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                   kCGImageSourceCreateThumbnailFromImageAlways: true,
+                   kCGImageSourceThumbnailMaxPixelSize: 64,
+               ] as CFDictionary) {
                 let h: CGFloat = 32
-                it.image = NSImage(size: NSSize(width: h * img.size.width / max(img.size.height, 1), height: h))
-                it.image?.lockFocus()
-                img.draw(in: NSRect(origin: .zero, size: it.image!.size),
-                         from: NSRect(origin: .zero, size: img.size), operation: .sourceOver, fraction: 1)
-                it.image?.unlockFocus()
+                it.image = NSImage(cgImage: cg,
+                                   size: NSSize(width: h * CGFloat(cg.width) / max(CGFloat(cg.height), 1), height: h))
             }
             it.isEnabled = e.existingFile != nil || e.link != nil
             menu.addItem(it)
@@ -522,7 +534,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func recentItem(_ s: NSMenuItem) {
         guard let raw = s.representedObject as? String,
-              let e = history?.recent(limit: 10).first(where: { $0.id.uuidString == raw }) else { return }
+              let e = try? history?.recent(limit: 10).first(where: { $0.id.uuidString == raw }) else { return }
         if let file = e.existingFile {
             NSWorkspace.shared.activateFileViewerSelecting([file])
         } else if let link = e.link {
@@ -683,10 +695,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     // capture temp files land in the Captures dir and age out via the sweep
-    lazy var captureFiles = CaptureFiles(
-        directory: Self.capturesDir,
-        retention: TimeInterval(AppState.shared.config.value.retentionDays) * 86_400,
-    )
+    lazy var captureFiles = CaptureFiles(directory: Self.capturesDir)
     lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
 
     // Screenshots write a temp file, then run the Workflow picked for the Tool —
@@ -726,16 +735,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case .failed(let i, _, let m): AppLog.line("workflow \(wf.name): failed \(i) \(m)")
                 case .done(let saved, let errors):
                     AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)")
-                    let entry = self.history?.record(
-                        kind: .screenshot, createdAt: capturedAt,
-                        file: saved.last ?? file, errors: errors)
+                    let entry: HistoryEntry?
+                    do {
+                        entry = try self.history?.record(
+                            kind: .screenshot, createdAt: capturedAt,
+                            file: saved.last ?? file, errors: errors)
+                    } catch {
+                        AppLog.line("history: record failed: \(error.localizedDescription)")
+                        entry = nil
+                    }
                     if let entry {
                         // only Sendable values cross into the detached task
                         let store = self.history, entryID = entry.id, target = saved.last ?? file
                         Task.detached {
                             do {
                                 let text = try await recognizeText(in: target)
-                                await store?.setOCR(text, for: entryID)
+                                try await store?.setOCR(text, for: entryID)
                             } catch {
                                 await AppLog.line("ocr failed: \(error.localizedDescription)")
                             }

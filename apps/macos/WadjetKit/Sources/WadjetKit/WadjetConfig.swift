@@ -65,6 +65,9 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
             }
             try lookup(wf, recording: produces.isRecording, path: path)
         }
+        if retentionDays < 1 {
+            try bad("retentionDays must be at least 1", path: [CodingKeys.retentionDays])
+        }
         try lookup(defaultWorkflows.screenshot, recording: false, path: [CodingKeys.defaultWorkflows, CodingKeys.screenshot])
         try lookup(defaultWorkflows.recording, recording: true, path: [CodingKeys.defaultWorkflows, CodingKeys.recording])
     }
