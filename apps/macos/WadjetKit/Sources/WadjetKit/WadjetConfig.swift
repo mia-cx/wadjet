@@ -17,6 +17,8 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     /// Security-scoped bookmarks for folders chosen outside the sandbox's
     /// Pictures/Movies grants; key is the path as written in config.json.
     public var bookmarks: [String: Data] = [:]
+    /// Days before temporary Capture files are swept; their history entries stay.
+    public var retentionDays = 7
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -42,6 +44,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         shortcuts = try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? []
         defaultWorkflows = try c.decodeIfPresent(DefaultWorkflows.self, forKey: .defaultWorkflows) ?? DefaultWorkflows()
         bookmarks = try c.decodeIfPresent([String: Data].self, forKey: .bookmarks) ?? [:]
+        retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 7
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -80,9 +83,10 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(shortcuts, forKey: .shortcuts)
         try c.encode(defaultWorkflows, forKey: .defaultWorkflows)
         try c.encode(bookmarks, forKey: .bookmarks)
+        try c.encode(retentionDays, forKey: .retentionDays)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, workflow, screenshot, recording
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, workflow, screenshot, recording
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
