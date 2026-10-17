@@ -41,10 +41,13 @@ Data lands under `apps/server/data/` (SQLite plus blobs). `pnpm start` runs the 
 | `WADJET_S3_SECRET_ACCESS_KEY` | with `s3` | — | Secret key. |
 | `WADJET_S3_FORCE_PATH_STYLE` | no | `false` | `true` for path-style URLs, needed by MinIO and most S3 clones. |
 | `WADJET_DATABASE_URL` | no | unset | `postgres://…` file index; unset keeps SQLite under `WADJET_DATA_DIR`. |
-| `WADJET_CLOUDFLARE_ZONE_ID` | no | unset | Cloudflare zone to purge. Set both or neither. |
-| `WADJET_CLOUDFLARE_API_TOKEN` | no | unset | API token with the zone's Cache Purge permission. Set both or neither. |
+| `WADJET_CLOUDFLARE_ZONE_ID` | no | unset | Cloudflare zone to purge. Node/Docker only; set both or neither. |
+| `WADJET_CLOUDFLARE_API_TOKEN` | no | unset | API token with the zone's Cache Purge permission. Node/Docker only; set both or neither. |
 
-Setting the Cloudflare pair enables the edge-cache purger on any runtime: deleting a file purges its URLs from the zone's cache.
+The Cloudflare pair only applies to the Node/Docker server sitting behind a
+proxied Cloudflare zone: deleting a file purges its URLs from the zone's
+ordinary HTTP cache. The Worker serves from R2/D1 with no cache layer — a
+Worker's Cache API entries use custom keys that zone purge-by-URL can't reach.
 
 Only key hashes are stored. Hash a key before putting it in `WADJET_API_KEYS`:
 
@@ -118,6 +121,6 @@ The server also runs as a Worker (`src/worker.ts`), with blobs in R2 and the fil
 1. `pnpm exec wrangler r2 bucket create wadjet-blobs`
 2. `pnpm exec wrangler d1 create wadjet`, then paste the `database_id` it prints into `wrangler.jsonc`.
 3. Set `WADJET_BASE_URL` in `wrangler.jsonc` to the public URL.
-4. `pnpm exec wrangler secret put` each of `WADJET_API_KEYS`, `WADJET_CLOUDFLARE_ZONE_ID`, `WADJET_CLOUDFLARE_API_TOKEN`.
+4. `pnpm exec wrangler secret put` `WADJET_API_KEYS` (the zone pair doesn't apply to the Worker).
 5. `pnpm exec wrangler d1 migrations apply wadjet --remote`
 6. `pnpm exec wrangler deploy`

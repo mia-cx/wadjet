@@ -137,8 +137,9 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
   const apiKeys = decode('WADJET_API_KEYS', apiKeysSchema, apiKeysValue)
   if (Object.keys(apiKeys).length === 0) fail('WADJET_API_KEYS', 'needs at least one key')
 
-  const zoneId = env.WADJET_CLOUDFLARE_ZONE_ID
-  const apiToken = env.WADJET_CLOUDFLARE_API_TOKEN
+  // '' is unset: Docker/compose ships empty vars for the unset case.
+  const zoneId = env.WADJET_CLOUDFLARE_ZONE_ID || undefined
+  const apiToken = env.WADJET_CLOUDFLARE_API_TOKEN || undefined
   if (zoneId !== undefined && apiToken === undefined)
     fail('WADJET_CLOUDFLARE_API_TOKEN', 'is required when WADJET_CLOUDFLARE_ZONE_ID is set')
   if (apiToken !== undefined && zoneId === undefined)

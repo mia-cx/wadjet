@@ -18,5 +18,7 @@
     }
   ]
   // Secrets, set with `wrangler secret put <name>`:
-  //   WADJET_API_KEYS, WADJET_CLOUDFLARE_ZONE_ID, WADJET_CLOUDFLARE_API_TOKEN
+  //   WADJET_API_KEYS
+  // (WADJET_CLOUDFLARE_* purge vars don't apply here: the Worker has no
+  // edge-cache layer — that's for the Node/Docker server behind a zone.)
 }
