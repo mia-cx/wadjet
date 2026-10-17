@@ -94,6 +94,19 @@ export const blobStoreContract = (
       expect(await bytes(must(await blobs.get('files/re')))).toEqual(joined)
     }, 60_000)
 
+    it('completing a finished upload again is a no-op', async () => {
+      const blobs = await store()
+      const uploadId = await blobs.startMultipart('files/tw', 'application/octet-stream')
+      const p1 = part(3)
+      const etag = await blobs.putPart('files/tw', uploadId, 1, streamOf(p1), p1.length)
+      const parts = [{ number: 1, etag }]
+      await blobs.completeMultipart('files/tw', uploadId, parts)
+      // A retried complete (the upload row was gone but the object landed)
+      // must not error — completeMultipart is idempotent.
+      await blobs.completeMultipart('files/tw', uploadId, parts)
+      expect(await bytes(must(await blobs.get('files/tw')))).toEqual(p1)
+    }, 60_000)
+
     it("abort frees an upload's parts and writes no blob", async () => {
       const blobs = await store()
       const uploadId = await blobs.startMultipart('files/ab', 'application/octet-stream')

@@ -116,3 +116,40 @@ it('does not cache without a purger', async () => {
   expect(deleted.status).toBe(204)
   expect((await fetch(url)).status).toBe(404)
 })
+
+it('a junk query cannot pin a deleted file in the edge cache', async () => {
+  // Miniflare can't reach api.cloudflare.com, so purge through a seam that
+  // does to caches.default what the real zone purge does.
+  const handler = createHandler({
+    purger: {
+      purge: async (urls) => {
+        for (const url of urls) await caches.default.delete(url)
+      },
+    },
+  })
+  const cachedEnv: Env = {
+    ...prodEnv,
+    WADJET_CLOUDFLARE_ZONE_ID: 'zone',
+    WADJET_CLOUDFLARE_API_TOKEN: 'token',
+  }
+  const fetch = async (input: string, init?: RequestInit) => {
+    const ctx = createExecutionContext()
+    const request = new Request(input, init) as unknown as Request<
+      unknown,
+      IncomingRequestCfProperties
+    >
+    const response = await handler.fetch(request, cachedEnv, ctx)
+    await waitOnExecutionContext(ctx)
+    return response
+  }
+
+  const { id, url } = await uploadPng(fetch, new Uint8Array([1, 2, 3, 4]))
+  // Any query variant must share the canonical key, or it survives the purge.
+  expect((await fetch(`${url}?x=1`)).status).toBe(200)
+  const deleted = await fetch(`https://w.mia.cx/v1/files/${id}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${REPLAY_API_KEY}` },
+  })
+  expect(deleted.status).toBe(204)
+  expect((await fetch(`${url}?x=1`)).status).toBe(404)
+})

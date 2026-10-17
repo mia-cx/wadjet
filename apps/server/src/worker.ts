@@ -32,7 +32,9 @@ const R2_MIN_PART_BYTES = 5 * 1024 * 1024
 
 export const appFor = (
   env: Env,
-  seams: Partial<Pick<AppDeps, 'blobs' | 'files' | 'uploads' | 'clock' | 'ids' | 'tokens'>> = {},
+  seams: Partial<
+    Pick<AppDeps, 'blobs' | 'files' | 'uploads' | 'purger' | 'clock' | 'ids' | 'tokens'>
+  > = {},
 ) => {
   const config = configFor(env)
   const blobs = seams.blobs ?? r2BlobStore(env.BLOBS)
@@ -62,24 +64,33 @@ export const appFor = (
  * applies its own Range handling, which breaks the protocol's full-200
  * fallback for unsatisfiable and multi-range requests.
  */
-export const createHandler = (): Required<Pick<ExportedHandler<Env>, 'fetch'>> => {
+export const createHandler = (
+  seams: Parameters<typeof appFor>[1] = {},
+): Required<Pick<ExportedHandler<Env>, 'fetch'>> => {
   let state: { app: ReturnType<typeof appFor>; edgeCache: boolean } | undefined
   return {
     async fetch(request, env, ctx) {
       // Build lazily per isolate: a ConfigError rejects the request (visible in
       // logs, retryable) instead of being cached at startup.
-      state ??= { app: appFor(env), edgeCache: configFor(env).cloudflarePurge !== null }
+      state ??= { app: appFor(env, seams), edgeCache: configFor(env).cloudflarePurge !== null }
       if (!state.edgeCache || request.method !== 'GET' || request.headers.has('Range')) {
         return await state.app.fetch(request)
       }
-      // The cache key keeps the query: it is exactly the URL the purger
-      // deletes (`/t/{id}?v={n}` versions thumbnails by query).
+      // The cache key is exactly the URL the purger deletes: path only for
+      // files, `/t/{id}?v={n}` (the only meaningful param) for thumbnails.
       const url = new URL(request.url)
-      const key = new URL(url.pathname + url.search, url.origin)
+      const v = url.searchParams.get('v')
+      const key = new URL(
+        url.pathname.startsWith('/t/') && v !== null ? `${url.pathname}?v=${v}` : url.pathname,
+        url.origin,
+      )
       const matched = await caches.default.match(new Request(key))
       if (matched) return matched
       const response = await state.app.fetch(request)
-      if (response.status === 200 && response.headers.get('Cache-Control')?.includes('public')) {
+      if (
+        (response.status === 200 || response.status === 206) &&
+        response.headers.get('Cache-Control')?.includes('public')
+      ) {
         ctx.waitUntil(caches.default.put(key, response.clone()))
       }
       return response

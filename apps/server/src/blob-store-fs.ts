@@ -67,6 +67,16 @@ export const filesystemBlobStore = (root: string): BlobStore => ({
   async completeMultipart(key, uploadId, parts) {
     const dir = join(root, 'uploads', uploadId)
     const path = join(root, key)
+    // Already completed: the parts dir is gone and the object exists.
+    const partsDir = await open(dir).then(
+      (d) => d.close().then(() => true),
+      () => false,
+    )
+    const objectThere = await open(path).then(
+      (f) => f.close().then(() => true),
+      () => false,
+    )
+    if (!partsDir && objectThere) return
     await mkdir(dirname(path), { recursive: true })
     const temp = `${path}.tmp-${crypto.randomUUID()}`
     try {

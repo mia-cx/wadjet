@@ -133,9 +133,12 @@ export const createLibrary = (deps: LibraryDeps) => {
     const deleteTokenHash = await sha256Hex(token)
     let id = fixedId ?? ''
     if (id === '') {
+      // Upload and file ids share one namespace — a completed upload's file
+      // takes the session's id, so a free id must clear both tables.
       for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {
         id = deps.ids()
-        if ((await deps.files.get(id)) === undefined) break
+        if ((await deps.files.get(id)) === undefined && (await deps.uploads.get(id)) === undefined)
+          break
         if (attempt === MAX_ID_ATTEMPTS - 1)
           throw new Error(`Could not draw a free id in ${MAX_ID_ATTEMPTS} attempts`)
       }
@@ -248,7 +251,8 @@ export const createLibrary = (deps: LibraryDeps) => {
         if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
       }
       const updated = await deps.files.get(id)
-      return toFile(updated!)
+      if (!updated) throw notFound(`No file ${id}.`) // deleted between put and read
+      return toFile(updated)
     },
 
     async delete(owner: string, id: string): Promise<void> {
@@ -281,7 +285,11 @@ export const createLibrary = (deps: LibraryDeps) => {
       let id = ''
       let row: UploadRow | undefined
       for (let attempt = 0; attempt < MAX_ID_ATTEMPTS && row === undefined; attempt++) {
+        // Ids share one namespace with files; check before starting storage
+        // so a collision doesn't create a session just to abort it.
         id = deps.ids()
+        if ((await deps.files.get(id)) !== undefined || (await deps.uploads.get(id)) !== undefined)
+          continue
         const storageUploadId = await deps.blobs.startMultipart(`files/${id}`, input.contentType)
         const now = new Date(Math.floor(deps.clock().getTime() / 1000) * 1000)
         const candidate: UploadRow = {
@@ -315,7 +323,9 @@ export const createLibrary = (deps: LibraryDeps) => {
           if (attempt === MAX_ID_ATTEMPTS - 1) throw error
         }
       }
-      return { session: sessionBody(row!), created: true }
+      if (row === undefined)
+        throw new Error(`Could not draw a free id in ${MAX_ID_ATTEMPTS} attempts`)
+      return { session: sessionBody(row), created: true }
     },
 
     async uploadPart(

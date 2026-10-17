@@ -88,7 +88,12 @@ export const memoryBlobStore = (): BlobStore => {
     },
     completeMultipart(key, uploadId, partList) {
       const session = parts.get(`${uploadId}:${key}`)
-      if (!session) return Promise.reject(new Error(`No multipart upload ${uploadId} for ${key}`))
+      // Already completed: the parts are gone and the object exists.
+      if (!session) {
+        return blobs.has(key)
+          ? Promise.resolve()
+          : Promise.reject(new Error(`No multipart upload ${uploadId} for ${key}`))
+      }
       const chunks: Uint8Array[] = []
       let size = 0
       for (const part of partList) {

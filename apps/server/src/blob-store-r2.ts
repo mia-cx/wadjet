@@ -32,9 +32,16 @@ export const r2BlobStore = (bucket: R2Bucket): BlobStore => ({
     return part.etag
   },
   async completeMultipart(key, uploadId, parts) {
-    await bucket
-      .resumeMultipartUpload(key, uploadId)
-      .complete(parts.map((p) => ({ partNumber: p.number, etag: p.etag })))
+    try {
+      await bucket
+        .resumeMultipartUpload(key, uploadId)
+        .complete(parts.map((p) => ({ partNumber: p.number, etag: p.etag })))
+    } catch (error) {
+      // A retried complete after the first succeeded finds the upload gone and
+      // the object present — that's a done upload, not a failure.
+      if ((await bucket.head(key)) !== null) return
+      throw error
+    }
   },
   async abortMultipart(key, uploadId) {
     // Spec: aborting a finished or never-started upload is not an error.
