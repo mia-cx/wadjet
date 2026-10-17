@@ -31,10 +31,14 @@ const blobs =
     ? s3BlobStore(config.blobStore)
     : filesystemBlobStore(join(config.dataDir, 'blobs'))
 
+const pool =
+  config.databaseUrl === null ? null : new pg.Pool({ connectionString: config.databaseUrl })
+// Without a listener, an error on an idle client (DB restart, pg_terminate_backend)
+// is an uncaught exception and kills the process.
+pool?.on('error', (error) => console.error('Postgres idle client error:', error))
+
 const files =
-  config.databaseUrl === null
-    ? sqliteFileIndex(join(config.dataDir, 'wadjet.db'))
-    : await postgresFileIndex(new pg.Pool({ connectionString: config.databaseUrl }))
+  pool === null ? sqliteFileIndex(join(config.dataDir, 'wadjet.db')) : await postgresFileIndex(pool)
 
 const app = createApp({
   config,

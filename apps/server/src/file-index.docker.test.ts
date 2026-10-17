@@ -1,5 +1,5 @@
 import pg from 'pg'
-import { afterAll, beforeAll } from 'vitest'
+import { afterAll, beforeAll, describe, it } from 'vitest'
 import { fileIndexContract } from './file-index.contract.ts'
 import type { FileIndex } from './file-index.ts'
 import { postgresFileIndex } from './file-index-postgres.ts'
@@ -22,4 +22,18 @@ afterAll(async () => {
 fileIndexContract('postgresFileIndex', async () => {
   await pool.query('TRUNCATE files')
   return index
+})
+
+describe('postgresFileIndex', () => {
+  it('initializes concurrently on a fresh database', async () => {
+    await pool.query('DROP TABLE IF EXISTS files')
+    await pool.query('DROP SCHEMA IF EXISTS drizzle CASCADE')
+    const a = new pg.Pool({ connectionString: url })
+    const b = new pg.Pool({ connectionString: url })
+    try {
+      await Promise.all([postgresFileIndex(a), postgresFileIndex(b)])
+    } finally {
+      await Promise.all([a.end(), b.end()])
+    }
+  })
 })

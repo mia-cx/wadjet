@@ -8,13 +8,24 @@ import type { FileIndex } from './file-index.ts'
 
 const migrationsFolder = fileURLToPath(new URL('../drizzle-pg', import.meta.url))
 
+// Serializes concurrent boots: drizzle's migrate races on a fresh database.
+const MIGRATION_LOCK_KEY = 1879048912
+
 /**
  * File index backed by Postgres through Drizzle, for the Node server.
  * Applies pending migrations on creation; the caller owns `pool`.
  */
 export const postgresFileIndex = async (pool: pg.Pool): Promise<FileIndex> => {
+  const client = await pool.connect()
+  try {
+    await client.query('SELECT pg_advisory_lock($1)', [MIGRATION_LOCK_KEY])
+    await migrate(drizzle(client), { migrationsFolder })
+  } finally {
+    await client.query('SELECT pg_advisory_unlock($1)', [MIGRATION_LOCK_KEY])
+    client.release()
+  }
+
   const db = drizzle(pool)
-  await migrate(db, { migrationsFolder })
 
   return {
     async insert(row) {
