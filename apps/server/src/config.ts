@@ -1,5 +1,6 @@
 import type { Discovery } from '@wadjet/protocol'
 import { Schema } from 'effect'
+import type { S3BlobStoreOptions } from './blob-store-s3.ts'
 
 export class ConfigError extends Error {
   constructor(message: string) {
@@ -13,6 +14,11 @@ export interface Config {
   readonly apiKeys: ReadonlyMap<string, string>
   readonly dataDir: string
   readonly port: number
+  readonly blobStore:
+    | { readonly kind: 'filesystem' }
+    | ({ readonly kind: 's3' } & S3BlobStoreOptions)
+  /** Null means the SQLite index under dataDir. */
+  readonly databaseUrl: string | null
   readonly limits: typeof Discovery.Type.limits
 }
 
@@ -72,6 +78,50 @@ const parseBaseUrl = (value: string): string => {
   return url.origin
 }
 
+const requireEnv = (env: Record<string, string | undefined>, name: string): string => {
+  const value = env[name]
+  if (value === undefined || value === '') return fail(name, 'is required')
+  return value
+}
+
+const parseBlobStore = (env: Record<string, string | undefined>): Config['blobStore'] => {
+  const kind = env.WADJET_BLOB_STORE ?? 'filesystem'
+  if (kind === 'filesystem') return { kind }
+  if (kind !== 's3') return fail('WADJET_BLOB_STORE', 'must be filesystem or s3')
+
+  const endpoint = requireEnv(env, 'WADJET_S3_ENDPOINT')
+  let url: URL
+  try {
+    url = new URL(endpoint)
+  } catch {
+    return fail('WADJET_S3_ENDPOINT', 'not a URL')
+  }
+  if (url.protocol !== 'http:' && url.protocol !== 'https:')
+    return fail('WADJET_S3_ENDPOINT', 'must be http or https')
+
+  const pathStyle = env.WADJET_S3_FORCE_PATH_STYLE
+  if (pathStyle !== undefined && pathStyle !== 'true' && pathStyle !== 'false')
+    return fail('WADJET_S3_FORCE_PATH_STYLE', 'must be true or false')
+
+  return {
+    kind,
+    endpoint,
+    bucket: requireEnv(env, 'WADJET_S3_BUCKET'),
+    region: env.WADJET_S3_REGION ?? 'auto',
+    accessKeyId: requireEnv(env, 'WADJET_S3_ACCESS_KEY_ID'),
+    secretAccessKey: requireEnv(env, 'WADJET_S3_SECRET_ACCESS_KEY'),
+    forcePathStyle: pathStyle === 'true',
+  }
+}
+
+const parseDatabaseUrl = (env: Record<string, string | undefined>): string | null => {
+  const value = env.WADJET_DATABASE_URL
+  if (value === undefined) return null
+  if (!value.startsWith('postgres://') && !value.startsWith('postgresql://'))
+    return fail('WADJET_DATABASE_URL', 'must be a postgres:// or postgresql:// URL')
+  return value
+}
+
 /**
  * Reads `WADJET_*` env vars into a Config. Throws ConfigError, whose message
  * names the offending variable, when any value is missing or malformed.
@@ -91,6 +141,8 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
     apiKeys: new Map(Object.entries(apiKeys)),
     dataDir: env.WADJET_DATA_DIR ?? './data',
     port: intEnv(env, 'PORT', port, 8787),
+    blobStore: parseBlobStore(env),
+    databaseUrl: parseDatabaseUrl(env),
     limits: {
       maxRequestBytes: intEnv(env, 'WADJET_MAX_REQUEST_BYTES', nonNegative, 100_000_000),
       partBytes: intEnv(env, 'WADJET_PART_BYTES', positive, 67_108_864),

@@ -6,20 +6,24 @@
   "scripts": {
     "build": "tsc -p tsconfig.build.json",
     "test": "tsc -p tsconfig.json --noEmit && vitest run",
+    "test:docker": "vitest run --config vitest.docker.config.ts",
     "dev": "node --watch --env-file=.env.development src/node.ts",
     "start": "node dist/node.js"
   },
   "dependencies": {
     "@hono/node-server": "2.1.4",
     "@wadjet/protocol": "workspace:*",
+    "aws4fetch": "1.0.20",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.4",
     "effect": "4.0.2",
-    "hono": "4.13.13"
+    "hono": "4.13.13",
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.19.2",
+    "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.11",
     "typescript": "7.0.2",
     "vitest": "5.0.3"
