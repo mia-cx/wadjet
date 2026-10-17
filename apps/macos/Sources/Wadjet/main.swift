@@ -524,9 +524,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                    kCGImageSourceCreateThumbnailFromImageAlways: true,
                    kCGImageSourceThumbnailMaxPixelSize: 64,
                ] as CFDictionary) {
-                let h: CGFloat = 32
+                // fit inside a 32 pt box so a thin, wide Capture can't widen the menu
+                let scale = 32 / CGFloat(max(cg.width, cg.height, 1))
                 it.image = NSImage(cgImage: cg,
-                                   size: NSSize(width: h * CGFloat(cg.width) / max(CGFloat(cg.height), 1), height: h))
+                                   size: NSSize(width: CGFloat(cg.width) * scale, height: CGFloat(cg.height) * scale))
             }
             it.isEnabled = e.existingFile != nil || e.link != nil
             menu.addItem(it)
