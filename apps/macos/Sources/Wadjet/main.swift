@@ -7,12 +7,16 @@ import Carbon
 import Vision
 import UniformTypeIdentifiers
 import ObjectiveC
+import KeyboardShortcuts
 import WadjetKit
 
 // MARK: - Model
 
 enum Tool: String, CaseIterable {
-    case capRegion, capWindow, capScreen, recRegion, recWindow, recScreen, pickColour, copyText, measure
+    // raw values match WadjetKit's ToolID, so config shortcuts map straight through
+    case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
+    case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
+    case pickColour = "pickColour", copyText = "copyText", measure = "measure"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
@@ -28,7 +32,12 @@ enum Tool: String, CaseIterable {
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
         }
     }
-    var shortcut: String? { switch self { case .capRegion: "⌘⇧4"; case .capScreen: "⌘⇧3"; case .recRegion: "⌘⇧5"; default: nil } }
+    // its Shortcut's key text, if config.json defines one — reads AppState (main-actor)
+    var shortcutHint: String? {
+        @MainActor get {
+            AppState.shared.config.value.shortcuts.first { $0.tool.rawValue == rawValue }.map { String(describing: $0.keys) }
+        }
+    }
     enum Kind { case shot, rec, util }
     var hasMenu: Bool { self != .copyText }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
@@ -51,6 +60,8 @@ final class AppState: ObservableObject {
     @Published var phase: Phase = .desktop
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
+    /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
+    @Published var triggerWorkflow: String? = nil
     let config = ConfigStore(file: AppLog.url.deletingLastPathComponent().appendingPathComponent("config.json"), defaults: WadjetConfig(), keychain: SystemKeychain(service: "cx.mia.wadjet"), onError: reportConfigError)
     // both live in config.json; SwiftUI views track them through the store's Observation
     var colourFmt: String { // Hex, rgb(), hsl(), oklch(), lab(), SwiftUI
@@ -85,11 +96,16 @@ final class AppState: ObservableObject {
         }
         return config.value.workflows.filter { kinds.contains($0.takes) }.map(\.name)
     }
-    // the Workflow a capture runs with: the per-Tool choice if it still exists
-    // in config, else the first compatible one (Screenshot for Capture, MP4 for Record)
+    // the Workflow a capture runs with: a triggering Shortcut's pick for this one
+    // capture > the Tool menu's choice > the kind's configured default > first
+    // compatible (Screenshot for Capture, MP4 for Record)
     func workflowFor(_ t: Tool?) -> String? {
         let list = workflows(for: t)
+        if let tw = triggerWorkflow, list.contains(tw) { return tw }
         if let chosen = workflowByTool[t ?? .capRegion], list.contains(chosen) { return chosen }
+        let dflt = t?.kind == .shot ? config.value.defaultWorkflows.screenshot
+            : t?.kind == .rec ? config.value.defaultWorkflows.recording : nil
+        if let dflt, list.contains(dflt) { return dflt }
         return list.first
     }
 }
@@ -263,6 +279,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         toastCtrl = ToastController()
         Task { @MainActor in // live reload shows up in app.log
             var lastMode = AppState.shared.config.value.tools.measure.mode
+            var lastShortcuts = AppState.shared.config.value.shortcuts
             for await c in Observations({ AppState.shared.config.value }) {
                 AppLog.line("config: colourFormat=\(c.tools.pickColour.format.rawValue) measureMode=\(c.tools.measure.mode.rawValue)")
                 // a config.json edit of the Measure mode rescans without a mouse move
@@ -270,9 +287,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     lastMode = c.tools.measure.mode
                     for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.rescanRuler() } }
                 }
+                if c.shortcuts != lastShortcuts {
+                    lastShortcuts = c.shortcuts
+                    registerShortcuts()
+                    rebuildMenu()
+                }
             }
         }
-        Hotkeys.register()
+        registerShortcuts()
         AppLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
         buildStateHUD()
         _ = try? FileManager.default.createDirectory(at: Self.capturesDir, withIntermediateDirectories: true)
@@ -342,24 +364,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // MARK: status menu
     func rebuildMenu() {
         let m = NSMenu()
+        let s = AppState.shared
         let tools: [Tool] = [.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
         for (i, t) in tools.enumerated() {
-            let it = NSMenuItem(title: t.title + (t.shortcut.map { "\t" + $0 } ?? ""),
-                                action: #selector(toolItem(_:)), keyEquivalent: "")
+            let it = NSMenuItem(title: t.title, action: #selector(toolItem(_:)), keyEquivalent: "")
             it.representedObject = t.rawValue; it.target = self
+            if let si = s.config.value.shortcuts.firstIndex(where: { $0.tool.rawValue == t.rawValue }) {
+                it.setShortcut(for: KeyboardShortcuts.Name("shortcut.\(si)"))
+            }
             m.addItem(it)
             if i == 2 || i == 5 { m.addItem(.separator()) }
         }
         m.addItem(.separator())
-        let recent = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
-        let rsub = NSMenu()
-        let noCap = NSMenuItem(title: "No Captures", action: nil, keyEquivalent: ""); noCap.isEnabled = false
-        rsub.addItem(noCap)
-        recent.submenu = rsub; m.addItem(recent)
-        for t in ["Destinations", "History…", "Settings…"] {
-            let it = NSMenuItem(title: t, action: nil, keyEquivalent: ""); it.isEnabled = false
-            m.addItem(it)
-        }
+        // opens config.json until the Settings window lands in #25
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openConfigFile), keyEquivalent: ",")
+        settings.target = self
+        m.addItem(settings)
         let proto = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
         let psub = NSMenu()
         psub.addItem(mi("Island Mode Even With Notch", #selector(toggleIsland), on: AppState.shared.islandMode))
@@ -388,6 +408,70 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hudPanel.setIsVisible(AppState.shared.showStateHUD) }
     @objc func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
+    }
+    @objc func openConfigFile() {
+        NSWorkspace.shared.open(AppState.shared.config.file)
+    }
+
+    // MARK: Shortcuts
+
+    /// KeyboardShortcuts names live across config loads; a removed Shortcut's
+    /// name is reset so it stops firing.
+    var shortcutNames: [KeyboardShortcuts.Name] = []
+
+    func registerShortcuts() {
+        let s = AppState.shared
+        for n in shortcutNames { KeyboardShortcuts.reset(n) }
+        shortcutNames = []
+        let apple = appleScreenshotHotkeys()
+        AppLog.line("system screenshot hotkeys: \(apple)")
+        for (i, sc) in s.config.value.shortcuts.enumerated() {
+            guard let tool = Tool(rawValue: sc.tool.rawValue) else { continue }
+            let name = KeyboardShortcuts.Name("shortcut.\(i)")
+            shortcutNames.append(name)
+            KeyboardShortcuts.setShortcut(
+                KeyboardShortcuts.Shortcut(carbonKeyCode: sc.keys.keyCode, carbonModifiers: sc.keys.carbonModifiers),
+                for: name)
+            AppLog.line("shortcut \(sc.keys) -> \(tool.title) registered")
+            KeyboardShortcuts.onKeyDown(for: name) {
+                Task { @MainActor in AppDelegate.shared?.fireShortcut(sc, tool: tool) }
+            }
+            if apple.contains(where: { $0.0 == sc.keys.keyCode && $0.1 == sc.keys.carbonModifiers }) {
+                AppLog.line("shortcut \(sc.keys) for \(tool.title) clashes with a macOS screenshot shortcut")
+                let t = toastCtrl.pending("Shortcut taken by macOS")
+                t.sub = "\(sc.keys) for \(tool.title) is a macOS screenshot shortcut. Turn it off in System Settings › Keyboard › Keyboard Shortcuts › Screenshots."
+                toastCtrl.startTimer(t)
+            }
+        }
+    }
+
+    // enabled macOS screenshot combos from the symbolic hotkey table
+    // (Carbon IDs 28–31, 184 are the Screenshots section of Keyboard Shortcuts)
+    func appleScreenshotHotkeys() -> [(keyCode: Int, mods: Int)] {
+        var arr: Unmanaged<CFArray>?
+        guard CopySymbolicHotKeys(&arr) == noErr,
+              let list = arr?.takeRetainedValue() as? [[String: Any]] else { return [] }
+        let shotIDs = [28, 29, 30, 31, 184]
+        // each entry: "enabled" + "value" -> {parameters: [ascii, keyCode, mods]}
+        return shotIDs.compactMap { i in
+            let e = list[i]
+            guard (e["enabled"] as? Bool) == true,
+                  let v = e["value"] as? [String: Any],
+                  let p = v["parameters"] as? [Int], p.count >= 3 else { return nil }
+            return (p[1], p[2])
+        }
+    }
+
+    // a Shortcut press: apply its options, hold its Workflow for this capture, trigger
+    func fireShortcut(_ sc: Shortcut, tool: Tool) {
+        let s = AppState.shared
+        if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
+        if let v = sc.options.systemAudio { s.sysAudio = v }
+        if let v = sc.options.microphone { s.mic = v }
+        if let v = sc.options.cursor { s.cursor = v }
+        if let v = sc.options.clickCircles { s.clickCircles = v }
+        s.triggerWorkflow = sc.workflow
+        trigger(tool, at: ContinuousClock.now) // Shortcut press -> Freeze Frame latency starts here
     }
 
     // MARK: trigger
@@ -477,6 +561,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     // Screenshots write a temp file, then run the Workflow picked for the Tool —
     // the Steps do the rest (save, copy, toast). Recordings stay simulated until #28.
     func runCapture(thumb: CGImage?, label: String, duration: TimeInterval? = nil) {
+        defer { AppState.shared.triggerWorkflow = nil } // the Shortcut's pick is one-shot
         if duration != nil || thumb == nil {
             let wf = AppState.shared.workflowFor(AppState.shared.tool) ?? "MP4"
             toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: nil, duration: duration), workflow: wf)
@@ -724,7 +809,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func handleEsc() {
         let s = AppState.shared
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
-        if s.phase == .frozen { AppLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
+        if s.phase == .frozen { s.triggerWorkflow = nil; AppLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
         if s.phase == .countdown { cancelCountdown(); return }
         if let t = toastCtrl.items.first(where: { $0.showBar || $0.showRing }) {
             t.showBar = false; t.showRing = false; t.showCancel = false
@@ -2030,7 +2115,7 @@ enum TipPanel {
     }
     static func show(_ t: Tool, anchor: CGRect) {
         panel?.close()
-        let label = t.title + (t.shortcut.map { "  " + $0 } ?? "")
+        let label = t.title + (t.shortcutHint.map { "  " + $0 } ?? "")
         let h = NSHostingView(rootView: Text(label).font(.system(size: 11)).foregroundStyle(.white)
             .padding(.horizontal, 9).padding(.vertical, 4)
             .background(Color.black.opacity(0.85), in: .rect(cornerRadius: 6)))
@@ -2061,9 +2146,9 @@ struct ToolMenuView: View {
         VStack(alignment: .leading, spacing: 2) {
             switch tool.kind {
             case .shot:
-                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0 }
+                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
             case .rec:
-                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0 }
+                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
                 Text("Options").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
                     .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
                 section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
@@ -2454,37 +2539,8 @@ struct StateHUDView: View {
     }
 }
 
-// MARK: - Hotkeys (Carbon)
-
-enum Hotkeys {
-    nonisolated(unsafe) static var refs: [EventHotKeyRef?] = []
-    @MainActor
-    static func register() {
-        var type = EventTypeSpec(eventClass: OSType(kEventClassKeyboard), eventKind: UInt32(kEventHotKeyPressed))
-        let defs: [(UInt32, UInt32, Tool)] = [
-            (UInt32(kVK_ANSI_4), UInt32(cmdKey | shiftKey), .capRegion),
-            (UInt32(kVK_ANSI_3), UInt32(cmdKey | shiftKey), .capScreen),
-            (UInt32(kVK_ANSI_5), UInt32(cmdKey | shiftKey), .recRegion),
-        ]
-        for (i, (key, mods, tool)) in defs.enumerated() {
-            var ref: EventHotKeyRef?
-            let id = EventHotKeyID(signature: OSType(0x77646A74), id: UInt32(i + 1)) // 'wdjt'
-            let err = RegisterEventHotKey(key, mods, id, GetApplicationEventTarget(), 0, &ref)
-            refs.append(ref)
-            AppLog.line("hotkey \(tool.title): \(err == noErr ? "registered" : "FAILED (\(err))")")
-        }
-        InstallEventHandler(GetApplicationEventTarget(), { _, ev, _ -> OSStatus in
-            var id = EventHotKeyID()
-            GetEventParameter(ev, EventParamName(kEventParamDirectObject), EventParamType(typeEventHotKeyID), nil, MemoryLayout<EventHotKeyID>.size, nil, &id)
-            guard id.id >= 1 && id.id <= 3 else { return OSStatus(eventNotHandledErr) }
-            let tools = [Tool.capRegion, .capScreen, .recRegion]
-            let t = tools[Int(id.id) - 1]
-            let start = ContinuousClock.now // hotkey press -> Freeze Frame latency starts here
-            DispatchQueue.main.async { AppDelegate.shared?.trigger(t, at: start) }
-            return noErr
-        }, 1, &type, nil, nil)
-    }
-}
+// MARK: - Shortcuts (KeyboardShortcuts; Esc/Space/⌃n in-overlay Carbon hotkeys
+// are elsewhere — they're overlay-scoped, not global)
 
 // MARK: - Entry point
 

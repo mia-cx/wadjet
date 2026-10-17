@@ -23,9 +23,19 @@ IDENTITY="${IDENTITY:--}"
 CONDITIONS='$(inherited)'
 [[ "${WADJET_CLEAR_GLASS:-1}" == "1" ]] && CONDITIONS+=' CLEAR_GLASS_PATCH'
 
+# package products (e.g. KeyboardShortcuts' resource bundle) sign automatically:
+# they take the generic "Apple Development" identity plus the team, not a
+# specific cert — and a manually-specified cert conflicts with that
+if [[ "$IDENTITY" == *"Apple Development"* ]]; then
+    IDENTITY="Apple Development"
+    TEAM_ARG="DEVELOPMENT_TEAM=VJKBGC9AMK"
+else
+    TEAM_ARG=""
+fi
+
 xcodebuild -project Wadjet.xcodeproj -scheme Wadjet -configuration Release \
     -derivedDataPath build/DerivedData -destination "platform=macOS,arch=$(uname -m)" \
-    ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY="$IDENTITY" \
+    ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY="$IDENTITY" $TEAM_ARG \
     SWIFT_ACTIVE_COMPILATION_CONDITIONS="$CONDITIONS" -quiet "$@" build
 
 rm -rf "$APP"

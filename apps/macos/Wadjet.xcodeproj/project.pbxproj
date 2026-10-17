@@ -66,6 +66,7 @@
 			name = Wadjet;
 			packageProductDependencies = (
 				A10000000000000000000002 /* WadjetKit */,
+				A20000000000000000000002 /* KeyboardShortcuts */,
 			);
 			productName = Wadjet;
 			productReference = A10000000000000000000007 /* Wadjet.app */;
@@ -97,6 +98,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				A10000000000000000000011 /* XCLocalSwiftPackageReference "WadjetKit" */,
+				A20000000000000000000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = A10000000000000000000006 /* Products */;
@@ -312,11 +314,27 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		A20000000000000000000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/sindresorhus/KeyboardShortcuts";
+			requirement = {
+				kind = exactVersion;
+				version = 3.1.0;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		A10000000000000000000002 /* WadjetKit */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = A10000000000000000000011 /* XCLocalSwiftPackageReference "WadjetKit" */;
 			productName = WadjetKit;
+		};
+		A20000000000000000000002 /* KeyboardShortcuts */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = A20000000000000000000001 /* XCRemoteSwiftPackageReference "KeyboardShortcuts" */;
+			productName = KeyboardShortcuts;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};

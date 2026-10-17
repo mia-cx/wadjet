@@ -42,9 +42,27 @@ The archive builds without CLEAR_GLASS_PATCH, so the private lens patch is
 compiled out. Export needs Apple Distribution and Mac Installer Distribution
 certificates and a Mac App Store provisioning profile for `cx.mia.wadjet`.
 
-## Hotkeys
+## Shortcuts
 
-- ⌘⇧4 Capture Region, ⌘⇧3 Capture Screen, ⌘⇧5 Record Region (press again to stop a recording).
+wadjet ships with no shortcuts. Add them in `config.json`:
+
+    "shortcuts": [
+      { "keys": "ctrl+opt+cmd+9", "tool": "pickColour" },
+      { "keys": "shift+cmd+4", "tool": "captureRegion", "workflow": "Screenshot",
+        "options": { "countdown": 3, "cursor": false } }
+    ]
+
+`keys` parses `cmd`/`shift`/`opt`/`ctrl` (plus `command`/`option`/`alt`/`control` and
+`enter`/`esc`/`backspace` aliases) with a–z, 0–9, f1–f20, space, tab, return, escape,
+delete, the arrows and punctuation; every shortcut needs a modifier unless it's an
+f-key. `tool` is a ToolID (`captureRegion`, `captureWindow`, `captureScreen`,
+`recordRegion`, `recordWindow`, `recordScreen`, `pickColour`, `copyText`, `measure`).
+`workflow` names a Workflow of the right kind for the tool; the optional `options`
+apply countdown/systemAudio/microphone/cursor/clickCircles before the tool triggers.
+Edits are picked up live; a shortcut that clashes with an enabled macOS screenshot
+shortcut is still registered but flagged with a toast and a log line.
+`defaultWorkflows.screenshot` / `.recording` pick the Workflow each kind runs when
+neither a Shortcut nor the tool's menu overrides it.
 - Esc cancels by priority: open Workflow menu > overlay > countdown > in-flight toast > idle
   toast > Pin. A global Esc hotkey is registered only while something cancellable is active —
   it is never claimed while recording, so Esc reaches the app being recorded.
