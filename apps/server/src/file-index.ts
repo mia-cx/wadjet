@@ -51,6 +51,8 @@ export interface FileIndex {
   insert(row: FileRow): Promise<FileRow>
   get(id: string): Promise<FileRow | undefined>
   findByIdempotencyKey(owner: string, key: string): Promise<FileRow | undefined>
+  /** The file a `/d/{token}` link deletes, looked up by the token's sha256. */
+  findByDeleteTokenHash(hash: string): Promise<FileRow | undefined>
   /** The owner's live files newest first by (createdAt desc, id desc), strictly after `after`, at most `limit`. Tombstones are excluded. */
   list(owner: string, limit: number, after?: Cursor): Promise<readonly FileRow[]>
   /**
@@ -88,6 +90,9 @@ export const memoryFileIndex = (): FileIndex => {
       return Promise.resolve(
         [...rows.values()].find((row) => row.owner === owner && row.idempotencyKey === key),
       )
+    },
+    findByDeleteTokenHash(hash) {
+      return Promise.resolve([...rows.values()].find((row) => row.deleteTokenHash === hash))
     },
     list(owner, limit, after) {
       const at = after === undefined ? -1 : after.createdAt.getTime()

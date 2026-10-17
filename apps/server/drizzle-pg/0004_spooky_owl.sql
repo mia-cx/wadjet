@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX "files_delete_token_hash" ON "files" USING btree ("delete_token_hash");

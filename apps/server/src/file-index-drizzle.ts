@@ -23,6 +23,10 @@ export const drizzleFileIndex = (db: BaseSQLiteDatabase<'sync' | 'async', unknow
     if (!earlier) throw new Error(`Insert of ${row.id} conflicted but no earlier row exists`)
     return earlier
   },
+  async findByDeleteTokenHash(hash) {
+    const row = await db.select().from(files).where(eq(files.deleteTokenHash, hash)).get()
+    return row
+  },
   async get(id) {
     const row = await db.select().from(files).where(eq(files.id, id)).get()
     return row

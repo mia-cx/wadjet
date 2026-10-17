@@ -24,6 +24,7 @@ export const files = sqliteTable(
   },
   (table) => [
     uniqueIndex('files_owner_idempotency').on(table.owner, table.idempotencyKey),
+    uniqueIndex('files_delete_token_hash').on(table.deleteTokenHash),
     index('files_owner_created').on(table.owner, table.createdAt, table.id),
   ],
 )

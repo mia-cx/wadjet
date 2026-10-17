@@ -17,7 +17,7 @@ const row = (
   device: null,
   createdAt: new Date(createdAt),
   blobKey: `files/${id}`,
-  deleteTokenHash: 'x'.repeat(64),
+  deleteTokenHash: `t${id}`.padEnd(64, '0'), // one hash per row: the column is UNIQUE
   idempotencyKey: null,
   deletedAt: null,
   thumbnailVersion: 0,
@@ -118,6 +118,18 @@ export const fileIndexContract = (name: string, index: () => FileIndex | Promise
       const retry = row('bbbb02', T3, 'mia', { idempotencyKey: 'key-1' })
       expect(await files.insert(retry)).toEqual(retry)
       await expect(files.insert(row('aaaa01', T3))).rejects.toThrow()
+    })
+
+    it('findByDeleteTokenHash resolves a token hash to its row', async () => {
+      const files = await index()
+      const mine = row('aaaa01', T1, 'mia', { deleteTokenHash: 'a'.repeat(64) })
+      await files.insert(mine)
+      await files.insert(row('bbbb02', T1, 'mia', { deleteTokenHash: 'b'.repeat(64) }))
+      expect(await files.findByDeleteTokenHash('a'.repeat(64))).toEqual(mine)
+      expect(await files.findByDeleteTokenHash('z'.repeat(64))).toBeUndefined()
+      // A tombstone still resolves — the caller decides what deletedAt means.
+      await files.markDeleted('aaaa01', new Date(T2))
+      expect((await files.findByDeleteTokenHash('a'.repeat(64)))?.deletedAt).not.toBeNull()
     })
 
     it('setThumbnail claims only the version it expected', async () => {
