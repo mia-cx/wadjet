@@ -7,3 +7,4 @@ apps/macos/build/
 node_modules/
 dist/
 .turbo/
+apps/server/data/
