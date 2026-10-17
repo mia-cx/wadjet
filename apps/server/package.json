@@ -18,10 +18,13 @@
     "hono": "4.13.13"
   },
   "devDependencies": {
+    "@cloudflare/vitest-plugin": "1.4.0",
+    "@cloudflare/workers-types": "5.20261010.1",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.19.2",
     "drizzle-kit": "0.31.11",
     "typescript": "7.0.2",
-    "vitest": "5.0.3"
+    "vitest": "5.0.3",
+    "wrangler": "4.149.0"
   }
 }

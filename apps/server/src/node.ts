@@ -3,6 +3,7 @@ import { join } from 'node:path'
 import { serve } from '@hono/node-server'
 import { createApp } from './app.ts'
 import { filesystemBlobStore } from './blob-store-fs.ts'
+import { cloudflarePurger } from './cloudflare-purger.ts'
 import { ConfigError, loadConfig } from './config.ts'
 import { randomId, randomToken } from './crypto.ts'
 import { sqliteFileIndex } from './file-index-sqlite.ts'
@@ -27,7 +28,9 @@ const app = createApp({
   config,
   blobs: filesystemBlobStore(join(config.dataDir, 'blobs')),
   files: sqliteFileIndex(join(config.dataDir, 'wadjet.db')),
-  purger: noopPurger,
+  purger: config.cloudflarePurge
+    ? cloudflarePurger({ ...config.cloudflarePurge, fetch })
+    : noopPurger,
   clock: () => new Date(),
   ids: randomId,
   tokens: randomToken,

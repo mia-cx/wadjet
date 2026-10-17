@@ -13,7 +13,10 @@ export const filesystemBlobStore = (root: string): BlobStore => ({
     await mkdir(dirname(path), { recursive: true })
     const temp = `${path}.tmp-${crypto.randomUUID()}`
     try {
-      await pipeline(Readable.fromWeb(body as NodeReadableStream), createWriteStream(temp))
+      await pipeline(
+        Readable.fromWeb(body as unknown as NodeReadableStream),
+        createWriteStream(temp),
+      )
       await rename(temp, path)
     } catch (error) {
       await rm(temp, { force: true })
@@ -33,7 +36,7 @@ export const filesystemBlobStore = (root: string): BlobStore => ({
       if ((error as NodeJS.ErrnoException).code === 'ENOENT') return undefined
       throw error
     }
-    return Readable.toWeb(stream) as ReadableStream<Uint8Array>
+    return Readable.toWeb(stream) as unknown as ReadableStream<Uint8Array>
   },
   async delete(key) {
     await rm(join(root, key), { force: true })

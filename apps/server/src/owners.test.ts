@@ -82,4 +82,53 @@ describe('deletes', () => {
 
     expect((await app.request(`/${id}.png`)).status).toBe(404)
   })
+
+  it('stays retryable when the purge fails', async () => {
+    const purged: string[][] = []
+    const purger: CachePurger = {
+      purge: (urls) => {
+        purged.push([...urls])
+        return purged.length === 1 ? Promise.reject(new Error('edge down')) : Promise.resolve()
+      },
+    }
+    const { app } = testApp({ purger })
+
+    const uploadResponse = await upload(app, { body: new Uint8Array([1, 2, 3]) })
+    const { id } = (await uploadResponse.json()) as { id: string }
+
+    const first = await app.request(`/v1/files/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer wdj_test' },
+    })
+    expect(first.status).toBe(500)
+    expect((await app.request(`/${id}.png`)).status).toBe(200)
+
+    const second = await app.request(`/v1/files/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer wdj_test' },
+    })
+    expect(second.status).toBe(204)
+    expect((await app.request(`/${id}.png`)).status).toBe(404)
+    expect(purged).toEqual([[`https://w.mia.cx/${id}.png`], [`https://w.mia.cx/${id}.png`]])
+  })
+
+  it('stops serving the file while its purge runs', async () => {
+    const statuses: number[] = []
+    const purger: CachePurger = {
+      purge: async (urls) => {
+        for (const url of urls) statuses.push((await app.request(new URL(url).pathname)).status)
+      },
+    }
+    const { app } = testApp({ purger })
+
+    const uploadResponse = await upload(app, { body: new Uint8Array([1, 2, 3]) })
+    const { id } = (await uploadResponse.json()) as { id: string }
+
+    const deleted = await app.request(`/v1/files/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer wdj_test' },
+    })
+    expect(deleted.status).toBe(204)
+    expect(statuses).toEqual([404])
+  })
 })
