@@ -56,3 +56,30 @@ describe('owner isolation', () => {
     expect(purged).toEqual([[`https://w.mia.cx/${id}.png`]])
   })
 })
+
+describe('deletes', () => {
+  it('purges even when the blob delete fails', async () => {
+    const purged: string[][] = []
+    const purger: CachePurger = {
+      purge: (urls) => {
+        purged.push([...urls])
+        return Promise.resolve()
+      },
+    }
+    const { app, blobs } = testApp({ purger })
+    blobs.delete = () => Promise.reject(new Error('blob store down'))
+
+    const uploadResponse = await upload(app, { body: new Uint8Array([1, 2, 3]) })
+    const { id } = (await uploadResponse.json()) as { id: string }
+
+    const deleted = await app.request(`/v1/files/${id}`, {
+      method: 'DELETE',
+      headers: { Authorization: 'Bearer wdj_test' },
+    })
+    expect(deleted.status).toBe(500)
+    expect(((await deleted.json()) as { error: { code: string } }).error.code).toBe('internal')
+    expect(purged).toEqual([[`https://w.mia.cx/${id}.png`]])
+
+    expect((await app.request(`/${id}.png`)).status).toBe(404)
+  })
+})

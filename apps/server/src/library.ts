@@ -152,9 +152,13 @@ export const createLibrary = (deps: LibraryDeps) => {
       if (!row || row.owner !== owner) throw notFound(`No file ${id}.`)
       // Row first: a failure after it leaves an unreachable blob, never a row that 500s.
       await deps.files.delete(id)
-      await deps.blobs.delete(row.blobKey)
-      // #51 adds the thumbnail URL to this purge
-      await deps.purger.purge([fileUrl(row)])
+      // Both run even if one fails: a skipped purge would leave the file cached at the edge.
+      const results = await Promise.allSettled([
+        deps.purger.purge([fileUrl(row)]), // #51 adds the thumbnail URL
+        deps.blobs.delete(row.blobKey),
+      ])
+      const failure = results.find((result) => result.status === 'rejected')
+      if (failure) throw failure.reason
     },
   }
 }
