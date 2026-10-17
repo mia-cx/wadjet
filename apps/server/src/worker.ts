@@ -13,6 +13,15 @@ export interface Env {
   readonly [name: `WADJET_${string}`]: string | undefined
 }
 
+/** The `WADJET_*` string bindings in `env` as a Config. */
+const configFor = (env: Env) => {
+  const vars: Record<string, string | undefined> = {}
+  for (const [name, value] of Object.entries(env)) {
+    if (name.startsWith('WADJET_') && typeof value === 'string') vars[name] = value
+  }
+  return loadConfig(vars)
+}
+
 /**
  * Builds the app for a Worker environment. Tests override `seams` (clock, ids,
  * tokens) to replay fixtures deterministically.
@@ -21,11 +30,7 @@ export const appFor = (
   env: Env,
   seams: Partial<Pick<AppDeps, 'clock' | 'ids' | 'tokens'>> = {},
 ) => {
-  const vars: Record<string, string | undefined> = {}
-  for (const [name, value] of Object.entries(env)) {
-    if (name.startsWith('WADJET_') && typeof value === 'string') vars[name] = value
-  }
-  const config = loadConfig(vars)
+  const config = configFor(env)
   return createApp({
     config,
     blobs: r2BlobStore(env.BLOBS),
@@ -40,32 +45,35 @@ export const appFor = (
   })
 }
 
-let app: ReturnType<typeof appFor> | undefined
-
 /**
- * Serves file GETs from the zone's edge cache (`caches.default`), so the
- * `s-maxage` response and the purge-by-URL on delete actually reach the edge —
- * Workers responses never enter the zone cache by themselves.
+ * The Worker entrypoint. Caches file GETs at the zone's edge — only when a
+ * purger exists to clear them, since Workers responses never enter the zone
+ * cache by themselves. Range requests always go to storage: `cache.match`
+ * applies its own Range handling, which breaks the protocol's full-200
+ * fallback for unsatisfiable and multi-range requests.
  */
-export default {
-  async fetch(request, env, ctx) {
-    // Build lazily per isolate: a ConfigError rejects the request (visible in
-    // logs, retryable) instead of being cached at startup.
-    app ??= appFor(env)
-    if (request.method !== 'GET') return await app.fetch(request)
-    // The cache key drops the query: it is exactly the URL the purger deletes.
-    const url = new URL(request.url)
-    const key = new URL(url.pathname, url.origin)
-    const matched = await caches.default.match(new Request(key, { headers: request.headers }))
-    if (matched) return matched
-    const response = await app.fetch(request)
-    if (
-      response.status === 200 &&
-      response.headers.get('Cache-Control')?.includes('public') &&
-      !request.headers.has('Range')
-    ) {
-      ctx.waitUntil(caches.default.put(key, response.clone()))
-    }
-    return response
-  },
-} satisfies ExportedHandler<Env>
+export const createHandler = (): Required<Pick<ExportedHandler<Env>, 'fetch'>> => {
+  let state: { app: ReturnType<typeof appFor>; edgeCache: boolean } | undefined
+  return {
+    async fetch(request, env, ctx) {
+      // Build lazily per isolate: a ConfigError rejects the request (visible in
+      // logs, retryable) instead of being cached at startup.
+      state ??= { app: appFor(env), edgeCache: configFor(env).cloudflarePurge !== null }
+      if (!state.edgeCache || request.method !== 'GET' || request.headers.has('Range')) {
+        return await state.app.fetch(request)
+      }
+      // The cache key drops the query: it is exactly the URL the purger deletes.
+      const url = new URL(request.url)
+      const key = new URL(url.pathname, url.origin)
+      const matched = await caches.default.match(new Request(key))
+      if (matched) return matched
+      const response = await state.app.fetch(request)
+      if (response.status === 200 && response.headers.get('Cache-Control')?.includes('public')) {
+        ctx.waitUntil(caches.default.put(key, response.clone()))
+      }
+      return response
+    },
+  }
+}
+
+export default createHandler()
