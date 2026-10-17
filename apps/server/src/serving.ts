@@ -64,7 +64,7 @@ export const serveFile = async (
   const id = name.match(NAME_PATTERN)?.[1]
   if (id === undefined) throw notFound(`Nothing at /${name}.`)
   const row = await deps.files.get(id)
-  if (!row) throw notFound(`No file ${id}.`)
+  if (!row || row.deletedAt) throw notFound(`No file ${id}.`)
 
   const canonical = canonicalName(row)
   if (name !== canonical) {

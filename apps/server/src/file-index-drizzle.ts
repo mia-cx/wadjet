@@ -1,4 +1,4 @@
-import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm'
+import { and, desc, eq, isNull, lt, or, type SQL } from 'drizzle-orm'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import { files } from './db/schema.ts'
 import type { FileIndex } from './file-index.ts'
@@ -36,7 +36,7 @@ export const drizzleFileIndex = (db: BaseSQLiteDatabase<'sync' | 'async', unknow
     return row
   },
   async list(owner, limit, after) {
-    const where: SQL[] = [eq(files.owner, owner)]
+    const where: SQL[] = [eq(files.owner, owner), isNull(files.deletedAt)]
     if (after) {
       const sameTime = and(eq(files.createdAt, after.createdAt), lt(files.id, after.id))
       const condition = sameTime
@@ -52,6 +52,13 @@ export const drizzleFileIndex = (db: BaseSQLiteDatabase<'sync' | 'async', unknow
       .limit(limit)
       .all()
     return rows
+  },
+  async markDeleted(id, at) {
+    await db
+      .update(files)
+      .set({ deletedAt: at, idempotencyKey: null })
+      .where(eq(files.id, id))
+      .run()
   },
   async delete(id) {
     await db.delete(files).where(eq(files.id, id)).run()

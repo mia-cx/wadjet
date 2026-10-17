@@ -16,6 +16,7 @@ export const files = sqliteTable(
     blobKey: text('blob_key').notNull(),
     deleteTokenHash: text('delete_token_hash').notNull(),
     idempotencyKey: text('idempotency_key'),
+    deletedAt: integer('deleted_at', { mode: 'timestamp' }),
   },
   (table) => [
     uniqueIndex('files_owner_idempotency').on(table.owner, table.idempotencyKey),

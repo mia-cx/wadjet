@@ -32,6 +32,7 @@ export const files = pgTable(
     blobKey: text('blob_key').notNull(),
     deleteTokenHash: text('delete_token_hash').notNull(),
     idempotencyKey: text('idempotency_key'),
+    deletedAt: timestamp('deleted_at', { withTimezone: true, mode: 'date' }),
   },
   (table) => [
     uniqueIndex('files_owner_idempotency').on(table.owner, table.idempotencyKey),

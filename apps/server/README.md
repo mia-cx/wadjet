@@ -33,7 +33,6 @@ Data lands under `apps/server/data/` (SQLite plus blobs). `pnpm start` runs the 
 | `WADJET_PART_BYTES` | no | `67108864` | Multipart part size (multipart arrives in #51). |
 | `WADJET_MAX_FILE_BYTES` | no | unset (no cap) | File size cap. |
 | `WADJET_MAX_THUMBNAIL_BYTES` | no | `262144` | Thumbnail cap (thumbnails arrive in #51). |
-<<<<<<< HEAD
 | `WADJET_BLOB_STORE` | no | `filesystem` | Blob backend: `filesystem` or `s3`. |
 | `WADJET_S3_ENDPOINT` | with `s3` | — | S3 endpoint URL, such as `https://s3.eu-west-1.amazonaws.com`. |
 | `WADJET_S3_BUCKET` | with `s3` | — | Bucket name. |
@@ -42,12 +41,10 @@ Data lands under `apps/server/data/` (SQLite plus blobs). `pnpm start` runs the 
 | `WADJET_S3_SECRET_ACCESS_KEY` | with `s3` | — | Secret key. |
 | `WADJET_S3_FORCE_PATH_STYLE` | no | `false` | `true` for path-style URLs, needed by MinIO and most S3 clones. |
 | `WADJET_DATABASE_URL` | no | unset | `postgres://…` file index; unset keeps SQLite under `WADJET_DATA_DIR`. |
-=======
 | `WADJET_CLOUDFLARE_ZONE_ID` | no | unset | Cloudflare zone to purge. Set both or neither. |
 | `WADJET_CLOUDFLARE_API_TOKEN` | no | unset | API token with the zone's Cache Purge permission. Set both or neither. |
 
 Setting the Cloudflare pair enables the edge-cache purger on any runtime: deleting a file purges its URLs from the zone's cache.
->>>>>>> 8a139e9 (feat(server): Cloudflare Worker with R2, D1, and edge purge)
 
 Only key hashes are stored. Hash a key before putting it in `WADJET_API_KEYS`:
 
@@ -55,7 +52,6 @@ Only key hashes are stored. Hash a key before putting it in `WADJET_API_KEYS`:
 printf %s "$KEY" | shasum -a 256
 ```
 
-<<<<<<< HEAD
 ## Docker
 
 Build from the repo root:
@@ -108,11 +104,13 @@ Local Postgres and MinIO for it:
 ```sh
 docker run -d --name wadjet-pg -p 5432:5432 \
   -e POSTGRES_USER=wadjet -e POSTGRES_PASSWORD=wadjet -e POSTGRES_DB=wadjet postgres:18.6-bookworm
-docker run -d --name wadjet-minio -p 9000:9000 \
-  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  ghcr.io/netvark/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
+# MinIO's official images are gone, so CI builds it from the official source —
+# the RELEASE.2025-10-15T17-29-55Z tag commit.
+go install github.com/minio/minio@9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+MINIO_ROOT_USER=minioadmin MINIO_ROOT_PASSWORD=minioadmin \
+  "$HOME/go/bin/minio" server /tmp/minio-data &
 ```
-=======
+
 ## Cloudflare
 
 The server also runs as a Worker (`src/worker.ts`), with blobs in R2 and the file index in D1. From `apps/server`:
@@ -123,4 +121,3 @@ The server also runs as a Worker (`src/worker.ts`), with blobs in R2 and the fil
 4. `pnpm exec wrangler secret put` each of `WADJET_API_KEYS`, `WADJET_CLOUDFLARE_ZONE_ID`, `WADJET_CLOUDFLARE_API_TOKEN`.
 5. `pnpm exec wrangler d1 migrations apply wadjet --remote`
 6. `pnpm exec wrangler deploy`
->>>>>>> 8a139e9 (feat(server): Cloudflare Worker with R2, D1, and edge purge)

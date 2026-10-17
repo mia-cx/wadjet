@@ -14,15 +14,12 @@ export interface Config {
   readonly apiKeys: ReadonlyMap<string, string>
   readonly dataDir: string
   readonly port: number
-<<<<<<< HEAD
   readonly blobStore:
     | { readonly kind: 'filesystem' }
     | ({ readonly kind: 's3' } & S3BlobStoreOptions)
   /** Null means the SQLite index under dataDir. */
   readonly databaseUrl: string | null
-=======
   readonly cloudflarePurge: { readonly zoneId: string; readonly apiToken: string } | null
->>>>>>> 8a139e9 (feat(server): Cloudflare Worker with R2, D1, and edge purge)
   readonly limits: typeof Discovery.Type.limits
 }
 

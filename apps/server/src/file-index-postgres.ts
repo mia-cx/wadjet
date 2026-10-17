@@ -1,12 +1,12 @@
 import { fileURLToPath } from 'node:url'
-import { and, desc, eq, lt, or, type SQL } from 'drizzle-orm'
+import { and, desc, eq, isNull, lt, or, type SQL } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { migrate } from 'drizzle-orm/node-postgres/migrator'
 import type pg from 'pg'
 import { files } from './db/schema-pg.ts'
 import type { FileIndex } from './file-index.ts'
 
-const migrationsFolder = fileURLToPath(new URL('../drizzle-pg', import.meta.url))
+const migrationsFolder = fileURLToPath(new URL('../drizzle-pg', import.meta.url).href)
 
 // Serializes concurrent boots: drizzle's migrate races on a fresh database.
 const MIGRATION_LOCK_KEY = 1879048912
@@ -55,7 +55,7 @@ export const postgresFileIndex = async (pool: pg.Pool): Promise<FileIndex> => {
       return rows[0]
     },
     async list(owner, limit, after) {
-      const where: SQL[] = [eq(files.owner, owner)]
+      const where: SQL[] = [eq(files.owner, owner), isNull(files.deletedAt)]
       if (after) {
         const sameTime = and(eq(files.createdAt, after.createdAt), lt(files.id, after.id))
         const condition = sameTime
@@ -69,6 +69,9 @@ export const postgresFileIndex = async (pool: pg.Pool): Promise<FileIndex> => {
         .where(and(...where))
         .orderBy(desc(files.createdAt), desc(files.id))
         .limit(limit)
+    },
+    async markDeleted(id, at) {
+      await db.update(files).set({ deletedAt: at, idempotencyKey: null }).where(eq(files.id, id))
     },
     async delete(id) {
       await db.delete(files).where(eq(files.id, id))
