@@ -468,10 +468,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
         }
         AppState.shared.config.update { c in
-            for (old, new) in remap {
-                if c.folders.screenshots == old { c.folders.screenshots = new }
-                if c.folders.recordings == old { c.folders.recordings = new }
-            }
+            // each default remaps once from its original value, not in the
+            // old-key loop where a later pair could re-hit a rewritten value
+            if let new = remap[c.folders.screenshots] { c.folders.screenshots = new }
+            if let new = remap[c.folders.recordings] { c.folders.recordings = new }
             c.workflows = c.workflows.map { w in
                 var w = w
                 w.steps = w.steps.map { st in

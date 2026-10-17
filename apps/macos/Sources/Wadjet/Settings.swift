@@ -65,8 +65,15 @@ enum SettingsPanes: String, CaseIterable {
     let path = url.path.hasPrefix(home) ? "~" + url.path.dropFirst(home.count) : url.path
     let granted = [home + "/Pictures", home + "/Movies"]
     let needsMark = !granted.contains { url.path.hasPrefix($0 + "/") || url.path == $0 }
-    let mark = needsMark ? try? url.bookmarkData(options: .withSecurityScope) : nil
-    return (String(path), mark)
+    // without its bookmark the folder only works until relaunch — don't take it
+    if needsMark {
+        guard let mark = try? url.bookmarkData(options: .withSecurityScope) else {
+            AppLog.line("settings: couldn't make a folder bookmark for \(url.path)")
+            return nil
+        }
+        return (String(path), mark)
+    }
+    return (String(path), nil)
 }
 
 @MainActor private func pickApp() -> String? {
@@ -123,7 +130,12 @@ enum SettingsPanes: String, CaseIterable {
             if pending {
                 HStack {
                     KeyboardShortcuts.Recorder(for: .init("settings.newShortcut")) { ks in
-                        guard let ks, let keys = KeyCombo(keyCode: ks.carbonKeyCode, carbonModifiers: ks.carbonModifiers) else { return }
+                        guard let ks else { return }
+                        guard let keys = KeyCombo(keyCode: ks.carbonKeyCode, carbonModifiers: ks.carbonModifiers) else {
+                            AppLog.line("settings: recorded key isn't a config KeyCombo — try another")
+                            KeyboardShortcuts.reset(.init("settings.newShortcut"))
+                            return
+                        }
                         edit { $0.shortcuts.append(Shortcut(keys: keys, tool: .captureRegion)) }
                         KeyboardShortcuts.reset(.init("settings.newShortcut"))
                         pending = false
