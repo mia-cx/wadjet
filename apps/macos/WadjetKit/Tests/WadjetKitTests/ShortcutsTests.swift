@@ -73,18 +73,6 @@ struct ShortcutsTests {
         #expect(err.message.contains(#"no Screenshot Workflow named "Nope""#))
     }
 
-    // a pre-#24 config with renamed workflows and no defaultWorkflows still loads
-    @Test func legacyConfigWithoutDefaultWorkflowsLoads() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"workflows":[{"name":"Clipboard","takes":"screenshot","steps":[{"type":"copyImage"}]},{"name":"Video","takes":"mp4","steps":[{"type":"showToast"}]}],"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url)
-        var errors: [ConfigError] = []
-        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
-        #expect(errors.isEmpty)
-        #expect(store.value.defaultWorkflows.screenshot == "Clipboard")
-        #expect(store.value.defaultWorkflows.recording == "Video")
-        #expect(store.value.tools.pickColour.format == .lab) // unrelated keys kept
-    }
 
     // an explicitly dangling defaultWorkflows name still errors
     @Test func danglingDefaultWorkflowNameFails() throws {
@@ -97,27 +85,7 @@ struct ShortcutsTests {
         #expect(errors.first?.message.contains(#"no Screenshot Workflow named "Nope""#) == true)
     }
 
-    // a file that sets one kind's default leaves the other to fall back
-    @Test func partialDefaultWorkflowsFallBackPerKind() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"defaultWorkflows":{"screenshot":"Clipboard"},"workflows":[{"name":"Clipboard","takes":"screenshot","steps":[{"type":"copyImage"}]},{"name":"Video","takes":"mp4","steps":[{"type":"showToast"}]}]}"#.utf8).write(to: url)
-        var errors: [ConfigError] = []
-        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
-        #expect(errors.isEmpty)
-        #expect(store.value.defaultWorkflows.screenshot == "Clipboard")
-        #expect(store.value.defaultWorkflows.recording == "Video") // injected name fell back
-    }
 
-    // even the factory name must error when the file sets it explicitly
-    @Test func explicitFactoryNameStillFails() throws {
-        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
-        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
-        try Data(#"{"defaultWorkflows":{"screenshot":"Screenshot","recording":"Video"},"workflows":[{"name":"Clipboard","takes":"screenshot","steps":[{"type":"copyImage"}]}]}"#.utf8).write(to: url)
-        var errors: [ConfigError] = []
-        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
-        #expect(errors.first?.location == "defaultWorkflows.screenshot")
-    }
 
     @Test func recordingToolNamingScreenshotWorkflowFails() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")

@@ -38,22 +38,19 @@ public struct KeyCombo: Equatable, Sendable, CustomStringConvertible {
         "f9": 101, "f10": 109, "f11": 103, "f12": 111, "f13": 105, "f14": 107, "f15": 113,
         "f16": 106, "f17": 64, "f18": 79, "f19": 80, "f20": 90,
     ]
-    // canonical name per key code
-    static let keyNames: [Int: String] = [
-        0: "a", 1: "s", 2: "d", 3: "f", 4: "h", 5: "g", 6: "z", 7: "x", 8: "c", 9: "v",
-        11: "b", 12: "q", 13: "w", 14: "e", 15: "r", 16: "y", 17: "t",
-        18: "1", 19: "2", 20: "3", 21: "4", 22: "6", 23: "5", 25: "9", 26: "7", 28: "8", 29: "0",
-        31: "o", 32: "u", 34: "i", 35: "p", 37: "l", 38: "j", 40: "k", 45: "n", 46: "m",
-        24: "=", 27: "-", 30: "]", 33: "[", 39: "'", 41: ";", 42: "\\", 43: ",", 44: "/", 47: ".", 50: "`",
-        36: "return", 48: "tab", 49: "space", 51: "delete", 53: "escape",
-        123: "left", 124: "right", 125: "down", 126: "up",
-        122: "f1", 120: "f2", 99: "f3", 118: "f4", 96: "f5", 97: "f6", 98: "f7", 100: "f8",
-        101: "f9", 109: "f10", 103: "f11", 111: "f12", 105: "f13", 107: "f14", 113: "f15",
-        106: "f16", 64: "f17", 79: "f18", 80: "f19", 90: "f20",
-    ]
+    /// aliases that parse but never become the canonical printed name
+    static let aliases: Set<String> = ["enter", "esc", "backspace"]
+    // canonical name per key code, inverted from `keys` minus the aliases
+    static let keyNames: [Int: String] = {
+        var m: [Int: String] = [:]
+        for (name, code) in keys.sorted(by: { $0.key < $1.key }) where !aliases.contains(name) {
+            m[code] = m[code] ?? name
+        }
+        return m
+    }()
 
     public init?(keyCode: Int, carbonModifiers: Int) {
-        guard Self.keyNames[keyCode] != nil || (Self.keys.values.contains(keyCode)) else { return nil }
+        guard Self.keyNames[keyCode] != nil else { return nil }
         self.keyCode = keyCode
         self.carbonModifiers = carbonModifiers & (Self.cmd | Self.shift | Self.opt | Self.ctrl)
     }
@@ -75,7 +72,7 @@ public struct KeyCombo: Equatable, Sendable, CustomStringConvertible {
             }
         }
         guard let key else { return nil }
-        let isF = (Self.keyNames[key] ?? "").hasPrefix("f") && key >= 64
+        let isF = (1...20).contains { Self.keys["f\($0)"] == key }
         guard mods != 0 || isF else { return nil }
         self.init(keyCode: key, carbonModifiers: mods)
     }

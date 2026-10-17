@@ -28,7 +28,7 @@ CONDITIONS='$(inherited)'
 # specific cert — and a manually-specified cert conflicts with that
 if [[ "$IDENTITY" == *"Apple Development"* ]]; then
     IDENTITY="Apple Development"
-    TEAM_ARG="DEVELOPMENT_TEAM=VJKBGC9AMK"
+    TEAM_ARG="DEVELOPMENT_TEAM=${WADJET_TEAM:-VJKBGC9AMK}"
 else
     TEAM_ARG=""
 fi

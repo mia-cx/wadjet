@@ -426,8 +426,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             KeyboardShortcuts.removeHandler(for: n) // reset leaves the handler; drop it too
         }
         shortcutNames = []
-        let apple = appleScreenshotHotkeys()
-        AppLog.line("system screenshot hotkeys: \(apple)")
+        let apple = systemHotkeys()
         for (i, sc) in s.config.value.shortcuts.enumerated() {
             guard let tool = Tool(rawValue: sc.tool.rawValue) else { continue }
             let name = KeyboardShortcuts.Name("shortcut.\(i)")
@@ -439,30 +438,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             KeyboardShortcuts.onKeyDown(for: name) {
                 Task { @MainActor in AppDelegate.shared?.fireShortcut(sc, tool: tool) }
             }
-            if apple.contains(where: { $0.0 == sc.keys.keyCode && $0.1 == sc.keys.carbonModifiers }) {
-                AppLog.line("shortcut \(sc.keys) for \(tool.title) clashes with a macOS screenshot shortcut")
+            if apple.contains(where: { $0.keyCode == sc.keys.keyCode && $0.mods == sc.keys.carbonModifiers }) {
+                AppLog.line("shortcut \(sc.keys) for \(tool.title) clashes with a macOS keyboard shortcut")
                 let t = toastCtrl.pending("Shortcut taken by macOS")
-                t.sub = "\(sc.keys) for \(tool.title) is a macOS screenshot shortcut. Turn it off in System Settings › Keyboard › Keyboard Shortcuts › Screenshots."
+                t.sub = "\(sc.keys) for \(tool.title) is a macOS keyboard shortcut. Turn it off in System Settings › Keyboard › Keyboard Shortcuts."
                 toastCtrl.startTimer(t)
             }
         }
     }
 
-    // enabled macOS screenshot combos from the symbolic hotkey table; the array
-    // is indexed by symbolic ID and entries use the literal kHISymbolicHotKey*
-    // key names (Carbon exports them as strings, not Swift globals)
-    func appleScreenshotHotkeys() -> [(keyCode: Int, mods: Int)] {
+    // enabled macOS combos from the symbolic hotkey table — the array is not
+    // indexed by symbolic ID, so every enabled entry is compared. Both sides
+    // are masked to cmd|shift|opt|ctrl; system entries carry extra bits.
+    func systemHotkeys() -> [(keyCode: Int, mods: Int)] {
         var arr: Unmanaged<CFArray>?
         guard CopySymbolicHotKeys(&arr) == noErr,
               let list = arr?.takeRetainedValue() as? [[String: Any]] else { return [] }
-        // Carbon IDs for the Screenshots section of Keyboard Shortcuts
-        return [28, 29, 30, 31, 184].compactMap { i in
-            guard i < list.count else { return nil }
-            let e = list[i]
+        let mask = 0x100 | 0x200 | 0x800 | 0x1000 // cmdKey|shiftKey|optionKey|controlKey
+        return list.compactMap { e in
             guard (e["kHISymbolicHotKeyEnabled"] as? Bool) == true,
                   let kc = e["kHISymbolicHotKeyCode"] as? Int,
                   let mods = e["kHISymbolicHotKeyModifiers"] as? Int else { return nil }
-            return (kc, mods)
+            return (kc, mods & mask)
         }
     }
 
