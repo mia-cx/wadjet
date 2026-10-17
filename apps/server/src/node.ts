@@ -5,6 +5,7 @@ import pg from 'pg'
 import { createApp } from './app.ts'
 import { filesystemBlobStore } from './blob-store-fs.ts'
 import { s3BlobStore } from './blob-store-s3.ts'
+import { cloudflarePurger } from './cloudflare-purger.ts' 
 import { ConfigError, loadConfig } from './config.ts'
 import { randomId, randomToken } from './crypto.ts'
 import { postgresFileIndex } from './file-index-postgres.ts'
@@ -44,7 +45,9 @@ const app = createApp({
   config,
   blobs,
   files,
-  purger: noopPurger,
+  purger: config.cloudflarePurge
+    ? cloudflarePurger({ ...config.cloudflarePurge, fetch })
+    : noopPurger,
   clock: () => new Date(),
   ids: randomId,
   tokens: randomToken,

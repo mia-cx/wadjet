@@ -1,0 +1,22 @@
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "wadjet-server",
+  "main": "src/worker.ts",
+  "compatibility_date": "2026-10-01",
+  "vars": {
+    // The public URL of this deployment.
+    "WADJET_BASE_URL": "https://wadjet.example.com"
+  },
+  "r2_buckets": [{ "binding": "BLOBS", "bucket_name": "wadjet-blobs" }],
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "wadjet",
+      // Placeholder — paste the database_id `wrangler d1 create` prints.
+      "database_id": "00000000-0000-0000-0000-000000000000",
+      "migrations_dir": "drizzle"
+    }
+  ]
+  // Secrets, set with `wrangler secret put <name>`:
+  //   WADJET_API_KEYS, WADJET_CLOUDFLARE_ZONE_ID, WADJET_CLOUDFLARE_API_TOKEN
+}

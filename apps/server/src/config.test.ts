@@ -1,5 +1,5 @@
 import { spawnSync } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
+import { fileURLToPath, URL } from 'node:url'
 import { describe, expect, it } from 'vitest'
 import { loadConfig } from './config.ts'
 
@@ -68,6 +68,7 @@ describe('loadConfig', () => {
       maxThumbnailBytes: 262144,
     })
     expect(config.apiKeys.get('a'.repeat(64))).toBe('mia')
+<<<<<<< HEAD
     expect(config.blobStore).toEqual({ kind: 'filesystem' })
     expect(config.databaseUrl).toBeNull()
   })
@@ -92,6 +93,35 @@ describe('loadConfig', () => {
       forcePathStyle: false,
     })
     expect(config.databaseUrl).toBe('postgres://wadjet:pw@db:5432/wadjet')
+=======
+    expect(config.cloudflarePurge).toBeNull()
+  })
+
+  it('reads the Cloudflare purge pair', () => {
+    const config = loadConfig({
+      ...GOOD,
+      WADJET_CLOUDFLARE_ZONE_ID: 'zone123',
+      WADJET_CLOUDFLARE_API_TOKEN: 'token456',
+    })
+    expect(config.cloudflarePurge).toEqual({ zoneId: 'zone123', apiToken: 'token456' })
+  })
+
+  it.each([
+    [
+      'WADJET_CLOUDFLARE_API_TOKEN without a zone',
+      { ...GOOD, WADJET_CLOUDFLARE_API_TOKEN: 'token456' },
+      'WADJET_CLOUDFLARE_ZONE_ID',
+    ],
+    [
+      'WADJET_CLOUDFLARE_ZONE_ID without a token',
+      { ...GOOD, WADJET_CLOUDFLARE_ZONE_ID: 'zone123' },
+      'WADJET_CLOUDFLARE_API_TOKEN',
+    ],
+  ])('rejects %s', (_name, env, variable) => {
+    expect(() => loadConfig(env)).toThrowError(
+      expect.objectContaining({ message: expect.stringContaining(variable) }),
+    )
+>>>>>>> 8a139e9 (feat(server): Cloudflare Worker with R2, D1, and edge purge)
   })
 
   it('stops boot on a bad env', () => {
