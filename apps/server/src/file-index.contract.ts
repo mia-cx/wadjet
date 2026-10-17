@@ -19,6 +19,7 @@ const row = (
   blobKey: `files/${id}`,
   deleteTokenHash: 'x'.repeat(64),
   idempotencyKey: null,
+  deletedAt: null,
   ...extra,
 })
 
@@ -91,5 +92,27 @@ export const fileIndexContract = (name: string, index: () => FileIndex | Promise
       expect((await files.get('aaaa01'))?.id).toBe('aaaa01')
       await files.delete('aaaa01')
       expect(await files.get('aaaa01')).toBeUndefined()
+    })
+
+    it('markDeleted tombstones the row and releases its idempotency key', async () => {
+      const files = await index()
+      const inserted = row('aaaa01', T1, 'mia', { idempotencyKey: 'key-1' })
+      await files.insert(inserted)
+
+      const at = new Date(T2)
+      await files.markDeleted('aaaa01', at)
+
+      expect(await files.list('mia', 10)).toEqual([])
+      expect(await files.get('aaaa01')).toEqual({
+        ...inserted,
+        deletedAt: at,
+        idempotencyKey: null,
+      })
+      expect(await files.findByIdempotencyKey('mia', 'key-1')).toBeUndefined()
+
+      // The released key belongs to a new file now; the tombstone's id stays taken.
+      const retry = row('bbbb02', T3, 'mia', { idempotencyKey: 'key-1' })
+      expect(await files.insert(retry)).toEqual(retry)
+      await expect(files.insert(row('aaaa01', T3))).rejects.toThrow()
     })
   })

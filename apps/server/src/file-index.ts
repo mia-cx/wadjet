@@ -16,6 +16,8 @@ export interface FileRow {
   readonly blobKey: string
   readonly deleteTokenHash: string
   readonly idempotencyKey: string | null
+  /** When the row was tombstoned for deletion; `null` while the file is live. */
+  readonly deletedAt: Date | null
 }
 
 export interface Cursor {
@@ -36,8 +38,14 @@ export interface FileIndex {
   insert(row: FileRow): Promise<FileRow>
   get(id: string): Promise<FileRow | undefined>
   findByIdempotencyKey(owner: string, key: string): Promise<FileRow | undefined>
-  /** The owner's files newest first by (createdAt desc, id desc), strictly after `after`, at most `limit`. */
+  /** The owner's live files newest first by (createdAt desc, id desc), strictly after `after`, at most `limit`. Tombstones are excluded. */
   list(owner: string, limit: number, after?: Cursor): Promise<readonly FileRow[]>
+  /**
+   * Tombstones the row: sets `deletedAt` and releases its idempotency key, so a
+   * retried upload with the same key legitimately creates a new file. `get`
+   * still returns the row so a retried DELETE can finish the teardown.
+   */
+  markDeleted(id: string, at: Date): Promise<void>
   delete(id: string): Promise<void>
 }
 
@@ -71,6 +79,7 @@ export const memoryFileIndex = (): FileIndex => {
         .filter(
           (row) =>
             row.owner === owner &&
+            row.deletedAt === null &&
             (after === undefined ||
               row.createdAt.getTime() < at ||
               (row.createdAt.getTime() === at && row.id < after.id)),
@@ -78,6 +87,11 @@ export const memoryFileIndex = (): FileIndex => {
         .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime() || (a.id < b.id ? 1 : -1))
         .slice(0, limit)
       return Promise.resolve(page)
+    },
+    markDeleted(id, at) {
+      const row = rows.get(id)
+      if (row) rows.set(id, { ...row, deletedAt: at, idempotencyKey: null })
+      return Promise.resolve()
     },
     delete(id) {
       rows.delete(id)

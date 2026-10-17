@@ -114,6 +114,7 @@ export const createLibrary = (deps: LibraryDeps) => {
         blobKey,
         deleteTokenHash,
         idempotencyKey: input.idempotencyKey ?? null,
+        deletedAt: null,
       }
 
       await deps.blobs.put(blobKey, input.body, input.size, input.contentType)
@@ -150,15 +151,12 @@ export const createLibrary = (deps: LibraryDeps) => {
     async delete(owner: string, id: string): Promise<void> {
       const row = await deps.files.get(id)
       if (!row || row.owner !== owner) throw notFound(`No file ${id}.`)
-      // Row first: a failure after it leaves an unreachable blob, never a row that 500s.
+      // Tombstone first: GETs 404 so nothing refills the edge cache during the purge,
+      // and any failure below leaves the tombstone for a retried DELETE to finish.
+      if (!row.deletedAt) await deps.files.markDeleted(id, deps.clock())
+      await deps.purger.purge([fileUrl(row)]) // #51 adds the thumbnail URL
+      await deps.blobs.delete(row.blobKey)
       await deps.files.delete(id)
-      // Both run even if one fails: a skipped purge would leave the file cached at the edge.
-      const results = await Promise.allSettled([
-        deps.purger.purge([fileUrl(row)]), // #51 adds the thumbnail URL
-        deps.blobs.delete(row.blobKey),
-      ])
-      const failure = results.find((result) => result.status === 'rejected')
-      if (failure) throw failure.reason
     },
   }
 }

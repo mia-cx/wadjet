@@ -69,6 +69,9 @@ jobs:
       - name: Test
         run: pnpm test
 
+      - name: Wrangler dry run
+        run: pnpm --filter @wadjet/server exec wrangler deploy --dry-run --outdir "$RUNNER_TEMP/wrangler"
+
   docker:
     name: Server Docker image
     runs-on: ubuntu-latest

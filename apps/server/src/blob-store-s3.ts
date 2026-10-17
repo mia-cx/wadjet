@@ -39,6 +39,7 @@ export const s3BlobStore = (options: S3BlobStoreOptions): BlobStore => {
 
   return {
     async put(key, body, length, contentType) {
+      // Node's fetch wants `duplex` for a stream body; the worker RequestInit type lacks it.
       const res = await aws.fetch(objectUrl(options, key), {
         method: 'PUT',
         body,
@@ -48,7 +49,7 @@ export const s3BlobStore = (options: S3BlobStoreOptions): BlobStore => {
           'Content-Type': contentType,
           'X-Amz-Content-Sha256': 'UNSIGNED-PAYLOAD',
         },
-      })
+      } as RequestInit)
       if (!res.ok) await fail('put', key, res)
       await res.body?.cancel()
     },
