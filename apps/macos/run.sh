@@ -12,10 +12,13 @@ fi
 APP=build/Wadjet.app
 
 # Apple Development identity keeps the Screen Recording grant across rebuilds;
-# ad-hoc works but re-prompts for permissions every build.
+# ad-hoc works but re-prompts for permissions every build. An explicit
+# WADJET_SIGNING_IDENTITY is passed through verbatim.
 IDENTITY="${WADJET_SIGNING_IDENTITY:-}"
+EXPLICIT=1
 if [[ -z "$IDENTITY" ]]; then
     IDENTITY="$(security find-identity -v -p codesigning | awk -F'"' '/"Apple Development/ { print $2; exit }')"
+    EXPLICIT=0
 fi
 IDENTITY="${IDENTITY:--}"
 
@@ -26,7 +29,7 @@ CONDITIONS='$(inherited)'
 # package products (e.g. KeyboardShortcuts' resource bundle) sign automatically:
 # they take the generic "Apple Development" identity plus the team, not a
 # specific cert — and a manually-specified cert conflicts with that
-if [[ "$IDENTITY" == *"Apple Development"* ]]; then
+if [[ "$EXPLICIT" == "0" && "$IDENTITY" == *"Apple Development"* ]]; then
     IDENTITY="Apple Development"
     TEAM_ARG="DEVELOPMENT_TEAM=${WADJET_TEAM:-VJKBGC9AMK}"
 else
