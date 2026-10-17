@@ -2147,6 +2147,11 @@ struct ToolbarView: View {
     var body: some View {
         morph
             .frame(width: panelW, height: panelH, alignment: .top)
+            #if CLEAR_GLASS_PATCH
+            // the lens is its own glass-free layer drawn over the bar —
+            // glassEffect/backdrop views can't rasterize into layerEffect
+            .overlay { lensLayer }
+            #endif
             .coordinateSpace(name: "panel")
             // hoverInside tracks the pointer; the bar stays expanded while it
             // is inside, a menu is open, or the selection lens is pressed
@@ -2164,10 +2169,10 @@ struct ToolbarView: View {
             }
             .onChange(of: hoverInside) { syncExpanded() }
             .onChange(of: lensActive) { syncExpanded() }
-            .onAppear { syncHit() }
-            .onChange(of: rowSize) { syncHit() }
+            .onAppear { syncHit(); syncLensBg() }
+            .onChange(of: rowSize) { syncHit(); syncLensBg() }
             .onChange(of: expanded) {
-                syncHit()
+                syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
@@ -2197,21 +2202,6 @@ struct ToolbarView: View {
         }
         .frame(width: shapeW, height: shapeH)
         .clipShape(shape) // nothing may draw outside the island/toolbar shape
-        #if CLEAR_GLASS_PATCH
-        .overlay {
-            // the pressed lens overhangs the bar's edges (drawn after the
-            // clip), refracting the edge itself; invisible when idle
-            Capsule().fill(.clear)
-                .frame(width: lensSize.width, height: lensSize.height)
-                .scaleEffect(x: stretchX, y: stretchY)
-                .glassEffect(lensActive ? .clear : .identity, in: .capsule)
-                .glassEffectTransition(.materialize)
-                .position(x: (shapeW - rowSize.width) / 2 + blobX,
-                          y: contentTop + blobY)
-                .opacity(expanded ? 1 : 0)
-                .allowsHitTesting(false)
-        }
-        #endif
         .glassEffect(.regular.tint(.black.opacity(0.4)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
@@ -2347,6 +2337,83 @@ struct ToolbarView: View {
         Image(systemName: t.symbol).font(.system(size: 22))
             .frame(width: toolD, height: selH)
     }
+
+    /// pixel-res Freeze Frame crop under the whole toolbar panel — the
+    /// layer's stand-in for the world behind the bar
+    @State var lensBg: CGImage?
+    func syncLensBg() {
+        #if CLEAR_GLASS_PATCH
+        guard let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
+              displayIndex < Freeze.shared.displays.count else { return }
+        let local = CGRect(x: p.frame.minX - sc.frame.minX, y: p.frame.minY - sc.frame.minY,
+                           width: p.frame.width, height: p.frame.height)
+        lensBg = Freeze.shared.crop(rect: local, on: displayIndex)
+        #endif
+    }
+    #if CLEAR_GLASS_PATCH
+    /// the lens capsule's centre in panel coords
+    var lensCentre: CGPoint {
+        CGPoint(x: (panelW - rowSize.width) / 2 + blobX, y: shapeTop + contentTop + blobY)
+    }
+    /// the lens capsule's centre in row space (for the accent mask)
+    var lensCentreInRow: CGPoint {
+        CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
+    }
+    func iconStrip(_ color: Color) -> some View {
+        HStack(spacing: 8) {
+            ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: iconCell)
+            Spacer().frame(width: 8)
+            ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: iconCell)
+            Spacer().frame(width: 8)
+            ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
+        }
+        .padding(.horizontal, d + (selW - toolD) / 2)
+        .foregroundStyle(color)
+    }
+    /// a glass-free copy of what sits under the lens — backdrop views can't
+    /// rasterize into layerEffect, so the shader bends this instead
+    var lensSource: some View {
+        ZStack(alignment: .top) {
+            if let img = lensBg {
+                Image(decorative: img, scale: CGFloat(img.width) / panelW)
+                    .resizable()
+                    .frame(width: panelW, height: panelH)
+                    .blur(radius: 6)
+            }
+            shape.fill(Color.black.opacity(0.4))
+                .frame(width: shapeW, height: shapeH)
+                .padding(.top, shapeTop)
+            ZStack {
+                iconStrip(.white)
+                iconStrip(Color.wadjetAccent)
+                    .mask(Capsule().frame(width: lensW, height: lensH)
+                          .scaleEffect(x: stretchX, y: stretchY)
+                          .position(lensCentreInRow))
+            }
+            .frame(width: shapeW, height: shapeH, alignment: .top)
+            .padding(.top, shapeTop + contentTop)
+        }
+        .frame(width: panelW, height: panelH, alignment: .top)
+    }
+    /// lensSource refracted through the shader, masked to the lens capsule —
+    /// overlays the bar so it can overhang its edges
+    var lensLayer: some View {
+        lensSource
+            .layerEffect(
+                ShaderLibrary.lens(.float2(lensCentre.x, lensCentre.y),
+                                   .float2(lensW, lensH),
+                                   .float2(stretchX, stretchY), .float(1.0)),
+                maxSampleOffset: CGSize(width: 64, height: 64))
+            .mask {
+                Capsule().frame(width: lensW + 2, height: lensH + 2)
+                    .scaleEffect(x: stretchX, y: stretchY)
+                    .position(lensCentre)
+            }
+            .opacity(lensActive ? 1 : 0)
+            .animation(.smooth(duration: 0.15), value: lensActive)
+            .allowsHitTesting(false)
+    }
+    #endif
 
     var selShape: some View {
         Capsule()
