@@ -24,8 +24,12 @@ private final class Clock: @unchecked Sendable { var t = Date(timeIntervalSince1
 // a Step whose copy suspends until `open()` — proves run B isn't held back
 private actor Gate {
     private var waiter: CheckedContinuation<Void, Never>?
-    func wait() async { await withCheckedContinuation { waiter = $0 } }
-    func open() { waiter?.resume() }
+    private var isOpen = false
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiter = $0 }
+    }
+    func open() { isOpen = true; waiter?.resume(); waiter = nil }
 }
 private final class GatedEffects: WorkflowEffects, @unchecked Sendable {
     let gate: Gate
@@ -112,6 +116,26 @@ struct WorkflowTests {
         #expect(!FileManager.default.fileExists(atPath: f.path))
         #expect(FileManager.default.fileExists(atPath: fresh.path))
         #expect(FileManager.default.fileExists(atPath: saved[0].path)) // outside the dir, never swept
+    }
+
+    // one undeletable entry doesn't stop the sweep; the failure still throws
+    @Test func sweepKeepsGoingAfterAFailure() throws {
+        let dir = tempDir()
+        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let files = CaptureFiles(directory: dir, retention: 60, now: Date.init)
+        let old = [FileAttributeKey.modificationDate: Date().addingTimeInterval(-3600)]
+        let doomed = dir.appendingPathComponent("old.png")
+        try Data("x".utf8).write(to: doomed)
+        try FileManager.default.setAttributes(old, ofItemAtPath: doomed.path)
+        let jail = dir.appendingPathComponent("locked")
+        try FileManager.default.createDirectory(at: jail, withIntermediateDirectories: true)
+        try Data("x".utf8).write(to: jail.appendingPathComponent("inner.png"))
+        try FileManager.default.setAttributes(old, ofItemAtPath: jail.path)
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: jail.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: jail.path) }
+        #expect(throws: (any Error).self) { try files.sweep() }
+        #expect(!FileManager.default.fileExists(atPath: doomed.path)) // other file still swept
+        #expect(FileManager.default.fileExists(atPath: jail.appendingPathComponent("inner.png").path))
     }
 
     @Test func starterConfigRoundTrips() throws {

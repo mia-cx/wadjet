@@ -97,7 +97,8 @@ public struct ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
 /// A JSON file on disk as a live, observable value. Loads synchronously, merges
 /// the file over the defaults so missing keys keep working, watches the file for
 /// edits (both atomic-replace and in-place writes), and never overwrites a file
-/// that currently doesn't parse.
+/// that currently doesn't parse. Keys this version doesn't model are kept on
+/// every write, so a newer app's settings or a hand-added key never vanish.
 @MainActor @Observable
 public final class ConfigStore<Config: Codable & Equatable & Sendable> {
     public private(set) var value: Config
@@ -110,6 +111,9 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
     private var broken = false
     /// Bytes last read or written, so our own writes and repeat events are no-ops.
     private var lastData: Data?
+    /// The file's JSON object from the last successful load; our writes merge
+    /// the modelled value over it so unknown keys survive.
+    private var raw: Any?
     private var dirSource: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
     private var pendingReload: DispatchWorkItem?
@@ -165,9 +169,10 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
             decoder.userInfo[.secretMigration] = migration
             let v = try decoder.decode(Config.self, from: merged)
             if v != value { value = v }
+            raw = parsed
             broken = false
             // a file missing newer keys gains them (and takes canonical form)
-            if normalize, (try? encoder.encode(v)).map({ $0 + [0x0A] }) != data { write() }
+            if normalize, let enc = try? encoded(value), enc != data { write() }
             if migration.migrated { write() } // plaintext secrets became {"keychain": …} references
         } catch {
             broken = true
@@ -208,10 +213,24 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
         return e
     }
 
+    /// The file bytes for `v`: the modelled value merged over the file's last
+    /// known JSON object, so unknown keys survive every write.
+    private func encoded(_ v: Config) throws -> Data {
+        var data: Data
+        if let rawObj = raw as? [String: Any],
+           let ours = try? JSONSerialization.jsonObject(with: encoder.encode(v)) as? [String: Any] {
+            data = try JSONSerialization.data(withJSONObject: merge(rawObj, over: ours),
+                                              options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
+        } else {
+            data = try encoder.encode(v)
+        }
+        data.append(0x0A)
+        return data
+    }
+
     private func write() {
         do {
-            var data = try encoder.encode(value)
-            data.append(0x0A)
+            let data = try encoded(value)
             try data.write(to: file, options: .atomic)
             lastData = data
         } catch {

@@ -117,6 +117,19 @@ struct ConfigStoreTests {
         #expect(try Data(contentsOf: url) == written) // the file she just saved is untouched
     }
 
+    // a key this version doesn't model survives normalize AND later writes
+    @Test func unknownKeysSurvive() throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"future":{"x":1},"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url)
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        var obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(obj?["future"] != nil && obj?["folders"] != nil) // first load wrote both
+        store.update { $0.tools.measure.mode = .vertical }
+        obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(obj?["future"] != nil) // our own writes keep it too
+    }
+
     @Test func plaintextSecretLeavesForTheKeychain() throws {
         struct Vault: Codable, Equatable, Sendable { var token: Secret? = nil }
         let url = tempFile()

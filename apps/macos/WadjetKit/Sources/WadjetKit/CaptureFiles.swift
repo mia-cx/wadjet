@@ -40,15 +40,24 @@ public struct CaptureFiles: Sendable {
     }
 
     /// Deletes files inside `directory` whose modification date is older than
-    /// `now() - retention`. Never touches anything outside `directory`.
+    /// `now() - retention`. One undeletable file doesn't stop the sweep; any
+    /// failures surface as one thrown error afterwards. Never touches anything
+    /// outside `directory`.
     public func sweep() throws {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path) else { return }
         let cutoff = now().addingTimeInterval(-retention)
+        var failures: [Error] = []
         for name in try fm.contentsOfDirectory(atPath: directory.path) {
             let url = directory.appendingPathComponent(name)
-            let age = (try url.resourceValues(forKeys: [.contentModificationDateKey])).contentModificationDate ?? .distantFuture
-            if age < cutoff { try fm.removeItem(at: url) }
+            let age = (try? url.resourceValues(forKeys: [.contentModificationDateKey]))?.contentModificationDate ?? .distantFuture
+            guard age < cutoff else { continue }
+            do { try fm.removeItem(at: url) } catch { failures.append(error) }
+        }
+        if let first = failures.first {
+            throw failures.count == 1 ? first
+                : NSError(domain: "wadjet", code: 1, userInfo: [
+                    NSLocalizedDescriptionKey: "sweep: couldn't remove \(failures.count) files: \(first.localizedDescription)"])
         }
     }
 }
