@@ -57,6 +57,8 @@ export interface UploadIndex {
     to: UploadRow['state'],
     fileId?: string,
   ): Promise<boolean>
+  /** Record the file a session completed into; safe to call repeatedly. */
+  markCompleted(id: string, fileId: string): Promise<void>
   delete(id: string): Promise<void>
   /** Up to `limit` open rows whose `expiresAt` passed, for the lazy sweeper. */
   expired(now: Date, limit: number): Promise<readonly UploadRow[]>
@@ -102,17 +104,22 @@ export const memoryUploadIndex = (): UploadIndex => {
       rows.set(id, { ...row, state: to, fileId: fileId ?? row.fileId })
       return Promise.resolve(true)
     },
+    markCompleted(id, fileId) {
+      const row = rows.get(id)
+      if (row) rows.set(id, { ...row, state: 'completed', fileId })
+      return Promise.resolve()
+    },
     delete(id) {
       rows.delete(id)
       parts.delete(id)
       return Promise.resolve()
     },
     expired(now, limit) {
-      const due = [...rows.values()]
-        .filter((row) => row.state === 'open' && row.expiresAt.getTime() <= now.getTime())
-        .slice(0, limit)
-      for (const row of due) rows.set(row.id, { ...row, state: 'expired' })
-      return Promise.resolve(due)
+      return Promise.resolve(
+        [...rows.values()]
+          .filter((row) => row.state === 'open' && row.expiresAt.getTime() <= now.getTime())
+          .slice(0, limit),
+      )
     },
   }
 }

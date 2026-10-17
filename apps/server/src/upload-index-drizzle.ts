@@ -56,23 +56,18 @@ export const drizzleUploadIndex = (
       .run()) as { changes?: number; meta?: { changes?: number } }
     return (changed.changes ?? changed.meta?.changes ?? 0) > 0
   },
+  async markCompleted(id, fileId) {
+    await db.update(uploads).set({ state: 'completed', fileId }).where(eq(uploads.id, id)).run()
+  },
   async delete(id) {
     await db.delete(uploads).where(eq(uploads.id, id)).run()
   },
   async expired(now, limit) {
-    const due = await db
+    return await db
       .select()
       .from(uploads)
       .where(and(eq(uploads.state, 'open'), lte(uploads.expiresAt, now)))
       .limit(limit)
       .all()
-    for (const row of due) {
-      await db
-        .update(uploads)
-        .set({ state: 'expired' })
-        .where(and(eq(uploads.id, row.id), eq(uploads.state, 'open')))
-        .run()
-    }
-    return due
   },
 })

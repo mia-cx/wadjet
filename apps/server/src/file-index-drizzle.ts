@@ -53,8 +53,8 @@ export const drizzleFileIndex = (db: BaseSQLiteDatabase<'sync' | 'async', unknow
       .all()
     return rows
   },
-  async setThumbnail(id, thumbnail) {
-    await db
+  async setThumbnail(id, expectedVersion, thumbnail) {
+    const changed = (await db
       .update(files)
       .set({
         thumbnailVersion: thumbnail.version,
@@ -62,8 +62,9 @@ export const drizzleFileIndex = (db: BaseSQLiteDatabase<'sync' | 'async', unknow
         thumbnailContentType: thumbnail.contentType,
         thumbnailSize: thumbnail.size,
       })
-      .where(eq(files.id, id))
-      .run()
+      .where(and(eq(files.id, id), eq(files.thumbnailVersion, expectedVersion)))
+      .run()) as { changes?: number; meta?: { changes?: number } }
+    return (changed.changes ?? changed.meta?.changes ?? 0) > 0
   },
   async markDeleted(id, at) {
     await db

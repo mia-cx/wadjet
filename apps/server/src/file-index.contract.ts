@@ -120,20 +120,32 @@ export const fileIndexContract = (name: string, index: () => FileIndex | Promise
       await expect(files.insert(row('aaaa01', T3))).rejects.toThrow()
     })
 
-    it('setThumbnail stores the current version on the row', async () => {
+    it('setThumbnail claims only the version it expected', async () => {
       const files = await index()
       await files.insert(row('aaaa01', T1))
-      await files.setThumbnail('aaaa01', {
-        version: 1,
-        blobKey: 'thumbnails/aaaa01-1',
-        contentType: 'image/webp',
-        size: 122,
-      })
+      expect(
+        await files.setThumbnail('aaaa01', 0, {
+          version: 1,
+          blobKey: 'thumbnails/aaaa01-v1',
+          contentType: 'image/webp',
+          size: 122,
+        }),
+      ).toBe(true)
       expect(await files.get('aaaa01')).toMatchObject({
         thumbnailVersion: 1,
-        thumbnailBlobKey: 'thumbnails/aaaa01-1',
+        thumbnailBlobKey: 'thumbnails/aaaa01-v1',
         thumbnailContentType: 'image/webp',
         thumbnailSize: 122,
       })
+      // A claim based on a stale read loses; the row is untouched.
+      expect(
+        await files.setThumbnail('aaaa01', 0, {
+          version: 1,
+          blobKey: 'thumbnails/aaaa01-stale',
+          contentType: 'image/png',
+          size: 1,
+        }),
+      ).toBe(false)
+      expect((await files.get('aaaa01'))?.thumbnailVersion).toBe(1)
     })
   })

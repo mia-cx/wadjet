@@ -117,8 +117,10 @@ export const createLibrary = (deps: LibraryDeps) => {
     if (!row || row.owner !== owner) throw notFound(`No upload ${id}.`)
     if (row.state === 'expired') throw uploadExpired(row)
     if (row.state === 'open' && row.expiresAt.getTime() <= deps.clock().getTime()) {
-      await deps.uploads.transition(id, 'open', 'expired')
+      // Abort first: a failure leaves the row open so the next call retries,
+      // instead of stranding an 'expired' row with live storage parts.
       await deps.blobs.abortMultipart(row.blobKey, row.storageUploadId)
+      await deps.uploads.transition(id, 'open', 'expired')
       throw uploadExpired(row)
     }
     return row
@@ -235,24 +237,41 @@ export const createLibrary = (deps: LibraryDeps) => {
       contentType: string,
       limits: { maxThumbnailBytes: number },
     ): Promise<typeof File.Type> {
-      const row = await deps.files.get(id)
-      if (!row || row.owner !== owner || row.deletedAt) throw notFound(`No file ${id}.`)
       if (size > limits.maxThumbnailBytes)
         throw tooLarge(`This server accepts thumbnails up to ${limits.maxThumbnailBytes} bytes.`)
 
-      const version = row.thumbnailVersion + 1
-      const blobKey = `thumbnails/${id}-v${version}`
-      await deps.blobs.put(blobKey, body, size, contentType)
-      await deps.files.setThumbnail(id, { version, blobKey, contentType, size })
-      if (row.thumbnailVersion > 0) {
-        // Order matters: the row points at v+1 before the old URL is purged and
-        // its blob freed, so nothing can cache the version that's going away.
-        await deps.purger.purge([`${deps.baseUrl}/t/${id}?v=${row.thumbnailVersion}`])
-        if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
+      // Claim a version first — overlapping PUTs each get their own, and the
+      // deterministic blob key means the winner's bytes own its URL.
+      for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {
+        const row = await deps.files.get(id)
+        if (!row || row.owner !== owner || row.deletedAt) throw notFound(`No file ${id}.`)
+        const version = row.thumbnailVersion + 1
+        const blobKey = `thumbnails/${id}-v${version}`
+        const claimed = await deps.files.setThumbnail(id, row.thumbnailVersion, {
+          version,
+          blobKey,
+          contentType,
+          size,
+        })
+        if (!claimed) continue // another PUT took this version; re-read and retry
+        await deps.blobs.put(blobKey, body, size, contentType)
+        if (row.thumbnailVersion > 0) {
+          // The row already points at the new version; cleanup of the old one
+          // is best-effort — deletion sweeps every version regardless.
+          try {
+            await deps.purger.purge([`${deps.baseUrl}/t/${id}?v=${row.thumbnailVersion}`])
+            if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
+          } catch (error) {
+            console.error(`thumbnail ${id} v${row.thumbnailVersion}: cleanup failed:`, error)
+          }
+        }
+        const updated = await deps.files.get(id)
+        if (!updated) throw notFound(`No file ${id}.`) // deleted between claim and read
+        // Report the version this request claimed — a newer PUT may have moved
+        // the row on, but ours still serves its own bytes at ?v={version}.
+        return toFile({ ...updated, thumbnailVersion: version, thumbnailBlobKey: blobKey })
       }
-      const updated = await deps.files.get(id)
-      if (!updated) throw notFound(`No file ${id}.`) // deleted between put and read
-      return toFile(updated)
+      throw new Error(`Could not claim a thumbnail version in ${MAX_ID_ATTEMPTS} attempts`)
     },
 
     async delete(owner: string, id: string): Promise<void> {
@@ -262,12 +281,15 @@ export const createLibrary = (deps: LibraryDeps) => {
       // and any failure below leaves the tombstone for a retried DELETE to finish.
       if (!row.deletedAt) await deps.files.markDeleted(id, deps.clock())
       const urls = [fileUrl(row)]
-      if (row.thumbnailVersion > 0)
-        urls.push(`${deps.baseUrl}/t/${row.id}?v=${row.thumbnailVersion}`)
+      // Every version ever attached: a superseded thumbnail whose cleanup
+      // failed earlier must still be purged and freed now.
+      for (let v = 1; v <= row.thumbnailVersion; v++)
+        urls.push(`${deps.baseUrl}/t/${row.id}?v=${v}`)
       await deps.purger.purge(urls)
       // Blob last: a failure here leaves an unreachable blob, never a row that 500s.
       await deps.blobs.delete(row.blobKey)
-      if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
+      for (let v = 1; v <= row.thumbnailVersion; v++)
+        await deps.blobs.delete(`thumbnails/${row.id}-v${v}`)
       await deps.files.delete(id)
     },
 
@@ -275,8 +297,15 @@ export const createLibrary = (deps: LibraryDeps) => {
       input: StartUploadInput,
     ): Promise<{ session: typeof UploadSession.Type; created: boolean }> {
       // Lazy expiry sweep: no timers; each new session retires up to 10 overdue.
+      // Per-row failures are logged and skipped — the same row retries on the
+      // next start, and one bad session never fails a new upload.
       for (const stale of await deps.uploads.expired(deps.clock(), EXPIRE_SWEEP_LIMIT)) {
-        await deps.blobs.abortMultipart(stale.blobKey, stale.storageUploadId)
+        try {
+          await deps.blobs.abortMultipart(stale.blobKey, stale.storageUploadId)
+          await deps.uploads.transition(stale.id, 'open', 'expired')
+        } catch (error) {
+          console.error(`upload ${stale.id}: expiry failed:`, error)
+        }
       }
       if (input.maxFileBytes !== null && input.size > input.maxFileBytes)
         throw tooLarge(`This server accepts files up to ${input.maxFileBytes} bytes.`)
@@ -360,14 +389,12 @@ export const createLibrary = (deps: LibraryDeps) => {
       id: string,
     ): Promise<{ file: typeof UploadedFile.Type; created: boolean }> {
       const row = await liveUpload(id, owner)
-      if (row.state === 'completed') {
-        if (row.fileId !== null) {
-          const file = await deps.files.get(row.fileId)
-          if (file) return { file: { ...toFile(file), deleteUrl: null }, created: false }
-        }
-        // A completion is still in flight on another request.
-        throw new ProtocolError(409, 'upload_incomplete', `Upload ${id} is still completing.`)
+      if (row.state === 'completed' && row.fileId !== null) {
+        const file = await deps.files.get(row.fileId)
+        if (file) return { file: { ...toFile(file), deleteUrl: null }, created: false }
       }
+      // Open, or 'completed' with no fileId (a request died mid-completion):
+      // every step below is idempotent, so just run them again.
       const received = await deps.uploads.parts(id)
       const byNumber = new Map(received.map((part) => [part.number, part]))
       for (let n = 1; n <= row.partCount; n++) {
@@ -378,43 +405,39 @@ export const createLibrary = (deps: LibraryDeps) => {
             `Part ${n} of ${row.partCount} is missing.`,
           )
       }
-      // Win the transition before touching storage, or another complete may
-      // have finished first — then re-read and return its file.
-      if (!(await deps.uploads.transition(id, 'open', 'completed'))) {
-        const now = await deps.uploads.get(id)
-        if (now?.state === 'completed' && now.fileId !== null) {
-          const file = await deps.files.get(now.fileId)
-          if (file) return { file: { ...toFile(file), deleteUrl: null }, created: false }
-        }
-        throw new ProtocolError(409, 'upload_incomplete', `Upload ${id} is still completing.`)
-      }
+      const parts = received.map((part) => ({ number: part.number, etag: part.etag }))
+      await deps.blobs.completeMultipart(row.blobKey, row.storageUploadId, parts)
+      const prepared = await prepareFile(
+        {
+          owner,
+          contentType: row.contentType,
+          size: row.size,
+          filename: row.filename,
+          kind: row.kind,
+          device: row.device ?? undefined,
+          idempotencyKey: undefined,
+        },
+        id,
+      )
+      // The session's blob key, not prepareFile's token-keyed one — the
+      // completed multipart object already lives there. The id collision is
+      // the gate: exactly one inserter wins 201 + the delete token.
+      let stored: FileRow
       try {
-        const parts = received.map((part) => ({ number: part.number, etag: part.etag }))
-        await deps.blobs.completeMultipart(row.blobKey, row.storageUploadId, parts)
-        const prepared = await prepareFile(
-          {
-            owner,
-            contentType: row.contentType,
-            size: row.size,
-            filename: row.filename,
-            kind: row.kind,
-            device: row.device ?? undefined,
-            idempotencyKey: undefined,
-          },
-          id,
-        )
-        // The session's blob key, not prepareFile's token-keyed one — the
-        // completed multipart object already lives there.
-        const stored = await deps.files.insert({ ...prepared.row, blobKey: row.blobKey })
-        await deps.uploads.transition(id, 'completed', 'completed', stored.id)
-        return {
-          file: { ...toFile(stored), deleteUrl: `${deps.baseUrl}/d/${prepared.token}` },
-          created: true,
-        }
+        stored = await deps.files.insert({ ...prepared.row, blobKey: row.blobKey })
       } catch (error) {
-        // Reopen so a retried complete can finish instead of 409ing forever.
-        await deps.uploads.transition(id, 'completed', 'open')
+        const earlier = await deps.files.get(id)
+        if (earlier?.owner === owner && earlier.blobKey === row.blobKey) {
+          // Ours from an earlier or overlapping attempt.
+          await deps.uploads.markCompleted(id, earlier.id)
+          return { file: { ...toFile(earlier), deleteUrl: null }, created: false }
+        }
         throw error
+      }
+      await deps.uploads.markCompleted(id, stored.id)
+      return {
+        file: { ...toFile(stored), deleteUrl: `${deps.baseUrl}/d/${prepared.token}` },
+        created: true,
       }
     },
 

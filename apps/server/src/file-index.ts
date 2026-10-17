@@ -59,8 +59,9 @@ export interface FileIndex {
    * still returns the row so a retried DELETE can finish the teardown.
    */
   markDeleted(id: string, at: Date): Promise<void>
-  /** Attaches a new thumbnail blob as the row's current version. */
-  setThumbnail(id: string, thumbnail: Thumbnail): Promise<void>
+  /** Attaches a new thumbnail as version `expectedVersion + 1`; returns false
+   * when the row's version moved on (a concurrent PUT won) — retry the claim. */
+  setThumbnail(id: string, expectedVersion: number, thumbnail: Thumbnail): Promise<boolean>
   delete(id: string): Promise<void>
 }
 
@@ -108,17 +109,17 @@ export const memoryFileIndex = (): FileIndex => {
       if (row) rows.set(id, { ...row, deletedAt: at, idempotencyKey: null })
       return Promise.resolve()
     },
-    setThumbnail(id, thumbnail) {
+    setThumbnail(id, expectedVersion, thumbnail) {
       const row = rows.get(id)
-      if (row)
-        rows.set(id, {
-          ...row,
-          thumbnailVersion: thumbnail.version,
-          thumbnailBlobKey: thumbnail.blobKey,
-          thumbnailContentType: thumbnail.contentType,
-          thumbnailSize: thumbnail.size,
-        })
-      return Promise.resolve()
+      if (!row || row.thumbnailVersion !== expectedVersion) return Promise.resolve(false)
+      rows.set(id, {
+        ...row,
+        thumbnailVersion: thumbnail.version,
+        thumbnailBlobKey: thumbnail.blobKey,
+        thumbnailContentType: thumbnail.contentType,
+        thumbnailSize: thumbnail.size,
+      })
+      return Promise.resolve(true)
     },
     delete(id) {
       rows.delete(id)

@@ -59,7 +59,7 @@ export const uploadIndexContract = (
       expect((await uploads.get('aaaa01'))?.fileId).toBe('file1')
     })
 
-    it('expired marks overdue open rows and leaves the rest', async () => {
+    it('expired lists overdue open rows; the caller marks them', async () => {
       const uploads = await index()
       const now = new Date('2026-10-18T00:00:00Z')
       await uploads.insert(row('aaaa01')) // expires 2026-10-17
@@ -67,7 +67,10 @@ export const uploadIndexContract = (
       await uploads.insert(row('cccc03', { expiresAt: new Date('2026-10-19T00:00:00Z') }))
       const due = await uploads.expired(now, 10)
       expect(due.map((r) => r.id)).toEqual(['aaaa01'])
-      expect((await uploads.get('aaaa01'))?.state).toBe('expired')
+      // Select-only: marking happens after the caller aborts storage parts.
+      expect((await uploads.get('aaaa01'))?.state).toBe('open')
+      await uploads.transition('aaaa01', 'open', 'expired')
+      expect((await uploads.expired(now, 10)).map((r) => r.id)).toEqual([])
       expect((await uploads.get('bbbb02'))?.state).toBe('completed')
       expect((await uploads.get('cccc03'))?.state).toBe('open')
     })

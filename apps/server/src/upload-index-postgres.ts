@@ -70,6 +70,9 @@ export const postgresUploadIndex = async (pool: pg.Pool): Promise<UploadIndex> =
         .where(and(eq(uploads.id, id), eq(uploads.state, from)))
       return (changed.rowCount ?? 0) > 0
     },
+    async markCompleted(id, fileId) {
+      await db.update(uploads).set({ state: 'completed', fileId }).where(eq(uploads.id, id))
+    },
     async delete(id) {
       await db.delete(uploads).where(eq(uploads.id, id))
     },

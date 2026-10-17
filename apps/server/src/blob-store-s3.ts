@@ -107,18 +107,19 @@ export const s3BlobStore = (options: S3BlobStoreOptions): BlobStore => {
         `${objectUrl(options, key)}?uploadId=${encodeURIComponent(uploadId)}`,
         { method: 'POST', body: xml },
       )
-      if (!res.ok) {
+      // S3 can answer a complete 200 with an <Error> body — read it, don't just
+      // check the status.
+      const body = await res.text()
+      if (!res.ok || body.includes('<Error>')) {
         // NoSuchUpload after a finished complete: the object exists already.
         const head = await aws.fetch(objectUrl(options, key), { method: 'HEAD' })
         if (head.ok) {
-          await res.body?.cancel()
           await head.body?.cancel()
           return
         }
         await head.body?.cancel()
-        await fail('completeMultipart', key, res)
+        throw new Error(`completeMultipart ${key}: HTTP ${res.status} ${body.slice(0, 300)}`)
       }
-      await res.body?.cancel()
     },
     async abortMultipart(key, uploadId) {
       const res = await aws.fetch(
