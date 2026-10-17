@@ -58,7 +58,7 @@ driveable without coordinate clicking. Every command is logged as `cmd: …` in
 
     tools/cmd.sh open "Measure"          # open overlay on a Tool (as if its hotkey fired)
     tools/cmd.sh tool "Pick Colour"      # switch Tool while frozen
-    tools/cmd.sh workflow "Upload to w.mia.cx"
+    tools/cmd.sh workflow "Screenshot"   # pick the Workflow a Tool's capture runs
     tools/cmd.sh menu "Capture Region"   # open a Tool's dropdown / closemenu to dismiss
     tools/cmd.sh option countdown 3      # Off|3|5|10
     tools/cmd.sh option measureMode "Horizontal" # Bounds|Spacing|Horizontal|Vertical
@@ -67,7 +67,6 @@ driveable without coordinate clicking. Every command is logged as `cmd: …` in
     tools/cmd.sh option audio|mic|cursor|clicks on|off
     tools/cmd.sh expand / collapse       # island -> glass toolbar
     tools/cmd.sh upload succeed|fail|offline
-    tools/cmd.sh steperror on|off
     tools/cmd.sh pause / stop            # during a recording
     tools/cmd.sh esc                     # runs the Esc handler
 
@@ -103,5 +102,8 @@ only while the overlay is up or at known app windows.
 - No recording file is written; the thumbnail is a live window capture or Freeze Frame crop
   with a duration badge.
 - Uploads and GIF conversion are timed simulations; the Debug submenu (or `upload` cmd)
-  picks the next result (Succeed / Fail / Offline) and `steperror` forces a Step error.
+  picks the next result (Succeed / Fail / Offline).
+- Screenshots run their Workflow for real: config.json's `workflows` list (Save file to
+  `folders.screenshots`, Copy image, Show toast); captures land in the Captures dir and
+  the 7-day sweep clears what Save file didn't keep.
 - Destinations, History, Settings menu items are disabled stubs.

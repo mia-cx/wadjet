@@ -75,14 +75,15 @@ final class AppState: ObservableObject {
     @Published var latencyText = "none"
     @Published var islandMode = false        // island even with a notch
     @Published var uploadMode = 0            // 0 succeed, 1 fail, 2 offline
-    @Published var stepErrorNext = false
     @Published var showStateHUD = false
+    // the Workflow names a Tool can run: Screenshots for Capture, MP4/GIF for Record
     func workflows(for t: Tool?) -> [String] {
-        switch t?.kind {
-        case .shot: return ["Screenshot", "Upload to w.mia.cx", "Pin"]
-        case .rec: return ["MP4", "GIF", "GIF to w.mia.cx"]
-        default: return []
+        let kinds: [CaptureKind] = switch t?.kind {
+        case .shot: [.screenshot]
+        case .rec: [.mp4, .gif]
+        default: []
         }
+        return config.value.workflows.filter { kinds.contains($0.takes) }.map(\.name)
     }
     // the Workflow a capture runs with: the per-Tool choice, defaulting to the
     // first compatible one (Screenshot for Capture, MP4 for Record)
@@ -271,6 +272,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
         buildStateHUD()
         _ = try? FileManager.default.createDirectory(at: Self.capturesDir, withIntermediateDirectories: true)
+        do { try CaptureFiles(directory: Self.capturesDir).sweep() }
+        catch { AppLog.line("capture sweep failed: \(error.localizedDescription)") }
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             Task { @MainActor in self.recTick() }
         }
@@ -321,7 +324,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
         case "steperror" where parts.count > 1:
-            s.stepErrorNext = parts[1] == "on"
+            AppLog.line("cmd: steperror removed (real Step errors exist now)")
         case "stop": if s.phase == .recording { stopRecording() }
         case "pause": if s.phase == .recording { togglePause() }
         case "esc": handleEsc()
@@ -363,7 +366,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         psub.addItem(mi("Next Upload: Fail", #selector(upl1), on: AppState.shared.uploadMode == 1))
         psub.addItem(mi("Next Upload: Offline", #selector(upl2), on: AppState.shared.uploadMode == 2))
         psub.addItem(.separator())
-        psub.addItem(mi("Step Error on Next Capture", #selector(toggleStepErr), on: AppState.shared.stepErrorNext))
         psub.addItem(mi("Show State HUD", #selector(toggleHUD), on: AppState.shared.showStateHUD))
         psub.addItem(.separator())
         psub.addItem(mi("Open Screen Recording Settings", #selector(openScreenRecordingSettings), on: false))
@@ -380,7 +382,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func toggleIsland(_ s: NSMenuItem) { AppState.shared.islandMode.toggle(); s.state = AppState.shared.islandMode ? .on : .off }
     @objc func upl0(_ s: NSMenuItem) { setUpl(0) }; @objc func upl1(_ s: NSMenuItem) { setUpl(1) }; @objc func upl2(_ s: NSMenuItem) { setUpl(2) }
     func setUpl(_ v: Int) { AppState.shared.uploadMode = v; rebuildMenu() }
-    @objc func toggleStepErr(_ s: NSMenuItem) { AppState.shared.stepErrorNext.toggle(); s.state = AppState.shared.stepErrorNext ? .on : .off }
     @objc func toggleHUD(_ s: NSMenuItem) { AppState.shared.showStateHUD.toggle(); s.state = AppState.shared.showStateHUD ? .on : .off
         hudPanel.setIsVisible(AppState.shared.showStateHUD) }
     @objc func openScreenRecordingSettings() {
@@ -467,37 +468,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startRecording(rect: rect, display: display)
         }
     }
+    // capture temp files land in the Captures dir and age out via the sweep
+    lazy var captureFiles = CaptureFiles(directory: Self.capturesDir)
+    lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
+
+    // Screenshots write a temp file, then run the Workflow picked for the Tool —
+    // the Steps do the rest (save, copy, toast). Recordings stay simulated until #28.
     func runCapture(thumb: CGImage?, label: String, duration: TimeInterval? = nil) {
-        let wf = AppState.shared.workflowFor(AppState.shared.tool) ?? "Screenshot"
-        var path: URL? = nil
-        var heic: Data? = nil
-        if let img = thumb {
-            if duration == nil, let d = heicData(img) {
-                // HDR screenshot -> HEIC with an ISO gain map
-                heic = d
-                path = Self.capturesDir.appendingPathComponent("capture-\(Int(Date().timeIntervalSince1970)).heic")
-                try? d.write(to: path!)
-            } else {
-                path = Self.capturesDir.appendingPathComponent("capture-\(Int(Date().timeIntervalSince1970)).png")
-                let rep = NSBitmapImageRep(cgImage: img)
-                try? rep.representation(using: .png, properties: [:])?.write(to: path!)
-            }
-            AppLog.line("saved \(path!.lastPathComponent) workflow=\(wf)")
+        if duration != nil || thumb == nil {
+            let wf = AppState.shared.workflowFor(AppState.shared.tool) ?? "MP4"
+            toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: nil, duration: duration), workflow: wf)
+            return
         }
-        toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: path, duration: duration), workflow: wf)
-        if wf == "Pin", let img = thumb { openPin(image: img) }
-        if wf == "Screenshot", let img = thumb {
-            let pb = NSPasteboard.general
-            pb.clearContents()
-            if let heic {
-                let heicT = NSPasteboard.PasteboardType(UTType.heic.identifier)
-                pb.declareTypes([heicT, .png], owner: nil)
-                pb.setData(heic, forType: heicT)
-                pb.setData(NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:]), forType: .png)
-                AppState.shared.lastClipboard = "<heic+png \(img.width)×\(img.height)>"
-            } else {
-                pb.writeObjects([NSImage(cgImage: img, size: .zero) as NSPasteboardWriting])
-                AppState.shared.lastClipboard = "<image \(img.width)×\(img.height)>"
+        let img = thumb!
+        // HEIC with an ISO gain map when the display gave HDR pixels, else PNG
+        let bytes = heicData(img) ?? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
+        let ext = heicData(img) != nil ? "heic" : "png"
+        guard let bytes, let file = try? captureFiles.newFile(ext: ext) else {
+            AppLog.line("capture: could not name/write temp file")
+            return
+        }
+        do { try bytes.write(to: file) } catch {
+            AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
+            return
+        }
+        let chosen = AppState.shared.workflowFor(AppState.shared.tool) ?? "Screenshot"
+        let wf = AppState.shared.config.value.workflows.first { $0.name == chosen && $0.takes == .screenshot }
+            ?? WadjetConfig().workflows.first { $0.takes == .screenshot }!
+        let defaultFolder = expandingTilde(AppState.shared.config.value.folders.screenshots)
+        let runID = UUID()
+        AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
+        Task { @MainActor in
+            for await e in runner.run(file, through: wf, defaultFolder: defaultFolder, id: runID) {
+                switch e {
+                case .started(let i, let s): AppLog.line("workflow \(wf.name): started \(i) \(s.title)")
+                case .finished(let i, let s): AppLog.line("workflow \(wf.name): finished \(i) \(s.title)")
+                case .failed(let i, _, let m): AppLog.line("workflow \(wf.name): failed \(i) \(m)")
+                case .done(let saved, let errors):
+                    AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)")
+                    if let t = toastCtrl.runToasts[runID] {
+                        t.title = saved.isEmpty ? "Captured" : "Saved"
+                        t.err = errors.isEmpty ? nil : errors.joined(separator: "\n")
+                        t.cap.url = saved.last ?? file
+                        toastCtrl.startTimer(t)
+                        toastCtrl.runToasts.removeValue(forKey: runID)
+                    }
+                }
             }
         }
     }
@@ -2099,16 +2115,53 @@ struct ToolMenuView: View {
 }
 
 
+/// The Workflow Steps only the app can perform: the pasteboard and the toast UI.
+/// Keeps the toast each showToast created per run id; the run's `.done` finishes it.
+@MainActor
+final class AppWorkflowEffects: WorkflowEffects {
+    let toast: ToastController
+    init(toast: ToastController) { self.toast = toast }
+
+    func copyImage(_ file: URL, run: UUID) async throws {
+        let data = try Data(contentsOf: file)
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        // HEIC keeps its gain map on the pasteboard; offer png alongside it
+        if file.pathExtension.lowercased() == "heic" {
+            let heicT = NSPasteboard.PasteboardType(UTType.heic.identifier)
+            pb.declareTypes([heicT, .png], owner: nil)
+            pb.setData(data, forType: heicT)
+            if let rep = NSBitmapImageRep(data: data) {
+                pb.setData(rep.representation(using: .png, properties: [:]), forType: .png)
+            }
+            AppState.shared.lastClipboard = "<heic+png \(file.lastPathComponent)>"
+        } else if let img = NSImage(contentsOf: file) {
+            pb.writeObjects([img as NSPasteboardWriting])
+            AppState.shared.lastClipboard = "<image \(file.lastPathComponent)>"
+        }
+    }
+
+    func showToast(_ file: URL, run: UUID) async throws {
+        let img = NSImage(contentsOf: file)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent, url: file, duration: nil))
+        t.title = "Captured"
+        toast.items.insert(t, at: 0)
+        toast.relayout()
+        AppDelegate.shared?.updateEscHotkey()
+        toast.runToasts[run] = t
+    }
+}
+
 // MARK: - Toasts
 
 struct Capture {
-    let thumb: CGImage?; let label: String; let url: URL?; let duration: TimeInterval?
+    let thumb: CGImage?; let label: String; var url: URL?; let duration: TimeInterval?
     var kindShot: Bool { duration == nil }
 }
 
 @MainActor
 final class ToastItem: ObservableObject, Identifiable {
-    let id = UUID(); let cap: Capture
+    let id = UUID(); var cap: Capture
     @Published var title = ""; @Published var sub = ""; @Published var err: String? = nil
     @Published var showRing = false
     @Published var showBar = false
@@ -2123,6 +2176,8 @@ final class ToastItem: ObservableObject, Identifiable {
 final class ToastController: ObservableObject {
     static var shared: ToastController?
     @Published var items: [ToastItem] = []
+    // Workflow runs' toasts, keyed by run id; .done finishes them
+    var runToasts: [UUID: ToastItem] = [:]
     var panel: NSPanel!
     init() {
         ToastController.shared = self
@@ -2157,22 +2212,19 @@ final class ToastController: ObservableObject {
         items.insert(t, at: 0)
         relayout()
         AppDelegate.shared?.updateEscHotkey()
-        let s = AppState.shared
-        let stepErr = s.stepErrorNext ? "Open in app failed" : nil
-        s.stepErrorNext = false
+        let s = AppState.shared // uploadMode drives the simulated upload path
         Task { @MainActor in
             if wf.hasPrefix("GIF") { await phase(t, "Converting", "GIF", ring: true, ms: 3000) }
-            if wf == "Pin" { t.title = "Pinned" }
-            else if !wf.contains("w.mia.cx") { t.title = "Saved" }
+            if !wf.contains("w.mia.cx") { t.title = "Saved" }
             if wf.contains("w.mia.cx") {
-                if s.uploadMode == 2 { t.title = "You're offline"; t.sub = "Couldn't upload"; t.showRetry = true; finish(t, stepErr); return }
+                if s.uploadMode == 2 { t.title = "You're offline"; t.sub = "Couldn't upload"; t.showRetry = true; finish(t, nil); return }
                 t.title = "Uploading"; t.sub = "w.mia.cx"; t.showBar = true; t.showCancel = true
                 await animateProgress(t, ms: 4000)
                 t.showBar = false; t.showCancel = false
                 if s.uploadMode == 1 { t.title = "Couldn't upload"; t.sub = "Server returned 500"; t.showRetry = true }
                 else { let link = "w.mia.cx/aB3xK9.png"; clipboard(link); t.title = "Link copied"; t.sub = link }
             }
-            finish(t, stepErr)
+            finish(t, nil)
         }
     }
     func finish(_ t: ToastItem, _ err: String?) {
