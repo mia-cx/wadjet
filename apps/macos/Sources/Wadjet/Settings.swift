@@ -155,7 +155,19 @@ enum SettingsPanes: String, CaseIterable {
                         edit { guard i < $0.shortcuts.count else { return }; $0.shortcuts.remove(at: i) }
                     }
                 }
-                Picker("Tool", selection: cfgBinding(\.shortcuts).item(i).tool) {
+                // changing the Tool drops a Workflow the new Tool can't run,
+                // or any Workflow on a util Tool — else the file won't decode
+                Picker("Tool", selection: Binding(get: { sc.tool }, set: { newID in
+                    edit { c in guard i < c.shortcuts.count else { return }
+                        c.shortcuts[i].tool = newID
+                        if let wf = c.shortcuts[i].workflow {
+                            let ok = newID.produces.map { k in
+                                c.workflows.contains { w in w.name == wf && (k.isRecording ? w.takes.isRecording : w.takes == .screenshot) }
+                            } ?? false
+                            if !ok { c.shortcuts[i].workflow = nil }
+                        }
+                    }
+                })) {
                     ForEach(Tool.allCases, id: \.rawValue) { Text($0.title).tag($0.toolID) }
                 }
                 .labelsHidden()
@@ -210,6 +222,15 @@ private extension Binding where Value == [Shortcut] {
 
 // MARK: - Workflows
 
+/// "Base", "Base 2", … — Workflow names are their identity, so they stay unique.
+private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = nil) -> String {
+    let taken = Set(cfg.workflows.indices.filter { $0 != skipping }.map { cfg.workflows[$0].name })
+    guard taken.contains(base) else { return base }
+    var n = 2
+    while taken.contains("\(base) \(n)") { n += 1 }
+    return "\(base) \(n)"
+}
+
 @MainActor struct WorkflowsPane: View {
     @State private var sel: Int? = 0
     var body: some View {
@@ -225,13 +246,21 @@ private extension Binding where Value == [Shortcut] {
                     Menu("+") {
                         ForEach(CaptureKind.allCases, id: \.self) { k in
                             Button(k.rawValue.capitalized) {
-                                edit { $0.workflows.append(Workflow(name: "New \(k.rawValue.capitalized) Workflow", takes: k, steps: [.showToast])) }
+                                edit {
+                                    $0.workflows.append(Workflow(name: uniqueName("New \(k.rawValue.capitalized) Workflow", in: $0), takes: k, steps: [.showToast]))
+                                }
                             }
                         }
                     }
                     Button("−") {
-                        guard let sel else { return }
-                        edit { $0.workflows.remove(at: sel) }
+                        guard let sel, sel < cfg.workflows.count else { return }
+                        edit {
+                            let name = $0.workflows[sel].name
+                            $0.workflows.remove(at: sel)
+                            for s in $0.shortcuts.indices where $0.shortcuts[s].workflow == name {
+                                $0.shortcuts[s].workflow = nil // don't leave a dangling reference
+                            }
+                        }
                     }
                     .disabled(sel.map { isDefault($0) } ?? true)
                     Spacer()
@@ -240,7 +269,7 @@ private extension Binding where Value == [Shortcut] {
             }
             .frame(minWidth: 160, maxWidth: 200)
             if let sel, sel < cfg.workflows.count {
-                WorkflowDetail(i: sel)
+                WorkflowDetail(i: sel).id(cfg.workflows[sel].name) // rebuild when the picked Workflow or its name changes
             } else {
                 Text("Select a Workflow").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -248,6 +277,7 @@ private extension Binding where Value == [Shortcut] {
     }
     func isDefault(_ i: Int) -> Bool {
         let cfg = AppState.shared.config.value
+        guard i < cfg.workflows.count else { return true }
         let n = cfg.workflows[i].name
         return cfg.defaultWorkflows.screenshot == n || cfg.defaultWorkflows.recording == n
     }
@@ -263,7 +293,10 @@ private extension Binding where Value == [Shortcut] {
         return AnyView(Form {
             Section {
                 TextField("Name", text: $name)
-                    .onSubmit { guard name != wf.name else { return }; edit { $0.renameWorkflow(from: wf.name, to: name) } }
+                    .onSubmit {
+                        guard name != wf.name else { return }
+                        edit { $0.renameWorkflow(from: wf.name, to: uniqueName(name, in: $0, skipping: i)) }
+                    }
                     .onAppear { name = wf.name }
                 Text(wf.takes.rawValue.capitalized).foregroundStyle(.secondary)
             }
