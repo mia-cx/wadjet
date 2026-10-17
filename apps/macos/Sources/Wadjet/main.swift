@@ -85,9 +85,13 @@ final class AppState: ObservableObject {
         }
         return config.value.workflows.filter { kinds.contains($0.takes) }.map(\.name)
     }
-    // the Workflow a capture runs with: the per-Tool choice, defaulting to the
-    // first compatible one (Screenshot for Capture, MP4 for Record)
-    func workflowFor(_ t: Tool?) -> String? { workflows(for: t).isEmpty ? nil : (workflowByTool[t ?? .capRegion] ?? workflows(for: t).first) }
+    // the Workflow a capture runs with: the per-Tool choice if it still exists
+    // in config, else the first compatible one (Screenshot for Capture, MP4 for Record)
+    func workflowFor(_ t: Tool?) -> String? {
+        let list = workflows(for: t)
+        if let chosen = workflowByTool[t ?? .capRegion], list.contains(chosen) { return chosen }
+        return list.first
+    }
 }
 
 // MARK: - Frozen frame store
@@ -505,13 +509,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .failed(let i, _, let m): AppLog.line("workflow \(wf.name): failed \(i) \(m)")
                 case .done(let saved, let errors):
                     AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)")
-                    if let t = toastCtrl.runToasts[runID] {
+                    for t in toastCtrl.runToasts[runID] ?? [] {
                         t.title = saved.isEmpty ? "Captured" : "Saved"
                         t.err = errors.isEmpty ? nil : errors.joined(separator: "\n")
                         t.cap.url = saved.last ?? file
                         toastCtrl.startTimer(t)
-                        toastCtrl.runToasts.removeValue(forKey: runID)
                     }
+                    toastCtrl.runToasts.removeValue(forKey: runID)
                 }
             }
         }
@@ -2149,7 +2153,7 @@ final class AppWorkflowEffects: WorkflowEffects {
         toast.items.insert(t, at: 0)
         toast.relayout()
         AppDelegate.shared?.updateEscHotkey()
-        toast.runToasts[run] = t
+        toast.runToasts[run, default: []].append(t)
     }
 }
 
@@ -2177,8 +2181,8 @@ final class ToastItem: ObservableObject, Identifiable {
 final class ToastController: ObservableObject {
     static var shared: ToastController?
     @Published var items: [ToastItem] = []
-    // Workflow runs' toasts, keyed by run id; .done finishes them
-    var runToasts: [UUID: ToastItem] = [:]
+    // Workflow runs' toasts, keyed by run id; .done finishes them all
+    var runToasts: [UUID: [ToastItem]] = [:]
     var panel: NSPanel!
     init() {
         ToastController.shared = self
