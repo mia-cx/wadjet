@@ -36,7 +36,7 @@ uploadIndexContract('postgresUploadIndex', async () => {
 
 describe('postgresFileIndex', () => {
   it('initializes concurrently on a fresh database', async () => {
-    await pool.query('DROP TABLE IF EXISTS files')
+    await pool.query('DROP TABLE IF EXISTS upload_parts, uploads, files')
     await pool.query('DROP SCHEMA IF EXISTS drizzle CASCADE')
     const a = new pg.Pool({ connectionString: url })
     const b = new pg.Pool({ connectionString: url })
