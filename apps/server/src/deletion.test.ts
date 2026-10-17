@@ -68,6 +68,39 @@ describe('deletion links', () => {
     expect(again.status).toBe(404)
   })
 
+  it('an interrupted teardown resumes on the next POST', async () => {
+    const purged: string[][] = []
+    let fail = true
+    const purger: CachePurger = {
+      purge: (urls) => {
+        purged.push([...urls])
+        if (fail) return Promise.reject(new Error('injected purge failure'))
+        return Promise.resolve()
+      },
+    }
+    const { app } = testApp({ purger })
+
+    const file = await uploadWithUrl(app)
+    const token = file.deleteUrl.split('/d/')[1]
+
+    // The first POST tombstones then dies on the purge: a 500, and the file
+    // is already unreachable at its URL.
+    const first = await app.request(`/d/${token}`, { method: 'POST' })
+    expect(first.status).toBe(500)
+    expect((await app.request(`/${file.id}.png`)).status).toBe(404)
+
+    // The retry resumes the teardown and answers the deleted page.
+    fail = false
+    const second = await app.request(`/d/${token}`, { method: 'POST' })
+    expect(second.status).toBe(200)
+    expect(await second.text()).toContain(`Deleted ${file.id}.png`)
+    expect(purged).toHaveLength(2)
+    expect(purged[0]).toEqual(purged[1])
+
+    // The row is gone: a third POST is a dead link.
+    expect((await app.request(`/d/${token}`, { method: 'POST' })).status).toBe(404)
+  })
+
   it('a link to a file already deleted is 404, not a second delete', async () => {
     const { app } = testApp()
     const file = await uploadWithUrl(app)

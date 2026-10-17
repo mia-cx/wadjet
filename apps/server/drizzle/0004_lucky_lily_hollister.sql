@@ -1,0 +1,1 @@
+CREATE UNIQUE INDEX `files_delete_token_hash` ON `files` (`delete_token_hash`);
