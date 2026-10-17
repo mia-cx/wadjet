@@ -33,7 +33,8 @@ using namespace metal;
     o.b = layer.sample(centre + c * (k + dk)).b;
     o.a = layer.sample(centre + c * k).a;
     // specular hairline just inside the rim
-    float spec = smoothstep(0.86, 1.0, t) * (1.0 - smoothstep(0.985, 1.0, t)) * 0.28;
+    // ~1 pt wide, measured in points from the edge (sdf), not a fraction of r
+    float spec = smoothstep(-1.6, -0.6, sdf) * (1.0 - smoothstep(-0.6, 0.0, sdf)) * 0.22;
     // premultiplied: the hairline shows even where the sample is empty
     o.rgb += spec;
     o.a = max(o.a, half(spec));

@@ -2666,11 +2666,7 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
             // samples — so it reads as glass even where it overhangs the bar
             .overlay {
                 Capsule()
-                    .fill(.white.opacity(0.05))
-                    .overlay(Capsule().strokeBorder(
-                        LinearGradient(colors: [.white.opacity(0.7), .white.opacity(0.08), .white.opacity(0.45)],
-                                       startPoint: .top, endPoint: .bottom),
-                        lineWidth: 1.2))
+                    .fill(.white.opacity(0.03)) // a faint body; the shader draws the hairline rim
                     .frame(width: size.width, height: size.height)
                     .scaleEffect(x: stretch.width, y: stretch.height)
                     .position(centre)
