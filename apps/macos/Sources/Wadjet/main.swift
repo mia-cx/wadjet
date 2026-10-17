@@ -2296,7 +2296,7 @@ struct ToolbarView: View {
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
-    let lensOverhang: CGFloat = 4
+    let lensOverhang: CGFloat = 7
     var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
     var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
     var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
@@ -2406,6 +2406,19 @@ struct ToolbarView: View {
                 maxSampleOffset: CGSize(width: 64, height: 64))
             .mask {
                 Capsule().frame(width: lensW + 2, height: lensH + 2)
+                    .scaleEffect(x: stretchX, y: stretchY)
+                    .position(lensCentre)
+            }
+            // the lens's own body and fresnel rim, independent of what it
+            // samples — so it reads as glass even where it overhangs the bar
+            .overlay {
+                Capsule()
+                    .fill(.white.opacity(0.05))
+                    .overlay(Capsule().strokeBorder(
+                        LinearGradient(colors: [.white.opacity(0.7), .white.opacity(0.08), .white.opacity(0.45)],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1.2))
+                    .frame(width: lensW, height: lensH)
                     .scaleEffect(x: stretchX, y: stretchY)
                     .position(lensCentre)
             }
