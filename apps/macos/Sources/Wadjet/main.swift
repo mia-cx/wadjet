@@ -7,6 +7,8 @@ import Carbon
 import Vision
 import UniformTypeIdentifiers
 import ObjectiveC
+import AVFoundation
+import CoreMedia
 import KeyboardShortcuts
 import WadjetKit
 
@@ -264,9 +266,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var recStart: Date?
     var recordingRect: CGRect = .zero
     var recordingDisplay = 0
-    var recordingThumb: NSImage?
     var recordingWindowID: CGWindowID?
     var recordingPanel: NSPanel?
+    var recStream: SCStream?
+    var recWriter: MP4Writer?
+    var recOutput: RecOutput?
+    /// Bumped per Recording attempt, so a cancelled attempt's late setup can't
+    /// publish into a newer one that has also reached `.countdown`.
+    var recAttempt = 0
+    let recDelegate = RecDelegate()
+    /// The stream's frame queue — SCStream calls back here, the actor serializes writes.
+    let recQueue = DispatchQueue(label: "wadjet.recstream")
 
     func applicationDidFinishLaunching(_ n: Notification) {
         #if CLEAR_GLASS_PATCH
@@ -518,16 +528,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             it.representedObject = e.id.uuidString
             // ImageIO thumbnail at ~64px (32pt @2x); decoding the full
             // HEIC/PNG for every menu item on every open is far too heavy.
-            if let file = e.existingFile,
-               let src = CGImageSourceCreateWithURL(file as CFURL, nil),
-               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
-                   kCGImageSourceCreateThumbnailFromImageAlways: true,
-                   kCGImageSourceThumbnailMaxPixelSize: 64,
-               ] as CFDictionary) {
-                // fit inside a 32 pt box so a thin, wide Capture can't widen the menu
-                let scale = 32 / CGFloat(max(cg.width, cg.height, 1))
-                it.image = NSImage(cgImage: cg,
-                                   size: NSSize(width: CGFloat(cg.width) * scale, height: CGFloat(cg.height) * scale))
+            // ImageIO thumbnail at ~64px (32pt @2x); MP4s go through
+            // AVAssetImageGenerator instead — ImageIO can't read video. Async:
+            // the item lands first and the image fills in when it's ready.
+            if let file = e.existingFile {
+                let item = it
+                Task { @MainActor in
+                    guard let cg = await captureThumbnail(file) else { return }
+                    let scale = 32 / CGFloat(max(cg.width, cg.height, 1))
+                    item.image = NSImage(cgImage: cg,
+                                         size: NSSize(width: CGFloat(cg.width) * scale, height: CGFloat(cg.height) * scale))
+                }
             }
             it.isEnabled = e.existingFile != nil || e.link != nil
             menu.addItem(it)
@@ -676,11 +687,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
             }
         } else {
-            recordingWindowID = id // kept for the real SCStream later
-            let screen = Freeze.shared.displays[display].screen
-            Task { @MainActor in
-                startRecording(rect: frame, display: display, thumb: await captureWindow(id: id, screen: screen))
-            }
+            recordingWindowID = id
+            startRecording(rect: frame, display: display)
         }
     }
     func didSelect(_ rect: CGRect, on display: Int) {
@@ -700,15 +708,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
 
     // Screenshots write a temp file, then run the Workflow picked for the Tool —
-    // the Steps do the rest (save, copy, toast). Recordings stay simulated until #28.
-    func runCapture(thumb: CGImage?, label: String, duration: TimeInterval? = nil) {
-        defer { AppState.shared.triggerWorkflow = nil } // the Shortcut's pick is one-shot
-        if duration != nil || thumb == nil {
-            let wf = AppState.shared.workflowFor(AppState.shared.tool) ?? "MP4"
-            toastCtrl.start(cap: Capture(thumb: thumb, label: label, url: nil, duration: duration), workflow: wf)
+    // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
+    func runCapture(thumb: CGImage?, label: String) {
+        guard let img = thumb else {
+            AppLog.line("capture: no image — window capture and frozen crop both failed")
             return
         }
-        let img = thumb!
         // HEIC with an ISO gain map when the display gave HDR pixels, else PNG
         let heic = heicData(img)
         let bytes = heic ?? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
@@ -721,10 +726,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
             return
         }
-        let chosen = AppState.shared.workflowFor(AppState.shared.tool) ?? "Screenshot"
-        let wf = AppState.shared.config.value.workflows.first { $0.name == chosen && $0.takes == .screenshot }
-            ?? WadjetConfig().workflows.first { $0.takes == .screenshot }!
-        let defaultFolder = expandingTilde(AppState.shared.config.value.folders.screenshots)
+        let state = AppState.shared
+        let workflow = state.workflowFor(state.tool) ?? state.config.value.defaultWorkflows.screenshot
+        state.triggerWorkflow = nil // the Shortcut's pick is one-shot; consumed
+        runCapture(file: file, kind: .screenshot, label: label, workflow: workflow)
+    }
+    /// Run a finished capture file through `workflow` (resolved by the caller
+    /// at capture time), record it in history, and finish any showToast items.
+    func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String) {
+        let state = AppState.shared
+        let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
+            ?? WadjetConfig().workflows.first { $0.takes == kind }!
+        let defaultFolder = expandingTilde(kind.isRecording
+            ? state.config.value.folders.recordings
+            : state.config.value.folders.screenshots)
         let runID = UUID()
         let capturedAt = Date()
         AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
@@ -739,13 +754,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let entry: HistoryEntry?
                     do {
                         entry = try self.history?.record(
-                            kind: .screenshot, createdAt: capturedAt,
+                            kind: kind, createdAt: capturedAt,
                             file: saved.last ?? file, errors: errors)
                     } catch {
                         AppLog.line("history: record failed: \(error.localizedDescription)")
                         entry = nil
                     }
-                    if let entry {
+                    // OCR is for Screenshots; an MP4 has nothing to read.
+                    if let entry, kind == .screenshot {
                         // only Sendable values cross into the detached task
                         let store = self.history, entryID = entry.id, target = saved.last ?? file
                         Task.detached {
@@ -778,29 +794,116 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         return CGImageDestinationFinalize(dst) ? data as Data : nil
     }
 
-    // MARK: recording (simulated)
-    func startRecording(rect: CGRect, display: Int, thumb: CGImage? = nil) {
+    // MARK: recording
+
+    /// The system can kill the stream (another capture client, the display
+    /// sleeping): finish what's already on disk through the normal path.
+    final class RecDelegate: NSObject, SCStreamDelegate, @unchecked Sendable {
+        func stream(_ stream: SCStream, didStopWithError error: Error) {
+            // The stream itself isn't Sendable; its identity is what matters.
+            let id = ObjectIdentifier(stream), reason = error.localizedDescription
+            Task { @MainActor in
+                AppDelegate.shared?.streamStopped(id, reason: reason)
+            }
+        }
+    }
+
+    /// The frames ScreenCaptureKit hands us go straight to the MP4 writer on
+    /// its own queue; the timeline drops paused frames.
+    final class RecOutput: NSObject, SCStreamOutput, @unchecked Sendable {
+        let writer: MP4Writer
+        init(writer: MP4Writer) { self.writer = writer }
+        func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
+            guard type == .screen, isCompleteScreenFrame(sb),
+                  let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+            writer.append(pb, at: CMSampleBufferGetPresentationTimeStamp(sb))
+        }
+    }
+
+    /// The screen source for the Recording that's starting: a window, a region
+    /// of one display, or the whole display. Returns nil if ScreenCaptureKit
+    /// can't resolve it (the window went away, the display is gone).
+    func recordSource(display: Int) async -> (filter: SCContentFilter, pixels: CGSize, sourceRect: CGRect)? {
         let s = AppState.shared
-        let thumb = thumb ?? Freeze.shared.crop(rect: rect, on: display)
+        let f = Freeze.shared.displays[display]
+        let content: SCShareableContent
+        do {
+            content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        } catch {
+            AppLog.line("record: shareable content failed: \(error.localizedDescription)")
+            return nil
+        }
+        // wadjet's own panels (border, island, toasts) never appear in the video
+        let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        if s.tool == .recWindow {
+            // Resolve against fresh content: overlayCtrl's map is from Freeze
+            // time, and a Record Window that can't find its window must never
+            // fall back to capturing the whole display.
+            guard let id = recordingWindowID,
+                  let win = content.windows.first(where: { $0.windowID == id }) else {
+                AppLog.line("record: window \(recordingWindowID.map(String.init) ?? "?") is gone")
+                return nil
+            }
+            let sc = f.screen.backingScaleFactor
+            return (SCContentFilter(desktopIndependentWindow: win),
+                    CGSize(width: win.frame.width * sc, height: win.frame.height * sc),
+                    .null)
+        }
+        guard let num = f.screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let disp = content.displays.first(where: { $0.displayID == num }) else {
+            AppLog.line("record: no shareable display for index \(display)")
+            return nil
+        }
+        let filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        // sourceRect is display-local points with a top-left origin; the
+        // overlay's rect is view coords (bottom-left).
+        var sourceRect = CGRect.null
+        if s.tool == .recRegion {
+            sourceRect = CGRect(
+                x: recordingRect.origin.x,
+                y: disp.frame.height - recordingRect.origin.y - recordingRect.height,
+                width: recordingRect.width, height: recordingRect.height)
+        }
+        let scale = f.screen.backingScaleFactor
+        // A region records at its own size; screen recordings at the display's.
+        let source = sourceRect.isNull ? disp.frame.size : sourceRect.size
+        return (filter, CGSize(width: source.width * scale, height: source.height * scale), sourceRect)
+    }
+
+    /// Even dimensions, longest edge capped at the configured resolution —
+    /// downscale only, never upscale.
+    func recSize(_ source: CGSize) -> CGSize {
+        let limit = CGFloat(AppState.shared.config.value.recording.resolution)
+        let scale = min(1, limit / max(source.width, source.height))
+        return CGSize(
+            width: 2 * Int((source.width * scale / 2).rounded(.toNearestOrEven)),
+            height: 2 * Int((source.height * scale / 2).rounded(.toNearestOrEven)))
+    }
+
+    func startRecording(rect: CGRect, display: Int) {
+        let s = AppState.shared
         overlayCtrl.closeAllPanelsOnly() // live screen returns
-        recordingRect = rect; recordingDisplay = display; recordingThumb = thumb.map { NSImage(cgImage: $0, size: .zero) }
+        recordingRect = rect; recordingDisplay = display
         pauseAcc = 0; s.recordingElapsed = 0; s.recordingPaused = false
+        // .countdown holds until beginStream lands .recording or .desktop —
+        // setup can await, and a Shortcut press meanwhile must not trigger.
+        s.phase = .countdown
+        recAttempt += 1
+        let attempt = recAttempt
         let n = s.countdown == "Off" ? 0 : Int(s.countdown) ?? 0
         let begin = {
-            s.phase = .recording; self.recStart = Date()
-            AppLog.line("phase=recording")
-            self.updateEscHotkey()
-            self.showRecBorder(rect: rect, display: display)
-            self.updateRecChrome()
+            _ = Task { @MainActor in
+                await self.beginStream(attempt: attempt)
+            }
         }
         if n > 0 {
-            s.phase = .countdown
             AppLog.line("phase=countdown (\(n))")
             updateEscHotkey()
             CountdownHUD.show(n)
             Task { @MainActor in
                 for i in stride(from: n - 1, through: 0, by: -1) {
                     try? await Task.sleep(for: .seconds(1))
+                    guard attempt == self.recAttempt else { return } // a newer attempt owns the HUD
                     guard s.phase == .countdown else { CountdownHUD.hide(); return }
                     CountdownHUD.show(i)
                 }
@@ -835,10 +938,83 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     @objc func recPause() { togglePause() }
     @objc func recStop() { stopRecording() }
+    /// A lost Recording must be visible, not just logged — a toast with the
+    /// reason and no thumbnail.
+    func errorToast(_ title: String, _ detail: String) {
+        let t = ToastItem(cap: Capture(thumb: nil, label: title, url: nil, duration: nil))
+        t.title = title; t.err = detail
+        toastCtrl.items.insert(t, at: 0)
+        toastCtrl.relayout()
+        toastCtrl.startTimer(t)
+    }
+
+    /// Build and start the SCStream + MP4Writer once any countdown finishes.
+    /// .countdown stays the phase through setup — a Shortcut press is ignored
+    /// and an Esc cancel lands us back on .desktop, which the guards catch.
+    /// A failure (no Screen Recording permission, a gone window) closes the
+    /// chrome, lands back on the desktop, and toasts the reason.
+    func beginStream(attempt: Int) async {
+        let s = AppState.shared
+        let cfg = AppState.shared.config.value
+        let live = { s.phase == .countdown && attempt == self.recAttempt }
+        guard live(),
+              let (filter, sourcePixels, sourceRect) = await recordSource(display: recordingDisplay),
+              live(), // an Esc could have cancelled mid-setup
+              let file = try? captureFiles.newFile(ext: "mp4") else {
+            guard live() else { return } // cancelled: nothing to report
+            AppLog.line("record: could not resolve the source or name the file")
+            s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            errorToast("Couldn't record", "No capture source — Screen Recording permission may be off.")
+            return
+        }
+        let size = recSize(sourcePixels)
+        let conf = SCStreamConfiguration()
+        conf.width = Int(size.width); conf.height = Int(size.height)
+        conf.minimumFrameInterval = CMTime(value: 1, timescale: CMTimeScale(cfg.recording.fps))
+        conf.showsCursor = s.cursor
+        conf.pixelFormat = kCVPixelFormatType_32BGRA
+        conf.colorSpaceName = CGColorSpace.sRGB
+        conf.capturesAudio = false // audio arrives in #30
+        conf.queueDepth = 6
+        if !sourceRect.isNull { conf.sourceRect = sourceRect }
+        do {
+            let writer = try MP4Writer(url: file, width: conf.width, height: conf.height, fps: cfg.recording.fps)
+            let stream = SCStream(filter: filter, configuration: conf, delegate: recDelegate)
+            let output = RecOutput(writer: writer)
+            try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: recQueue)
+            try await stream.startCapture()
+            // An Esc during startup cancelled this attempt; don't start recording.
+            guard live() else {
+                try? await stream.stopCapture()
+                writer.cancel()
+                return
+            }
+            recStream = stream; recWriter = writer; recOutput = output
+            s.phase = .recording; self.recStart = Date()
+            AppLog.line("phase=recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
+            self.updateEscHotkey()
+            self.showRecBorder(rect: recordingRect, display: recordingDisplay)
+            self.updateRecChrome()
+        } catch {
+            AppLog.line("record: stream failed to start: \(error.localizedDescription)")
+            guard live() else { return } // a cancelled attempt must not reset a newer one
+            s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            errorToast("Couldn't record", error.localizedDescription)
+        }
+    }
+
+    func hostNow() -> CMTime { CMClockGetTime(CMClockGetHostTimeClock()) }
+
     func togglePause() {
         let s = AppState.shared
-        if s.recordingPaused { pauseAcc += Date().timeIntervalSince(pauseStart!); s.recordingPaused = false }
-        else { s.recordingPaused = true; pauseStart = Date() }
+        if s.recordingPaused {
+            pauseAcc += Date().timeIntervalSince(pauseStart!)
+            s.recordingPaused = false
+            recWriter?.resume(at: hostNow())
+        } else {
+            s.recordingPaused = true; pauseStart = Date()
+            recWriter?.pause(at: hostNow())
+        }
         updateRecChrome()
     }
     func recTick() {
@@ -862,6 +1038,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.recordingElapsed = recStart.map { Date().timeIntervalSince($0) - pauseAcc } ?? s.recordingElapsed
         let dur = s.recordingElapsed
         let label = "\(s.tool?.title ?? "Recording") \(fmtT(dur))"
+        let stoppedAt = hostNow()
+        let stream = recStream, writer = recWriter
+        recStream = nil; recWriter = nil; recOutput = nil
         recordingPanel?.close(); recordingPanel = nil
         s.phase = .desktop; recStart = nil
         updateEscHotkey()
@@ -869,12 +1048,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.title = ""; statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
         rebuildMenu()
         overlayCtrl.closeAllPanelsOnly()
-        let thumbCG = recordingThumb.map { cgimg(from: $0) }
-        runCapture(thumb: thumbCG, label: label, duration: dur)
+        // The Workflow is decided now — a Shortcut fired while this finishes
+        // must not reach back and change it.
+        let workflow = s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.recording
+        s.triggerWorkflow = nil // consumed now, whatever fires later starts fresh
+        Task { @MainActor in
+            guard let writer else { return }
+            do { try await stream?.stopCapture() }
+            catch { AppLog.line("record: stopCapture failed (finishing anyway): \(error.localizedDescription)") }
+            do {
+                let file = try await writer.finish(at: stoppedAt)
+                runCapture(file: file, kind: .mp4, label: label, workflow: workflow)
+            } catch {
+                AppLog.line("record: finish failed: \(error.localizedDescription)")
+                errorToast("Recording was lost", error.localizedDescription)
+            }
+        }
     }
-    func cgimg(from img: NSImage) -> CGImage {
-        var r = CGRect(origin: .zero, size: img.size)
-        return img.cgImage(forProposedRect: &r, context: nil, hints: nil) ?? NSImage(size: img.size).cgImage(forProposedRect: &r, context: nil, hints: nil)!
+
+    /// The stream died under us: finish the partial recording the same way a
+    /// Stop press does, and surface the reason. A stale callback from an
+    /// earlier stream does nothing.
+    func streamStopped(_ id: ObjectIdentifier, reason: String) {
+        guard let stream = recStream, ObjectIdentifier(stream) == id,
+              AppState.shared.phase == .recording else { return }
+        AppLog.line("record: stream stopped: \(reason)")
+        errorToast("Recording stopped", reason)
+        stopRecording()
     }
     func fmtT(_ t: TimeInterval) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 
@@ -2420,7 +2620,7 @@ final class AppWorkflowEffects: WorkflowEffects {
     }
 
     func showToast(_ file: URL, run: UUID) async throws {
-        let img = NSImage(contentsOf: file)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        let img = await captureThumbnail(file, maxPixels: 400)
         let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent, url: file, duration: nil))
         t.title = "Captured"
         toast.items.insert(t, at: 0)
@@ -2428,6 +2628,24 @@ final class AppWorkflowEffects: WorkflowEffects {
         AppDelegate.shared?.updateEscHotkey()
         toast.runToasts[run, default: []].append(t)
     }
+}
+
+/// A thumbnail for a capture file: ImageIO for images, the first frame via
+/// AVAssetImageGenerator for .mp4 (ImageIO can't read video). Async because the
+/// video path is.
+func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
+    if file.pathExtension.lowercased() == "mp4" {
+        let gen = AVAssetImageGenerator(asset: AVURLAsset(url: file))
+        gen.appliesPreferredTrackTransform = true
+        gen.maximumSize = CGSize(width: maxPixels, height: maxPixels)
+        return try? await gen.image(at: .zero).image
+    }
+    if let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+       let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+           kCGImageSourceCreateThumbnailFromImageAlways: true,
+           kCGImageSourceThumbnailMaxPixelSize: maxPixels,
+       ] as CFDictionary) { return cg }
+    return nil
 }
 
 // MARK: - Toasts
@@ -2485,33 +2703,8 @@ final class ToastController: ObservableObject {
         hosting.frame.size = f.size
         panel.setFrame(f, display: true)
     }
-    func start(cap: Capture, workflow wf: String) {
-        let t = ToastItem(cap: cap)
-        items.insert(t, at: 0)
-        relayout()
-        AppDelegate.shared?.updateEscHotkey()
-        let s = AppState.shared // uploadMode drives the simulated upload path
-        Task { @MainActor in
-            if wf.hasPrefix("GIF") { await phase(t, "Converting", "GIF", ring: true, ms: 3000) }
-            if !wf.contains("w.mia.cx") { t.title = "Saved" }
-            if wf.contains("w.mia.cx") {
-                if s.uploadMode == 2 { t.title = "You're offline"; t.sub = "Couldn't upload"; t.showRetry = true; finish(t, nil); return }
-                t.title = "Uploading"; t.sub = "w.mia.cx"; t.showBar = true; t.showCancel = true
-                await animateProgress(t, ms: 4000)
-                t.showBar = false; t.showCancel = false
-                if s.uploadMode == 1 { t.title = "Couldn't upload"; t.sub = "Server returned 500"; t.showRetry = true }
-                else { let link = "w.mia.cx/aB3xK9.png"; clipboard(link); t.title = "Link copied"; t.sub = link }
-            }
-            finish(t, nil)
-        }
-    }
     func finish(_ t: ToastItem, _ err: String?) {
         t.err = err; t.showRing = false; startTimer(t)
-    }
-    func phase(_ t: ToastItem, _ title: String, _ sub: String, ring: Bool, ms: Int) async {
-        t.title = title; t.sub = sub; t.showRing = ring
-        await animateProgress(t, ms: ms)
-        t.showRing = false
     }
     func animateProgress(_ t: ToastItem, ms: Int) async {
         let steps = 40

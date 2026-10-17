@@ -40,6 +40,22 @@ struct ConfigStoreTests {
         #expect(errors[0].message.contains("at least 1"))
     }
 
+    @Test func recordingDefaultsAndValidation() throws {
+        let minimal = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
+        #expect(minimal.recording.resolution == 1920)
+        #expect(minimal.recording.fps == 30)
+
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        for json in [#"{"recording":{"resolution":1}}"#, #"{"recording":{"fps":0}}"#, #"{"recording":{"fps":121}}"#] {
+            try Data(json.utf8).write(to: url)
+            var errors: [ConfigError] = []
+            _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+            #expect(errors.count == 1)
+            #expect(errors[0].location?.hasPrefix("recording") == true)
+        }
+    }
+
     @Test func savedConfigSurvivesReload() {
         let url = tempFile()
         let a = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
