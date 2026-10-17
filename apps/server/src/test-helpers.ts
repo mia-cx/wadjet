@@ -16,7 +16,8 @@ export const KEY_B_HASH = 'f04d1ba2b4d1bffbe35b8d23001bfdd677f61757358d792ed9155
 export const testApp = (overrides: Partial<AppDeps> = {}) => {
   const files = memoryFileIndex()
   const blobs = memoryBlobStore()
-  let counter = 0
+  let idCounter = 0
+  let tokenCounter = 0
   const app = createApp({
     config: {
       baseUrl: 'https://w.mia.cx',
@@ -32,8 +33,8 @@ export const testApp = (overrides: Partial<AppDeps> = {}) => {
     blobs,
     purger: noopPurger,
     clock: () => new Date('2026-10-16T12:00:00Z'),
-    ids: () => `id${String(counter++).padStart(4, '0')}`,
-    tokens: () => `token${counter}`,
+    ids: () => `id${String(idCounter++).padStart(4, '0')}`,
+    tokens: () => `token${tokenCounter++}`,
     ...overrides,
   })
   return { app, files, blobs }

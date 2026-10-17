@@ -46,7 +46,6 @@ export const memoryFileIndex = (): FileIndex => {
   const rows = new Map<string, FileRow>()
   return {
     insert(row) {
-      if (rows.has(row.id)) return Promise.reject(new Error(`File ${row.id} already exists`))
       const existing =
         row.idempotencyKey === null
           ? undefined
@@ -54,6 +53,7 @@ export const memoryFileIndex = (): FileIndex => {
               (r) => r.owner === row.owner && r.idempotencyKey === row.idempotencyKey,
             )
       if (existing) return Promise.resolve(existing)
+      if (rows.has(row.id)) return Promise.reject(new Error(`File ${row.id} already exists`))
       rows.set(row.id, row)
       return Promise.resolve(row)
     },

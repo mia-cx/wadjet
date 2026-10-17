@@ -78,6 +78,72 @@ const suite = (name: string, adapters: () => Adapters) =>
       })
       expect(((await list.json()) as { items: unknown[] }).items).toHaveLength(1)
     })
+
+    it('overlapping same-key uploads on the same id keep only the winner', async () => {
+      const store = adapters()
+      const deleted: string[] = []
+      const inner = store.blobs.delete.bind(store.blobs)
+      store.blobs.delete = (key) => {
+        deleted.push(key)
+        return inner(key)
+      }
+      const app = testApp({ ...store, ids: () => 'aB3xK9' }).app
+
+      let release!: () => void
+      const body = new ReadableStream<Uint8Array>({
+        start: (controller) => {
+          release = () => {
+            controller.enqueue(new Uint8Array([1, 2, 3]))
+            controller.close()
+          }
+        },
+      })
+      const first = app.request('/v1/files', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer wdj_test',
+          'Content-Type': 'image/png',
+          'Content-Length': '3',
+          'Idempotency-Key': 'same-request',
+          'Wadjet-Filename': 'first.png',
+        },
+        body,
+        duplex: 'half',
+      } as RequestInit)
+
+      const second = await app.request('/v1/files', {
+        method: 'POST',
+        headers: {
+          Authorization: 'Bearer wdj_test',
+          'Content-Type': 'image/png',
+          'Content-Length': '3',
+          'Idempotency-Key': 'same-request',
+          'Wadjet-Filename': 'winner.png',
+        },
+        body: new Uint8Array([4, 5, 6]),
+      })
+      expect(second.status).toBe(201)
+
+      release()
+      const repeat = await first
+      expect(repeat.status).toBe(200)
+      const file = (await repeat.json()) as {
+        id: string
+        filename: string
+        deleteUrl: string | null
+      }
+      expect(file.id).toBe('aB3xK9')
+      expect(file.filename).toBe('winner.png')
+      expect(file.deleteUrl).toBeNull()
+
+      const served = await app.request('/aB3xK9.png')
+      expect(new Uint8Array(await served.arrayBuffer())).toEqual(new Uint8Array([4, 5, 6]))
+
+      const stored = await store.files.get('aB3xK9')
+      expect(stored).toBeDefined()
+      expect(deleted).toHaveLength(1)
+      expect(deleted[0]).not.toBe(stored?.blobKey)
+    })
   })
 
 suite('memory', () => ({ blobs: memoryBlobStore(), files: memoryFileIndex() }))

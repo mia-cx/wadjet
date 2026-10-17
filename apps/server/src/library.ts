@@ -124,7 +124,7 @@ export const createLibrary = (deps: LibraryDeps) => {
         await deps.blobs.delete(blobKey)
         throw error
       }
-      if (stored.id !== row.id) {
+      if (stored.blobKey !== row.blobKey) {
         // An overlapping upload with the same idempotency key won; drop our blob.
         await deps.blobs.delete(blobKey)
         return { file: { ...toFile(stored), deleteUrl: null }, created: false }
