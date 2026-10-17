@@ -115,7 +115,7 @@ jobs:
           go install github.com/minio/minio@9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
           mkdir -p /tmp/minio-data
           MINIO_ROOT_USER="$S3_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$S3_SECRET_ACCESS_KEY" \
-            nohup minio server /tmp/minio-data >/tmp/minio.log 2>&1 &
+            nohup "$HOME/go/bin/minio" server /tmp/minio-data >/tmp/minio.log 2>&1 &
           for i in $(seq 1 60); do
             curl -fsS "$S3_ENDPOINT/minio/health/live" && exit 0
             sleep 1
