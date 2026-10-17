@@ -18,8 +18,14 @@ const must = <T>(value: T | undefined): T => {
 }
 
 /** The behaviour every BlobStore implementation must satisfy. */
-export const blobStoreContract = (name: string, store: () => BlobStore | Promise<BlobStore>) =>
+export const blobStoreContract = (
+  name: string,
+  store: () => BlobStore | Promise<BlobStore>,
+  options: { minPartBytes?: number } = {},
+) =>
   describe(name, () => {
+    // R2 and S3 reject non-final parts under 5 MiB; emulations take anything.
+    const partBytes = options.minPartBytes ?? 1024
     it('round-trips bytes', async () => {
       const blobs = await store()
       const data = new Uint8Array([0, 1, 2, 255, 10])
@@ -48,4 +54,55 @@ export const blobStoreContract = (name: string, store: () => BlobStore | Promise
       expect(await blobs.get('k')).toBeUndefined()
       await expect(blobs.delete('k')).resolves.toBeUndefined()
     })
+
+    const part = (fill: number) => new Uint8Array(partBytes).fill(fill)
+    const tail = new Uint8Array([7, 8, 9]) // the last part may be small
+
+    it('completes a multipart upload whose parts landed out of order', async () => {
+      const blobs = await store()
+      const uploadId = await blobs.startMultipart('files/mp', 'application/octet-stream')
+      const p1 = part(1)
+      const etags = new Map<number, string>()
+      // Parts can land in any order; the complete list sets the byte order.
+      etags.set(2, await blobs.putPart('files/mp', uploadId, 2, streamOf(tail), tail.length))
+      etags.set(1, await blobs.putPart('files/mp', uploadId, 1, streamOf(p1), p1.length))
+      await blobs.completeMultipart('files/mp', uploadId, [
+        { number: 1, etag: etags.get(1)! },
+        { number: 2, etag: etags.get(2)! },
+      ])
+      const joined = new Uint8Array(p1.length + tail.length)
+      joined.set(p1, 0)
+      joined.set(tail, p1.length)
+      expect(await bytes(must(await blobs.get('files/mp')))).toEqual(joined)
+    }, 60_000)
+
+    it('a resent part replaces the earlier copy', async () => {
+      const blobs = await store()
+      const uploadId = await blobs.startMultipart('files/re', 'application/octet-stream')
+      const first = part(1)
+      const second = part(2)
+      await blobs.putPart('files/re', uploadId, 1, streamOf(first), first.length)
+      const etag = await blobs.putPart('files/re', uploadId, 1, streamOf(second), second.length)
+      const tailEtag = await blobs.putPart('files/re', uploadId, 2, streamOf(tail), tail.length)
+      await blobs.completeMultipart('files/re', uploadId, [
+        { number: 1, etag },
+        { number: 2, etag: tailEtag },
+      ])
+      const joined = new Uint8Array(second.length + tail.length)
+      joined.set(second, 0)
+      joined.set(tail, second.length)
+      expect(await bytes(must(await blobs.get('files/re')))).toEqual(joined)
+    }, 60_000)
+
+    it("abort frees an upload's parts and writes no blob", async () => {
+      const blobs = await store()
+      const uploadId = await blobs.startMultipart('files/ab', 'application/octet-stream')
+      const p1 = part(1)
+      await blobs.putPart('files/ab', uploadId, 1, streamOf(p1), p1.length)
+      await blobs.abortMultipart('files/ab', uploadId)
+      expect(await blobs.get('files/ab')).toBeUndefined()
+      // Aborting twice or on an unknown id is not an error.
+      await expect(blobs.abortMultipart('files/ab', uploadId)).resolves.toBeUndefined()
+      await expect(blobs.abortMultipart('files/ab', 'nope')).resolves.toBeUndefined()
+    }, 60_000)
   })

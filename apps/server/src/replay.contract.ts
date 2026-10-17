@@ -39,30 +39,10 @@ export interface Replayable {
 // Issues #51-#53 own these fixtures; they run as todo until those land.
 const todos = new Map<string, string>([
   ['01-discovery', '#53: discovery advertises OAuth'],
-  ['05-attach-thumbnail', '#51: thumbnails and multipart'],
-  ['06-start-upload', '#51: thumbnails and multipart'],
-  ['07-upload-part-1', '#51: thumbnails and multipart'],
-  ['08-upload-part-3', '#51: thumbnails and multipart'],
-  ['09-complete-upload-incomplete', '#51: thumbnails and multipart'],
-  ['10-get-upload', '#51: thumbnails and multipart'],
-  ['11-upload-part-2', '#51: thumbnails and multipart'],
-  ['12-complete-upload', '#51: thumbnails and multipart'],
-  ['13-complete-upload-repeat', '#51: thumbnails and multipart'],
-  ['14-start-upload-to-abort', '#51: thumbnails and multipart'],
-  ['15-abort-upload', '#51: thumbnails and multipart'],
-  ['16-get-upload-not-found', '#51: thumbnails and multipart'],
-  ['17-list-files', '#51: list shows the multipart Recording and a thumbnailUrl'],
-  ['18-list-files-next-page', '#51: list shows the multipart Recording and a thumbnailUrl'],
-  ['23-get-file-range', '#51: serves the multipart Recording'],
-  ['24-get-thumbnail', '#51'],
-  ['25-get-thumbnail-redirect', '#51'],
   ['26-get-sharex-config', '#52'],
   ['27-get-deletion-page', '#52'],
   ['28-delete-by-link', '#52'],
   ['29-get-file-not-found', "#52: the file is gone only after 28's delete-by-link"],
-  ['30-delete-file', '#51: deletes the multipart Recording'],
-  ['32-start-upload-to-expire', '#51'],
-  ['33-upload-part-expired', '#51'],
 ])
 
 const IDS = ['aB3xK9', 'Uq7Lm2', 'Pz2Wc5', 'Hn4Rt8']

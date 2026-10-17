@@ -35,4 +35,6 @@ beforeAll(async () => {
   await res.body?.cancel()
 })
 
-blobStoreContract('s3BlobStore (MinIO)', () => s3BlobStore(options))
+blobStoreContract('s3BlobStore (MinIO)', () => s3BlobStore(options), {
+  minPartBytes: 5 * 1024 * 1024,
+})

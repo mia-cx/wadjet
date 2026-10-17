@@ -23,7 +23,7 @@ export const objectUrl = (options: S3BlobStoreOptions, key: string): string => {
   return url.toString()
 }
 
-/** Blob store on an S3-compatible endpoint, signed with aws4fetch. No multipart (#51). */
+/** Blob store on an S3-compatible endpoint, signed with aws4fetch. */
 export const s3BlobStore = (options: S3BlobStoreOptions): BlobStore => {
   const aws = new AwsClient({
     service: 's3',
@@ -68,6 +68,54 @@ export const s3BlobStore = (options: S3BlobStoreOptions): BlobStore => {
     async delete(key) {
       const res = await aws.fetch(objectUrl(options, key), { method: 'DELETE' })
       if (!res.ok && res.status !== 404) await fail('delete', key, res)
+      await res.body?.cancel()
+    },
+    // S3 enforces its 5 MiB non-final-part minimum at CompleteMultipartUpload.
+    async startMultipart(key, contentType) {
+      const res = await aws.fetch(`${objectUrl(options, key)}?uploads`, {
+        method: 'POST',
+        headers: { 'Content-Type': contentType },
+      })
+      if (!res.ok) await fail('startMultipart', key, res)
+      const xml = await res.text()
+      const uploadId = xml.match(/<UploadId>([^<]+)<\/UploadId>/)?.[1]
+      if (!uploadId)
+        throw new Error(`S3 startMultipart ${key}: no UploadId in ${xml.slice(0, 300)}`)
+      return uploadId
+    },
+    async putPart(key, uploadId, n, body, length) {
+      const res = await aws.fetch(
+        `${objectUrl(options, key)}?partNumber=${n}&uploadId=${encodeURIComponent(uploadId)}`,
+        {
+          method: 'PUT',
+          body,
+          duplex: 'half',
+          headers: { 'Content-Length': String(length) },
+        } as RequestInit,
+      )
+      if (!res.ok) await fail('putPart', key, res)
+      const etag = res.headers.get('ETag')
+      if (!etag) throw new Error(`S3 putPart ${key}: no ETag on HTTP ${res.status}`)
+      await res.body?.cancel()
+      return etag
+    },
+    async completeMultipart(key, uploadId, parts) {
+      const xml = `<CompleteMultipartUpload>${parts
+        .map((p) => `<Part><PartNumber>${p.number}</PartNumber><ETag>${p.etag}</ETag></Part>`)
+        .join('')}</CompleteMultipartUpload>`
+      const res = await aws.fetch(
+        `${objectUrl(options, key)}?uploadId=${encodeURIComponent(uploadId)}`,
+        { method: 'POST', body: xml },
+      )
+      if (!res.ok) await fail('completeMultipart', key, res)
+      await res.body?.cancel()
+    },
+    async abortMultipart(key, uploadId) {
+      const res = await aws.fetch(
+        `${objectUrl(options, key)}?uploadId=${encodeURIComponent(uploadId)}`,
+        { method: 'DELETE' },
+      )
+      if (!res.ok && res.status !== 404) await fail('abortMultipart', key, res)
       await res.body?.cancel()
     },
   }

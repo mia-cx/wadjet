@@ -6,6 +6,7 @@ import { memoryBlobStore } from './blob-store.ts'
 import { memoryFileIndex } from './file-index.ts'
 import { noopPurger } from './ports.ts'
 import type { Fixture, ReplayFixtures } from './replay.contract.ts'
+import { memoryUploadIndex } from './upload-index.ts'
 
 /** sha256('wdj_test') */
 export const TEST_KEY = 'wdj_test'
@@ -51,6 +52,7 @@ export const testApp = (overrides: Partial<AppDeps> = {}) => {
   let idCounter = 0
   let tokenCounter = 0
   const app = createApp({
+    uploads: memoryUploadIndex(),
     config: {
       baseUrl: 'https://w.mia.cx',
       apiKeys: new Map([[TEST_KEY_HASH, 'mia']]),

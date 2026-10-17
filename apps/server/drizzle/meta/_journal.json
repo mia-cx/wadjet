@@ -15,6 +15,13 @@
       "when": 1792267999585,
       "tag": "0001_reflective_albert_cleary",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1792269048855,
+      "tag": "0002_little_captain_america",
+      "breakpoints": true
     }
   ]
 }

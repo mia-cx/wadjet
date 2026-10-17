@@ -3,6 +3,9 @@ import { afterAll, beforeAll, describe, it } from 'vitest'
 import { fileIndexContract } from './file-index.contract.ts'
 import type { FileIndex } from './file-index.ts'
 import { postgresFileIndex } from './file-index-postgres.ts'
+import { uploadIndexContract } from './upload-index.contract.ts'
+import type { UploadIndex } from './upload-index.ts'
+import { postgresUploadIndex } from './upload-index-postgres.ts'
 
 const url = process.env.WADJET_TEST_DATABASE_URL
 if (url === undefined || url === '')
@@ -10,9 +13,11 @@ if (url === undefined || url === '')
 
 const pool = new pg.Pool({ connectionString: url })
 let index: FileIndex
+let uploadIndex: UploadIndex
 
 beforeAll(async () => {
   index = await postgresFileIndex(pool)
+  uploadIndex = await postgresUploadIndex(pool)
 })
 
 afterAll(async () => {
@@ -22,6 +27,11 @@ afterAll(async () => {
 fileIndexContract('postgresFileIndex', async () => {
   await pool.query('TRUNCATE files')
   return index
+})
+
+uploadIndexContract('postgresUploadIndex', async () => {
+  await pool.query('TRUNCATE upload_parts, uploads')
+  return uploadIndex
 })
 
 describe('postgresFileIndex', () => {

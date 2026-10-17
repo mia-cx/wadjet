@@ -11,6 +11,8 @@ import { randomId, randomToken } from './crypto.ts'
 import { postgresFileIndex } from './file-index-postgres.ts'
 import { sqliteFileIndex } from './file-index-sqlite.ts'
 import { noopPurger } from './ports.ts'
+import { postgresUploadIndex } from './upload-index-postgres.ts'
+import { sqliteUploadIndex } from './upload-index-sqlite.ts'
 
 const boot = () => {
   try {
@@ -40,11 +42,16 @@ pool?.on('error', (error) => console.error('Postgres idle client error:', error)
 
 const files =
   pool === null ? sqliteFileIndex(join(config.dataDir, 'wadjet.db')) : await postgresFileIndex(pool)
+const uploads =
+  pool === null
+    ? sqliteUploadIndex(join(config.dataDir, 'wadjet.db'))
+    : await postgresUploadIndex(pool)
 
 const app = createApp({
   config,
   blobs,
   files,
+  uploads,
   purger: config.cloudflarePurge
     ? cloudflarePurger({ ...config.cloudflarePurge, fetch })
     : noopPurger,

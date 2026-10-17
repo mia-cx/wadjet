@@ -18,6 +18,19 @@ export interface FileRow {
   readonly idempotencyKey: string | null
   /** When the row was tombstoned for deletion; `null` while the file is live. */
   readonly deletedAt: Date | null
+  /** Thumbnail version, 0 while the file has none; the URL is `/t/{id}?v={n}`. */
+  readonly thumbnailVersion: number
+  readonly thumbnailBlobKey: string | null
+  readonly thumbnailContentType: string | null
+  readonly thumbnailSize: number | null
+}
+
+/** The thumbnail blob a `setThumbnail` stores on the row. */
+export interface Thumbnail {
+  readonly version: number
+  readonly blobKey: string
+  readonly contentType: string
+  readonly size: number
 }
 
 export interface Cursor {
@@ -46,6 +59,8 @@ export interface FileIndex {
    * still returns the row so a retried DELETE can finish the teardown.
    */
   markDeleted(id: string, at: Date): Promise<void>
+  /** Attaches a new thumbnail blob as the row's current version. */
+  setThumbnail(id: string, thumbnail: Thumbnail): Promise<void>
   delete(id: string): Promise<void>
 }
 
@@ -91,6 +106,18 @@ export const memoryFileIndex = (): FileIndex => {
     markDeleted(id, at) {
       const row = rows.get(id)
       if (row) rows.set(id, { ...row, deletedAt: at, idempotencyKey: null })
+      return Promise.resolve()
+    },
+    setThumbnail(id, thumbnail) {
+      const row = rows.get(id)
+      if (row)
+        rows.set(id, {
+          ...row,
+          thumbnailVersion: thumbnail.version,
+          thumbnailBlobKey: thumbnail.blobKey,
+          thumbnailContentType: thumbnail.contentType,
+          thumbnailSize: thumbnail.size,
+        })
       return Promise.resolve()
     },
     delete(id) {

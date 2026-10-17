@@ -144,17 +144,24 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
   if (apiToken !== undefined && zoneId === undefined)
     fail('WADJET_CLOUDFLARE_ZONE_ID', 'is required when WADJET_CLOUDFLARE_API_TOKEN is set')
 
+  const blobStore = parseBlobStore(env)
+  const partBytes = intEnv(env, 'WADJET_PART_BYTES', positive, 67_108_864)
+  // S3 rejects non-final multipart parts under 5 MiB.
+  const S3_MIN_PART_BYTES = 5 * 1024 * 1024
+  if (blobStore.kind === 's3' && partBytes < S3_MIN_PART_BYTES)
+    fail('WADJET_PART_BYTES', `must be at least ${S3_MIN_PART_BYTES} for the S3 blob store`)
+
   return {
     baseUrl,
     apiKeys: new Map(Object.entries(apiKeys)),
     dataDir: env.WADJET_DATA_DIR ?? './data',
     cloudflarePurge: zoneId !== undefined && apiToken !== undefined ? { zoneId, apiToken } : null,
     port: intEnv(env, 'PORT', port, 8787),
-    blobStore: parseBlobStore(env),
+    blobStore,
     databaseUrl: parseDatabaseUrl(env),
     limits: {
       maxRequestBytes: intEnv(env, 'WADJET_MAX_REQUEST_BYTES', nonNegative, 100_000_000),
-      partBytes: intEnv(env, 'WADJET_PART_BYTES', positive, 67_108_864),
+      partBytes,
       maxFileBytes:
         env.WADJET_MAX_FILE_BYTES === undefined
           ? null
