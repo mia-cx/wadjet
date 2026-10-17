@@ -26,6 +26,20 @@ private func tempFile() -> URL {
 
 @MainActor
 struct ConfigStoreTests {
+    @Test func retentionDaysDefaultsToSevenAndRejectsZero() throws {
+        let minimal = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
+        #expect(minimal.retentionDays == 7)
+
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"retentionDays":0}"#.utf8).write(to: url)
+        var errors: [ConfigError] = []
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        #expect(errors.count == 1)
+        #expect(errors[0].location == "retentionDays")
+        #expect(errors[0].message.contains("at least 1"))
+    }
+
     @Test func savedConfigSurvivesReload() {
         let url = tempFile()
         let a = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }

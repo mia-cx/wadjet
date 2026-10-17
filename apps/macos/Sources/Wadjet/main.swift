@@ -253,7 +253,7 @@ func reportConfigError(_ e: ConfigError) {
 // MARK: - App
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var statusItem: NSStatusItem!
     var overlayCtrl: OverlayController!
     var toastCtrl: ToastController!
@@ -301,8 +301,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         AppLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
         buildStateHUD()
         _ = try? FileManager.default.createDirectory(at: Self.capturesDir, withIntermediateDirectories: true)
-        do { try CaptureFiles(directory: Self.capturesDir).sweep() }
-        catch { AppLog.line("capture sweep failed: \(error.localizedDescription)") }
+        do {
+            history = try HistoryStore(url: Self.historyURL)
+        } catch {
+            AppLog.line("history: store failed to open, running without it: \(error.localizedDescription)")
+        }
+        sweepCaptures()
+        // Entries stay; only the temp files age out. Re-sweep daily while running.
+        Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { _ in
+            Task { @MainActor in self.sweepCaptures() }
+        }
         Timer.scheduledTimer(withTimeInterval: 0.25, repeats: true) { _ in
             Task { @MainActor in self.recTick() }
         }
@@ -364,6 +372,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("wadjet/Captures")
     }
+    static var historyURL: URL {
+        FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("wadjet/History.store")
+    }
+
+    /// Every Capture's permanent record; nil if the store couldn't open —
+    /// the app still works, entries just aren't kept.
+    var history: HistoryStore?
+
+    /// Deletes temp Captures older than the config's retention. Never touches
+    /// history entries — that's what lets the Recent menu outlive the files.
+    func sweepCaptures() {
+        let retention = TimeInterval(AppState.shared.config.value.retentionDays) * 86_400
+        do { try CaptureFiles(directory: Self.capturesDir, retention: retention).sweep() }
+        catch { AppLog.line("capture sweep failed: \(error.localizedDescription)") }
+    }
 
     // MARK: status menu
     func rebuildMenu() {
@@ -379,6 +403,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             m.addItem(it)
             if i == 2 || i == 5 { m.addItem(.separator()) }
         }
+        m.addItem(.separator())
+        let recent = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
+        let rsub = NSMenu()
+        rsub.autoenablesItems = false // a swept entry must stay disabled, not auto-enabled
+        rsub.delegate = self // filled lazily in menuNeedsUpdate
+        recent.submenu = rsub; m.addItem(recent)
         m.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
@@ -458,6 +488,59 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             } else {
                 AppLog.line("bookmark \(path): access denied")
             }
+        }
+    }
+
+    // MARK: Recent submenu
+
+    /// Rebuilds the Recent items each time the submenu opens — always fresh,
+    /// no menu rebuild needed after each capture.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        menu.removeAllItems()
+        let entries: [HistoryEntry]
+        do {
+            entries = try history?.recent(limit: 10) ?? []
+        } catch {
+            AppLog.line("history: recent failed: \(error.localizedDescription)")
+            entries = []
+        }
+        guard !entries.isEmpty else {
+            menu.addItem(NSMenuItem(title: "No Captures Yet", action: nil, keyEquivalent: ""))
+            return
+        }
+        let cal = Calendar.current
+        for e in entries {
+            let when = cal.isDateInToday(e.createdAt)
+                ? e.createdAt.formatted(.dateTime.hour().minute())
+                : e.createdAt.formatted(.dateTime.day().month().hour().minute())
+            let it = NSMenuItem(title: "\(e.kind.title) · \(when)", action: #selector(recentItem(_:)), keyEquivalent: "")
+            it.target = self
+            it.representedObject = e.id.uuidString
+            // ImageIO thumbnail at ~64px (32pt @2x); decoding the full
+            // HEIC/PNG for every menu item on every open is far too heavy.
+            if let file = e.existingFile,
+               let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+               let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
+                   kCGImageSourceCreateThumbnailFromImageAlways: true,
+                   kCGImageSourceThumbnailMaxPixelSize: 64,
+               ] as CFDictionary) {
+                // fit inside a 32 pt box so a thin, wide Capture can't widen the menu
+                let scale = 32 / CGFloat(max(cg.width, cg.height, 1))
+                it.image = NSImage(cgImage: cg,
+                                   size: NSSize(width: CGFloat(cg.width) * scale, height: CGFloat(cg.height) * scale))
+            }
+            it.isEnabled = e.existingFile != nil || e.link != nil
+            menu.addItem(it)
+        }
+    }
+    @objc func recentItem(_ s: NSMenuItem) {
+        guard let raw = s.representedObject as? String,
+              let e = try? history?.recent(limit: 10).first(where: { $0.id.uuidString == raw }) else { return }
+        if let file = e.existingFile {
+            NSWorkspace.shared.activateFileViewerSelecting([file])
+        } else if let link = e.link {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(link, forType: .string)
         }
     }
 
@@ -643,6 +726,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             ?? WadjetConfig().workflows.first { $0.takes == .screenshot }!
         let defaultFolder = expandingTilde(AppState.shared.config.value.folders.screenshots)
         let runID = UUID()
+        let capturedAt = Date()
         AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
         Task { @MainActor in
             for await e in runner.run(file, through: wf, defaultFolder: defaultFolder, id: runID) {
@@ -652,6 +736,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 case .failed(let i, _, let m): AppLog.line("workflow \(wf.name): failed \(i) \(m)")
                 case .done(let saved, let errors):
                     AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)")
+                    let entry: HistoryEntry?
+                    do {
+                        entry = try self.history?.record(
+                            kind: .screenshot, createdAt: capturedAt,
+                            file: saved.last ?? file, errors: errors)
+                    } catch {
+                        AppLog.line("history: record failed: \(error.localizedDescription)")
+                        entry = nil
+                    }
+                    if let entry {
+                        // only Sendable values cross into the detached task
+                        let store = self.history, entryID = entry.id, target = saved.last ?? file
+                        Task.detached {
+                            do {
+                                let text = try await recognizeText(in: target)
+                                try await store?.setOCR(text, for: entryID)
+                            } catch {
+                                await AppLog.line("ocr failed: \(error.localizedDescription)")
+                            }
+                        }
+                    }
                     for t in toastCtrl.runToasts[runID] ?? [] {
                         t.title = saved.isEmpty ? "Captured" : "Saved"
                         t.err = errors.isEmpty ? nil : errors.joined(separator: "\n")
