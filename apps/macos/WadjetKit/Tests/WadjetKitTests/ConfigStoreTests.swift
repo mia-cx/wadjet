@@ -144,5 +144,11 @@ struct ConfigStoreTests {
         #expect(!file.contains("hunter2"))
         let parsed = try JSONSerialization.jsonObject(with: Data(file.utf8)) as? [String: Any]
         #expect(parsed?["token"] as? [String: String] == ["keychain": account])
+        // clearing the optional must remove it, not resurrect the raw key
+        store.update { $0.token = nil }
+        let cleared = try String(contentsOf: url, encoding: .utf8)
+        #expect(!cleared.contains("hunter2") && !cleared.contains("\"token\""))
+        let reloaded = ConfigStore(file: url, defaults: Vault(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        #expect(reloaded.value.token == nil)
     }
 }

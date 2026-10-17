@@ -114,6 +114,9 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
     /// The file's JSON object from the last successful load; our writes merge
     /// the modelled value over it so unknown keys survive.
     private var raw: Any?
+    /// Top-level keys the model can produce — a modeled key absent from our
+    /// encoding was deliberately cleared, not an unknown key to preserve.
+    private var modelledKeys: Set<String> = []
     private var dirSource: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
     private var pendingReload: DispatchWorkItem?
@@ -170,6 +173,8 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
             let v = try decoder.decode(Config.self, from: merged)
             if v != value { value = v }
             raw = parsed
+            modelledKeys = Set((base as? [String: Any])?.keys.map { $0 } ?? [])
+                .union(Set(((try? JSONSerialization.jsonObject(with: encoder.encode(v))) as? [String: Any])?.keys.map { $0 } ?? []))
             broken = false
             // a file missing newer keys gains them (and takes canonical form)
             if normalize, let enc = try? encoded(value), enc != data { write() }
@@ -219,7 +224,11 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
         var data: Data
         if let rawObj = raw as? [String: Any],
            let ours = try? JSONSerialization.jsonObject(with: encoder.encode(v)) as? [String: Any] {
-            data = try JSONSerialization.data(withJSONObject: merge(rawObj, over: ours),
+            modelledKeys.formUnion(ours.keys)
+            var m = merge(rawObj, over: ours) as? [String: Any] ?? [:]
+            // a modeled key our encoding omits was cleared — don't resurrect it
+            for k in modelledKeys where ours[k] == nil { m.removeValue(forKey: k) }
+            data = try JSONSerialization.data(withJSONObject: m,
                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         } else {
             data = try encoder.encode(v)
