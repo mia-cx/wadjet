@@ -1306,6 +1306,13 @@ final class OverlayController {
         guard let fr = ToolbarBtnFrames.rects[di]?[t], let p = toolbarPanels[di], let cv = p.contentView else { return nil }
         return p.convertToScreen(cv.convert(fr, to: nil))
     }
+    /// a rect in a toolbar panel's content-view coords, in screen coords —
+    /// SwiftUI's named "panel" space is the content view's, flipped
+    func panelScreenRect(_ r: CGRect, on di: Int) -> CGRect? {
+        guard let p = toolbarPanels[di], let cv = p.contentView else { return nil }
+        let flipped = CGRect(x: r.minX, y: cv.bounds.height - r.maxY, width: r.width, height: r.height)
+        return p.convertToScreen(cv.convert(flipped, to: nil))
+    }
 
     func syncMenu() {
         if let t = AppState.shared.openMenu { TipPanel.hide(); showMenu(t) } else { hideMenu() }
@@ -2068,9 +2075,11 @@ struct ToolbarView: View {
     // and an expand chevron (or the recording dot and time) in ears either side
     // of the notch, so the toolbar is visible while collapsed.
     var earW: CGFloat { recording ? 48 : 28 }
-    var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (recording ? 120 : 100) }
+    // A fake island sizes like the notched one: the notch-width formula with
+    // a 185 pt stand-in notch on displays that don't have one.
+    var islandW: CGFloat { (hasNotch ? max(126, notchW) : 185) + 2 * earW }
     var islandH: CGFloat { max(22, barH) }
-    var gap: CGFloat { hasNotch ? 0 : 3 }
+    var gap: CGFloat { hasNotch ? 0 : 2 }
     var pillH: CGFloat { islandH - 2 * gap }
     // expanded toolbar: 9 big circular glass buttons in three groups. The shape
     // is sized from the *measured* row — never a hand-coded width — so the
@@ -2079,14 +2088,16 @@ struct ToolbarView: View {
     // The row sits rowGap below the menu bar on every display. Notched display:
     // the shape hangs from the top edge and its top band holds the notch.
     // Island: the expanded shape drops below the menu bar, covering none of it.
-    var rowInset: CGFloat { 10 }
+    /// The concentric rule: one gap `d` between the rest capsule and every
+    /// shape edge, so outer corners (radius selH/2 + d) are concentric with
+    /// the capsule's end caps.
+    var d: CGFloat { 10 }
     var rowGap: CGFloat { 6 }
     var shapeTop: CGFloat { expanded && !hasNotch ? islandH : gap }
-    var contentTop: CGFloat { (hasNotch ? islandH : 0) + rowGap }
-    var recExpandedW: CGFloat { 260 }
-    var expW: CGFloat { min(limit, rowSize.width + 2 * rowInset) }
-    var expH: CGFloat { contentTop + rowSize.height + rowInset }
-    var shapeW: CGFloat { expanded ? (recording ? recExpandedW : expW) : islandW }
+    var contentTop: CGFloat { hasNotch ? islandH + rowGap : d }
+    var expW: CGFloat { min(limit, recording ? recRowSize.width : rowSize.width) }
+    var expH: CGFloat { contentTop + selH + d }
+    var shapeW: CGFloat { expanded ? expW : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
     var panelW: CGFloat { min(limit, expW) + 48 }
     // menus and tooltips are their own panels
@@ -2164,9 +2175,10 @@ struct ToolbarView: View {
     }
 
     var shape: UnevenRoundedRectangle {
-        // expanded: fully rounded ends (radius = half the shape's height) —
-        // all four corners on the island, bottom two under a notch
-        let bottom: CGFloat = expanded ? shapeH / 2 : (hasNotch ? 13 : pillH / 2)
+        // expanded corners are concentric with the rest capsule's caps;
+        // collapsed corners stay capsule-round (notch reads as 13 because its
+        // top edge is flat against the screen's)
+        let bottom: CGFloat = expanded ? selH / 2 + d : (hasNotch ? 13 : pillH / 2)
         let top: CGFloat = hasNotch ? 0 : bottom
         return UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
                                       bottomTrailingRadius: bottom, topTrailingRadius: top)
@@ -2178,7 +2190,6 @@ struct ToolbarView: View {
             shape.fill(Color.black).opacity(expanded ? 0 : 1).allowsHitTesting(false)
             expandedContent
                 .opacity(expanded ? 1 : 0)
-                .scaleEffect(expanded ? 1 : 0.7, anchor: .top)
                 .frame(width: shapeW, height: shapeH, alignment: .top)
             islandContent
                 .opacity(expanded ? 0 : 1)
@@ -2197,7 +2208,10 @@ struct ToolbarView: View {
     // the rounded end cap (its centre pillH/2 from the edge). Frozen: the
     // current Tool's icon only. Recording: red dot leading, elapsed trailing.
     // island: items sit concentric with the end caps; notch: centred in the ears
-    var islandSlot: CGFloat { hasNotch ? earW : pillH + 6 }
+    // Non-notch: the leading round item's centre sits pillH/2 from the end —
+    // concentric with the end cap — and the trailing item's edge mirrors the
+    // leading item's edge inset (the 8 pt dot's edge is pillH/2 - 4 in).
+    var islandSlot: CGFloat { hasNotch ? earW : pillH }
     var islandContent: some View {
         HStack(spacing: 0) {
             if recording {
@@ -2205,13 +2219,19 @@ struct ToolbarView: View {
                     .frame(width: islandSlot, height: pillH)
             } else {
                 Image(systemName: (s.tool ?? .capRegion).symbol)
-                    .font(.system(size: min(pillH * 0.45, islandSlot - 14)))
+                    .resizable().scaledToFit()
+                    .frame(width: min(pillH * 0.45, pillH - 14), height: min(pillH * 0.45, pillH - 14))
                     .frame(width: islandSlot, height: pillH)
+                    .matchedGeometryEffect(id: "selectedIcon", in: ns, isSource: !expanded)
             }
             Spacer(minLength: 0)
             if recording {
+                // the time must never touch the cap: measure it and inset its
+                // edge exactly like the leading dot's edge
                 Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
-                    .frame(width: islandSlot, height: pillH)
+                    .fixedSize()
+                    .padding(.trailing, hasNotch ? (earW - 30) / 2 : pillH / 2 - 4)
+                    .frame(height: pillH)
             }
         }
         .foregroundStyle(.white)
@@ -2222,15 +2242,48 @@ struct ToolbarView: View {
         if recording { recControls } else { toolRow }
     }
 
+    @State var recRowSize = CGSize(width: 220, height: 64)
     var recControls: some View {
-        HStack(spacing: 12) {
-            Circle().fill(.red).frame(width: 8, height: 8)
-            Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
-            Button(s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
-            Button("Stop") { AppDelegate.shared?.stopRecording() }
+        // leading: the same red dot + time as the island; trailing: pause and
+        // stop as glass circles, all centred in the selH-tall row
+        HStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text(fmtT(s.recordingElapsed)).font(.system(size: 14)).monospacedDigit().fixedSize()
+            }
+            Spacer(minLength: 0)
+            recButton(s.recordingPaused ? "play.fill" : "pause.fill",
+                      label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
+            recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
         }
-        .font(.system(size: 12))
+        .foregroundStyle(.white)
+        // the outer circles' edges sit so their centres meet the corner
+        // centres (radius selH/2 + d) — concentric, like the tool capsule
+        .padding(.horizontal, selH / 2 + d - 24)
+        .frame(height: selH)
         .padding(.top, contentTop)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
+    }
+
+    // one recording control: a glass circle, TipPanel tooltip on hover
+    func recButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 18))
+                .frame(width: 48, height: 48)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
+            switch phase {
+            case .active(let p):
+                let rect = CGRect(x: p.x - 24, y: p.y - 24, width: 48, height: 48)
+                TipPanel.hover(label, anchor: ctrl.panelScreenRect(rect, on: displayIndex) ?? .zero)
+            case .ended:
+                TipPanel.hide()
+            }
+        }
     }
 
     let toolD: CGFloat = 72
@@ -2264,7 +2317,7 @@ struct ToolbarView: View {
     // the icon strip once, for the accent-tint mask — same layout as the row
     func iconCell(_ t: Tool) -> some View {
         Image(systemName: t.symbol).font(.system(size: 22))
-            .frame(width: toolD, height: toolD)
+            .frame(width: toolD, height: selH)
     }
 
     var selShape: some View {
@@ -2285,9 +2338,13 @@ struct ToolbarView: View {
     func cell(_ t: Tool) -> some View {
         let selected = s.tool == t
         let c = cellCentres[t] ?? .zero
-        return Image(systemName: t.symbol).font(.system(size: 22))
+        return Image(systemName: t.symbol).resizable().scaledToFit()
+            .frame(width: 26, height: 26)
+            // the selected cell's icon and the island's icon are one element:
+            // it travels into the bar (and back) as the shape morphs
+            .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
             .foregroundStyle(.white)
-            .frame(width: toolD, height: toolD)
+            .frame(width: toolD, height: selH)
             .contentShape(Rectangle()) // whole cell, not just the glyph
             .mask {
                 ZStack {
@@ -2316,8 +2373,8 @@ struct ToolbarView: View {
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
-                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + toolD / 2)
-                if !lensActive, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + toolD / 2 }
+                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
+                if !lensActive, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + selH / 2 }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = $0
@@ -2335,8 +2392,9 @@ struct ToolbarView: View {
             Spacer().frame(width: 8)
             ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: cell)
         }
-        // 20 pt horizontal inset so the lens can't poke through the rounded ends
-        .padding(.horizontal, 20).padding(.vertical, 10)
+        // horizontal inset d + the capsule's overhang, so the rest capsule's
+        // end caps sit exactly d inside the shape's rounded ends
+        .padding(.horizontal, d + (selW - toolD) / 2)
         .coordinateSpace(name: "row")
         .background {
             // rest: subtle translucent highlight (no glass)
@@ -2355,7 +2413,7 @@ struct ToolbarView: View {
                     Spacer().frame(width: 8)
                     ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
                 }
-                .padding(.horizontal, 20).padding(.vertical, 10)
+                .padding(.horizontal, d + (selW - toolD) / 2)
                 // magnified about the lens centre, so only what's inside the lens looks bigger
                 .scaleEffect(lensActive ? lensZoom : 1, anchor: rowSize.width > 0
                              ? UnitPoint(x: blobX / rowSize.width, y: blobY / rowSize.height) : .center)
@@ -2473,12 +2531,25 @@ enum TipPanel {
         task = Task { @MainActor in
             try? await Task.sleep(for: .milliseconds(500))
             guard !Task.isCancelled, AppState.shared.openMenu == nil else { return }
-            show(t, anchor: a)
+            show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: anchor)
+        }
+    }
+    /// Same tip for things that aren't a Tool cell (the recording controls).
+    static func hover(_ label: String, anchor: CGRect) {
+        tool = nil
+        task?.cancel()
+        let a = anchor
+        task = Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, AppState.shared.openMenu == nil else { return }
+            show(label, anchor: a)
         }
     }
     static func show(_ t: Tool, anchor: CGRect) {
+        show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: anchor)
+    }
+    static func show(_ label: String, anchor: CGRect) {
         panel?.close()
-        let label = t.title + (t.shortcutHint.map { "  " + $0 } ?? "")
         let h = NSHostingView(rootView: Text(label).font(.system(size: 11)).foregroundStyle(.white)
             .padding(.horizontal, 9).padding(.vertical, 4)
             .background(Color.black.opacity(0.85), in: .rect(cornerRadius: 6)))
