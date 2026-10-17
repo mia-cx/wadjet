@@ -150,15 +150,11 @@ export const createLibrary = (deps: LibraryDeps) => {
     async delete(owner: string, id: string): Promise<void> {
       const row = await deps.files.get(id)
       if (!row || row.owner !== owner) throw notFound(`No file ${id}.`)
-      // Row first: a failure after it leaves an unreachable blob, never a row that 500s.
+      // Purge first: if it fails the file is untouched, so retrying DELETE retries the purge.
+      await deps.purger.purge([fileUrl(row)]) // #51 adds the thumbnail URL
+      // Row before blob: a failure after it leaves an unreachable blob, never a row that 500s.
       await deps.files.delete(id)
-      // Both run even if one fails: a skipped purge would leave the file cached at the edge.
-      const results = await Promise.allSettled([
-        deps.purger.purge([fileUrl(row)]), // #51 adds the thumbnail URL
-        deps.blobs.delete(row.blobKey),
-      ])
-      const failure = results.find((result) => result.status === 'rejected')
-      if (failure) throw failure.reason
+      await deps.blobs.delete(row.blobKey)
     },
   }
 }

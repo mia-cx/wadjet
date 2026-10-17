@@ -42,11 +42,30 @@ export const appFor = (
 
 let app: ReturnType<typeof appFor> | undefined
 
+/**
+ * Serves file GETs from the zone's edge cache (`caches.default`), so the
+ * `s-maxage` response and the purge-by-URL on delete actually reach the edge —
+ * Workers responses never enter the zone cache by themselves.
+ */
 export default {
-  fetch(request, env) {
+  async fetch(request, env, ctx) {
     // Build lazily per isolate: a ConfigError rejects the request (visible in
     // logs, retryable) instead of being cached at startup.
     app ??= appFor(env)
-    return app.fetch(request)
+    if (request.method !== 'GET') return await app.fetch(request)
+    // The cache key drops the query: it is exactly the URL the purger deletes.
+    const url = new URL(request.url)
+    const key = new URL(url.pathname, url.origin)
+    const matched = await caches.default.match(new Request(key, { headers: request.headers }))
+    if (matched) return matched
+    const response = await app.fetch(request)
+    if (
+      response.status === 200 &&
+      response.headers.get('Cache-Control')?.includes('public') &&
+      !request.headers.has('Range')
+    ) {
+      ctx.waitUntil(caches.default.put(key, response.clone()))
+    }
+    return response
   },
 } satisfies ExportedHandler<Env>
