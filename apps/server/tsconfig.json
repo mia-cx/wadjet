@@ -8,5 +8,11 @@
     "rewriteRelativeImportExtensions": true,
     "erasableSyntaxOnly": true
   },
-  "include": ["src", "drizzle.config.ts"]
+  "include": [
+    "src",
+    "drizzle.config.ts",
+    "drizzle-pg.config.ts",
+    "vitest.config.ts",
+    "vitest.docker.config.ts"
+  ]
 }

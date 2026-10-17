@@ -21,6 +21,36 @@ describe('loadConfig', () => {
       { ...GOOD, WADJET_MAX_REQUEST_BYTES: '-1' },
       'WADJET_MAX_REQUEST_BYTES',
     ],
+    ['unknown WADJET_BLOB_STORE', { ...GOOD, WADJET_BLOB_STORE: 'minio' }, 'WADJET_BLOB_STORE'],
+    [
+      's3 missing WADJET_S3_BUCKET',
+      {
+        ...GOOD,
+        WADJET_BLOB_STORE: 's3',
+        WADJET_S3_ENDPOINT: 'https://s3.example.com',
+        WADJET_S3_ACCESS_KEY_ID: 'id',
+        WADJET_S3_SECRET_ACCESS_KEY: 'secret',
+      },
+      'WADJET_S3_BUCKET',
+    ],
+    [
+      'bad WADJET_S3_FORCE_PATH_STYLE',
+      {
+        ...GOOD,
+        WADJET_BLOB_STORE: 's3',
+        WADJET_S3_ENDPOINT: 'https://s3.example.com',
+        WADJET_S3_BUCKET: 'b',
+        WADJET_S3_ACCESS_KEY_ID: 'id',
+        WADJET_S3_SECRET_ACCESS_KEY: 'secret',
+        WADJET_S3_FORCE_PATH_STYLE: 'yes',
+      },
+      'WADJET_S3_FORCE_PATH_STYLE',
+    ],
+    [
+      'non-postgres WADJET_DATABASE_URL',
+      { ...GOOD, WADJET_DATABASE_URL: 'mysql://db' },
+      'WADJET_DATABASE_URL',
+    ],
   ])('rejects %s', (_name, env, variable) => {
     expect(() => loadConfig(env)).toThrowError(
       expect.objectContaining({ message: expect.stringContaining(variable) }),
@@ -38,6 +68,30 @@ describe('loadConfig', () => {
       maxThumbnailBytes: 262144,
     })
     expect(config.apiKeys.get('a'.repeat(64))).toBe('mia')
+    expect(config.blobStore).toEqual({ kind: 'filesystem' })
+    expect(config.databaseUrl).toBeNull()
+  })
+
+  it('parses a full s3 + postgres env', () => {
+    const config = loadConfig({
+      ...GOOD,
+      WADJET_BLOB_STORE: 's3',
+      WADJET_S3_ENDPOINT: 'https://s3.example.com',
+      WADJET_S3_BUCKET: 'wadjet',
+      WADJET_S3_ACCESS_KEY_ID: 'id',
+      WADJET_S3_SECRET_ACCESS_KEY: 'secret',
+      WADJET_DATABASE_URL: 'postgres://wadjet:pw@db:5432/wadjet',
+    })
+    expect(config.blobStore).toEqual({
+      kind: 's3',
+      endpoint: 'https://s3.example.com',
+      bucket: 'wadjet',
+      region: 'auto',
+      accessKeyId: 'id',
+      secretAccessKey: 'secret',
+      forcePathStyle: false,
+    })
+    expect(config.databaseUrl).toBe('postgres://wadjet:pw@db:5432/wadjet')
   })
 
   it('stops boot on a bad env', () => {

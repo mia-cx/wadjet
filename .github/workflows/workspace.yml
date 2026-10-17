@@ -12,6 +12,7 @@ on:
       - 'turbo.json'
       - 'biome.json'
       - 'tsconfig.base.json'
+      - '.dockerignore'
       - '.github/workflows/workspace.yml'
   push:
     branches: [main]
@@ -25,6 +26,7 @@ on:
       - 'turbo.json'
       - 'biome.json'
       - 'tsconfig.base.json'
+      - '.dockerignore'
       - '.github/workflows/workspace.yml'
   workflow_dispatch:
 
@@ -66,3 +68,106 @@ jobs:
 
       - name: Test
         run: pnpm test
+
+  docker:
+    name: Server Docker image
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    services:
+      postgres:
+        image: postgres:18.6-bookworm
+        env:
+          POSTGRES_USER: wadjet
+          POSTGRES_PASSWORD: wadjet
+          POSTGRES_DB: wadjet
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U wadjet -d wadjet"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    env:
+      S3_ENDPOINT: http://127.0.0.1:9000
+      S3_ACCESS_KEY_ID: minioadmin
+      S3_SECRET_ACCESS_KEY: minioadmin
+      DATABASE_URL: postgres://wadjet:wadjet@127.0.0.1:5432/wadjet
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+
+      - name: Start MinIO
+        # MinIO's official images are gone (Docker Hub repo deleted, quay.io
+        # private), so CI builds the last release from the official source —
+        # pinned to the RELEASE.2025-10-15T17-29-55Z tag commit.
+        run: |
+          go install github.com/minio/minio@9e49d5e7a648f00e26f2246f4dc28e6b07f8c84a
+          mkdir -p /tmp/minio-data
+          MINIO_ROOT_USER="$S3_ACCESS_KEY_ID" MINIO_ROOT_PASSWORD="$S3_SECRET_ACCESS_KEY" \
+            nohup "$HOME/go/bin/minio" server /tmp/minio-data >/tmp/minio.log 2>&1 &
+          for i in $(seq 1 60); do
+            curl -fsS "$S3_ENDPOINT/minio/health/live" && exit 0
+            sleep 1
+          done
+          echo "MinIO never became live" >&2
+          cat /tmp/minio.log
+          exit 1
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build
+        run: pnpm build
+
+      - name: Test against Postgres and MinIO
+        working-directory: apps/server
+        env:
+          WADJET_TEST_DATABASE_URL: ${{ env.DATABASE_URL }}
+          WADJET_TEST_S3_ENDPOINT: ${{ env.S3_ENDPOINT }}
+          WADJET_TEST_S3_ACCESS_KEY_ID: ${{ env.S3_ACCESS_KEY_ID }}
+          WADJET_TEST_S3_SECRET_ACCESS_KEY: ${{ env.S3_SECRET_ACCESS_KEY }}
+        run: pnpm test:docker
+
+      - name: Build image
+        run: docker build -f apps/server/Dockerfile -t wadjet-server:ci .
+
+      - name: Create smoke-test bucket
+        working-directory: apps/server
+        run: |
+          node --input-type=module -e "
+            const { AwsClient } = await import('aws4fetch')
+            const aws = new AwsClient({
+              service: 's3', region: 'us-east-1',
+              accessKeyId: process.env.S3_ACCESS_KEY_ID,
+              secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+            })
+            const res = await aws.fetch(process.env.S3_ENDPOINT + '/wadjet-smoke', { method: 'PUT' })
+            if (!res.ok && res.status !== 409) throw new Error('bucket create: HTTP ' + res.status)
+          "
+
+      - name: Smoke test, filesystem and SQLite
+        run: apps/server/docker-smoke.sh wadjet-server:ci http://127.0.0.1:18787 -p 127.0.0.1:18787:8787
+
+      - name: Smoke test, S3 and Postgres
+        run: >
+          apps/server/docker-smoke.sh wadjet-server:ci http://127.0.0.1:8787
+          --network host
+          -e WADJET_BLOB_STORE=s3
+          -e WADJET_S3_ENDPOINT=$S3_ENDPOINT
+          -e WADJET_S3_BUCKET=wadjet-smoke
+          -e WADJET_S3_REGION=us-east-1
+          -e WADJET_S3_ACCESS_KEY_ID=$S3_ACCESS_KEY_ID
+          -e WADJET_S3_SECRET_ACCESS_KEY=$S3_SECRET_ACCESS_KEY
+          -e WADJET_S3_FORCE_PATH_STYLE=true
+          -e WADJET_DATABASE_URL=$DATABASE_URL

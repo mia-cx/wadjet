@@ -33,9 +33,74 @@ Data lands under `apps/server/data/` (SQLite plus blobs). `pnpm start` runs the 
 | `WADJET_PART_BYTES` | no | `67108864` | Multipart part size (multipart arrives in #51). |
 | `WADJET_MAX_FILE_BYTES` | no | unset (no cap) | File size cap. |
 | `WADJET_MAX_THUMBNAIL_BYTES` | no | `262144` | Thumbnail cap (thumbnails arrive in #51). |
+| `WADJET_BLOB_STORE` | no | `filesystem` | Blob backend: `filesystem` or `s3`. |
+| `WADJET_S3_ENDPOINT` | with `s3` | — | S3 endpoint URL, such as `https://s3.eu-west-1.amazonaws.com`. |
+| `WADJET_S3_BUCKET` | with `s3` | — | Bucket name. |
+| `WADJET_S3_REGION` | no | `auto` | Signing region; use a real region for AWS. |
+| `WADJET_S3_ACCESS_KEY_ID` | with `s3` | — | Access key. |
+| `WADJET_S3_SECRET_ACCESS_KEY` | with `s3` | — | Secret key. |
+| `WADJET_S3_FORCE_PATH_STYLE` | no | `false` | `true` for path-style URLs, needed by MinIO and most S3 clones. |
+| `WADJET_DATABASE_URL` | no | unset | `postgres://…` file index; unset keeps SQLite under `WADJET_DATA_DIR`. |
 
 Only key hashes are stored. Hash a key before putting it in `WADJET_API_KEYS`:
 
 ```sh
 printf %s "$KEY" | shasum -a 256
+```
+
+## Docker
+
+Build from the repo root:
+
+```sh
+docker build -f apps/server/Dockerfile -t wadjet-server .
+```
+
+Run with the filesystem blob store and SQLite, keeping data on a volume:
+
+```sh
+docker run -d -p 8787:8787 -v wadjet:/data \
+  -e WADJET_BASE_URL=http://localhost:8787 \
+  -e 'WADJET_API_KEYS={"<sha256-of-your-key>": "you"}' \
+  wadjet-server
+```
+
+Or with S3 for blobs and Postgres for the index (set `WADJET_S3_FORCE_PATH_STYLE=true` for MinIO):
+
+```sh
+docker run -d -p 8787:8787 \
+  -e WADJET_BASE_URL=http://localhost:8787 \
+  -e 'WADJET_API_KEYS={"<sha256-of-your-key>": "you"}' \
+  -e WADJET_BLOB_STORE=s3 \
+  -e WADJET_S3_ENDPOINT=https://s3.example.com \
+  -e WADJET_S3_BUCKET=wadjet \
+  -e WADJET_S3_ACCESS_KEY_ID=… \
+  -e WADJET_S3_SECRET_ACCESS_KEY=… \
+  -e 'WADJET_DATABASE_URL=postgres://wadjet:pw@db:5432/wadjet' \
+  wadjet-server
+```
+
+`apps/server/docker-smoke.sh <image> <base-url> [docker-run args…]` runs a container, waits for the healthcheck, and round-trips an upload.
+
+## Testing against real services
+
+`pnpm test` covers memory, filesystem, and SQLite. The S3 and Postgres contract tests run with:
+
+```sh
+cd apps/server
+WADJET_TEST_DATABASE_URL=postgres://wadjet:wadjet@127.0.0.1:5432/wadjet \
+WADJET_TEST_S3_ENDPOINT=http://127.0.0.1:9000 \
+WADJET_TEST_S3_ACCESS_KEY_ID=minioadmin \
+WADJET_TEST_S3_SECRET_ACCESS_KEY=minioadmin \
+pnpm test:docker
+```
+
+Local Postgres and MinIO for it:
+
+```sh
+docker run -d --name wadjet-pg -p 5432:5432 \
+  -e POSTGRES_USER=wadjet -e POSTGRES_PASSWORD=wadjet -e POSTGRES_DB=wadjet postgres:18.6-bookworm
+docker run -d --name wadjet-minio -p 9000:9000 \
+  -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
+  ghcr.io/netvark/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
 ```
