@@ -1,9 +1,13 @@
 import Foundation
 
 /// What a Workflow consumes: a finished Screenshot file or a finished Recording.
-public enum CaptureKind: String, Codable, Sendable {
+public enum CaptureKind: String, Codable, CaseIterable, Sendable {
     case screenshot, mp4, gif
     public var isRecording: Bool { self != .screenshot }
+    /// Display name for pickers and menus ("Screenshot", "MP4", "GIF").
+    public var title: String {
+        switch self { case .screenshot: "Screenshot"; case .mp4: "MP4"; case .gif: "GIF" }
+    }
 }
 
 /// One action in a Workflow. Steps run in order on the captured file; a Step
@@ -25,6 +29,12 @@ public enum Step: Equatable, Sendable {
         case .pin: return "Pin to screen"
         case .showToast: return "Show toast"
         }
+    }
+
+    /// One instance of every Step valid for a capture kind (for "add Step" menus).
+    public static func allowed(for kind: CaptureKind) -> [Step] {
+        [saveFile(folder: nil), .copyImage, .copyFile, .openIn(app: nil), .pin, .showToast]
+            .filter { kind == .screenshot || $0.worksOnRecordings }
     }
 
     /// Steps that only make sense on a Screenshot get this as their config error.

@@ -39,6 +39,7 @@ enum Tool: String, CaseIterable {
         }
     }
     enum Kind { case shot, rec, util }
+    var toolID: ToolID { ToolID(rawValue: rawValue)! }
     var hasMenu: Bool { self != .copyText }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
 }
@@ -292,9 +293,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     registerShortcuts()
                     rebuildMenu()
                 }
+                resolveBookmarks()
             }
         }
         registerShortcuts()
+        resolveBookmarks()
         AppLog.line("launch; preflight screen capture = \(CGPreflightScreenCaptureAccess()); statusItem frame = \(statusItem.button?.window?.frame.debugDescription ?? "?")")
         buildStateHUD()
         _ = try? FileManager.default.createDirectory(at: Self.capturesDir, withIntermediateDirectories: true)
@@ -351,6 +354,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             rebuildMenu()
         case "stop": if s.phase == .recording { stopRecording() }
         case "pause": if s.phase == .recording { togglePause() }
+        case "settings": openSettings()
         case "esc": handleEsc()
         default: AppLog.line("cmd: unhandled \(cmd)")
         }
@@ -376,8 +380,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if i == 2 || i == 5 { m.addItem(.separator()) }
         }
         m.addItem(.separator())
-        // opens config.json until the Settings window lands in #25
-        let settings = NSMenuItem(title: "Settings…", action: #selector(openConfigFile), keyEquivalent: ",")
+        let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
         m.addItem(settings)
         let proto = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
@@ -409,8 +412,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
-    @objc func openConfigFile() {
-        NSWorkspace.shared.open(AppState.shared.config.file)
+    var settingsWindow: NSWindow?
+    @objc func openSettings() {
+        if settingsWindow == nil {
+            let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
+            w.title = "Wadjet Settings"
+            w.isReleasedWhenClosed = false
+            settingsWindow = w
+        }
+        NSApp.activate(ignoringOtherApps: true)
+        settingsWindow?.makeKeyAndOrderFront(nil)
+        AppLog.line("settings: window opened")
+    }
+
+    // MARK: folder bookmarks
+
+    /// Security-scoped folder grants kept open for the app's life, by the
+    /// config path they came from. Re-resolved on every config change.
+    var grantedFolders: [String: URL] = [:]
+    func resolveBookmarks() {
+        let marks = AppState.shared.config.value.bookmarks
+        for (path, url) in grantedFolders where marks[path] == nil {
+            url.stopAccessingSecurityScopedResource()
+            grantedFolders.removeValue(forKey: path)
+        }
+        for (path, data) in marks where grantedFolders[path] == nil {
+            var stale = false
+            guard let url = try? URL(resolvingBookmarkData: data, options: .withSecurityScope,
+                                     bookmarkDataIsStale: &stale) else {
+                AppLog.line("bookmark \(path): resolve failed")
+                continue
+            }
+            if stale, let fresh = try? url.bookmarkData(options: .withSecurityScope) {
+                AppState.shared.config.update { $0.bookmarks[path] = fresh } // will re-enter here next loop
+            }
+            if url.startAccessingSecurityScopedResource() {
+                grantedFolders[path] = url
+                AppLog.line("bookmark \(path): granted")
+                // a moved folder resolves at its new location; the grant holds,
+                // but the config path still points at the dead one — saves
+                // there fail with their own toast error until re-picked
+                if url.path != expandingTilde(path).path {
+                    AppLog.line("bookmark \(path): folder moved to \(url.path); choose it again in Settings")
+                }
+            } else {
+                AppLog.line("bookmark \(path): access denied")
+            }
+        }
     }
 
     // MARK: Shortcuts
