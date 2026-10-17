@@ -170,8 +170,7 @@ export const createApp = (deps: AppDeps): Hono<Env> => {
   })
 
   app.post('/d/:token', async (c) => {
-    const row = await lookupLink(c.req.param('token'))
-    await library.deleteByToken(c.req.param('token'))
+    const row = await library.deleteByToken(c.req.param('token'))
     c.header('Content-Type', 'text/html; charset=utf-8')
     for (const [k, v] of Object.entries(PAGE_SECURITY_HEADERS)) c.header(k, v)
     return c.body(deletedPage(row.filename, host), 200)
