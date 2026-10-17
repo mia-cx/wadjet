@@ -271,6 +271,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var recStream: SCStream?
     var recWriter: MP4Writer?
     var recOutput: RecOutput?
+    /// Bumped per Recording attempt, so a cancelled attempt's late setup can't
+    /// publish into a newer one that has also reached `.countdown`.
+    var recAttempt = 0
     let recDelegate = RecDelegate()
     /// The stream's frame queue — SCStream calls back here, the actor serializes writes.
     let recQueue = DispatchQueue(label: "wadjet.recstream")
@@ -885,10 +888,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // .countdown holds until beginStream lands .recording or .desktop —
         // setup can await, and a Shortcut press meanwhile must not trigger.
         s.phase = .countdown
+        recAttempt += 1
+        let attempt = recAttempt
         let n = s.countdown == "Off" ? 0 : Int(s.countdown) ?? 0
         let begin = {
             _ = Task { @MainActor in
-                await self.beginStream()
+                await self.beginStream(attempt: attempt)
             }
         }
         if n > 0 {
@@ -898,7 +903,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             Task { @MainActor in
                 for i in stride(from: n - 1, through: 0, by: -1) {
                     try? await Task.sleep(for: .seconds(1))
-                    guard s.phase == .countdown else { CountdownHUD.hide(); return }
+                    guard s.phase == .countdown, attempt == self.recAttempt else { CountdownHUD.hide(); return }
                     CountdownHUD.show(i)
                 }
                 CountdownHUD.hide()
@@ -947,14 +952,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// and an Esc cancel lands us back on .desktop, which the guards catch.
     /// A failure (no Screen Recording permission, a gone window) closes the
     /// chrome, lands back on the desktop, and toasts the reason.
-    func beginStream() async {
+    func beginStream(attempt: Int) async {
         let s = AppState.shared
         let cfg = AppState.shared.config.value
-        guard s.phase == .countdown,
+        let live = { s.phase == .countdown && attempt == self.recAttempt }
+        guard live(),
               let (filter, sourcePixels, sourceRect) = await recordSource(display: recordingDisplay),
-              s.phase == .countdown, // an Esc could have cancelled mid-setup
+              live(), // an Esc could have cancelled mid-setup
               let file = try? captureFiles.newFile(ext: "mp4") else {
-            guard s.phase == .countdown else { return } // cancelled: nothing to report
+            guard live() else { return } // cancelled: nothing to report
             AppLog.line("record: could not resolve the source or name the file")
             s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
             errorToast("Couldn't record", "No capture source — Screen Recording permission may be off.")
@@ -976,8 +982,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let output = RecOutput(writer: writer)
             try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: recQueue)
             try await stream.startCapture()
-            // An Esc during startup cancelled this; don't start recording.
-            guard s.phase == .countdown else {
+            // An Esc during startup cancelled this attempt; don't start recording.
+            guard live() else {
                 try? await stream.stopCapture()
                 writer.cancel()
                 return
