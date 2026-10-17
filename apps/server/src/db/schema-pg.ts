@@ -11,7 +11,7 @@ import {
 
 /**
  * Text that Postgres orders bytewise, like SQLite and the memory index do.
- * The default collation orders 'Z' before 'a'; base62 ids need code-point order.
+ * Postgres' default collation orders 'a' before 'Z'; base62 ids need code-point order.
  */
 const collatedText = customType<{ data: string }>({
   dataType: () => 'text COLLATE "C"',

@@ -102,5 +102,5 @@ docker run -d --name wadjet-pg -p 5432:5432 \
   -e POSTGRES_USER=wadjet -e POSTGRES_PASSWORD=wadjet -e POSTGRES_DB=wadjet postgres:18.6-bookworm
 docker run -d --name wadjet-minio -p 9000:9000 \
   -e MINIO_ROOT_USER=minioadmin -e MINIO_ROOT_PASSWORD=minioadmin \
-  ghcr.io/netvark/minio:RELEASE.2025-09-07T16-13-09Z server /data
+  ghcr.io/netvark/minio:RELEASE.2025-09-07T16-13-09Z@sha256:14cea493d9a34af32f524e538b8346cf79f3321eff8e708c1e2960462bd8936e server /data
 ```
