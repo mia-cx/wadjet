@@ -130,6 +130,24 @@ struct ConfigStoreTests {
         #expect(obj?["future"] != nil) // our own writes keep it too
     }
 
+    // clearing a nested optional inside a modelled section stays cleared
+    @Test func clearedNestedOptionalStaysGone() throws {
+        struct Cfg: Codable, Equatable, Sendable {
+            var tools = Tools()
+            struct Tools: Codable, Equatable, Sendable { var token: String? = nil }
+        }
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"tools":{"token":"abc"},"future":7}"#.utf8).write(to: url)
+        let store = ConfigStore(file: url, defaults: Cfg(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        store.update { $0.tools.token = nil }
+        let text = try String(contentsOf: url, encoding: .utf8)
+        #expect(!text.contains("abc") && !text.contains("\"token\""))
+        #expect(text.contains("future")) // unknown top-level keys still kept
+        let reloaded = ConfigStore(file: url, defaults: Cfg(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        #expect(reloaded.value.tools.token == nil)
+    }
+
     @Test func plaintextSecretLeavesForTheKeychain() throws {
         struct Vault: Codable, Equatable, Sendable { var token: Secret? = nil }
         let url = tempFile()

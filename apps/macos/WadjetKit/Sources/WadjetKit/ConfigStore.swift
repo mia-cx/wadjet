@@ -97,8 +97,9 @@ public struct ConfigError: Error, Equatable, Sendable, CustomStringConvertible {
 /// A JSON file on disk as a live, observable value. Loads synchronously, merges
 /// the file over the defaults so missing keys keep working, watches the file for
 /// edits (both atomic-replace and in-place writes), and never overwrites a file
-/// that currently doesn't parse. Keys this version doesn't model are kept on
-/// every write, so a newer app's settings or a hand-added key never vanish.
+/// that currently doesn't parse. Top-level keys this version doesn't model
+/// are kept on every write, so a newer app's settings or a hand-added key
+/// never vanish (unknown keys nested inside a modelled section are dropped).
 @MainActor @Observable
 public final class ConfigStore<Config: Codable & Equatable & Sendable> {
     public private(set) var value: Config
@@ -111,11 +112,11 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
     private var broken = false
     /// Bytes last read or written, so our own writes and repeat events are no-ops.
     private var lastData: Data?
-    /// The file's JSON object from the last successful load; our writes merge
-    /// the modelled value over it so unknown keys survive.
+    /// The file's JSON object from the last successful load; our writes keep
+    /// its unknown top-level keys and write modelled sections wholesale.
     private var raw: Any?
-    /// Top-level keys the model can produce — a modeled key absent from our
-    /// encoding was deliberately cleared, not an unknown key to preserve.
+    /// Top-level keys the model produces (defaults ∪ every encoded value) —
+    /// only raw keys outside this set survive a write.
     private var modelledKeys: Set<String> = []
     private var dirSource: DispatchSourceFileSystemObject?
     private var fileSource: DispatchSourceFileSystemObject?
@@ -218,16 +219,16 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
         return e
     }
 
-    /// The file bytes for `v`: the modelled value merged over the file's last
-    /// known JSON object, so unknown keys survive every write.
+    /// The file bytes for `v`: our value plus the file's unknown top-level
+    /// keys; modelled sections are written wholesale from our value.
     private func encoded(_ v: Config) throws -> Data {
         var data: Data
         if let rawObj = raw as? [String: Any],
            let ours = try? JSONSerialization.jsonObject(with: encoder.encode(v)) as? [String: Any] {
             modelledKeys.formUnion(ours.keys)
-            var m = merge(rawObj, over: ours) as? [String: Any] ?? [:]
-            // a modeled key our encoding omits was cleared — don't resurrect it
-            for k in modelledKeys where ours[k] == nil { m.removeValue(forKey: k) }
+            // shallow preserve: unknown top-level keys survive; modelled
+            // sections (and any cleared keys inside them) come from our value
+            let m = rawObj.filter { !modelledKeys.contains($0.key) }.merging(ours) { $1 }
             data = try JSONSerialization.data(withJSONObject: m,
                                               options: [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes])
         } else {
