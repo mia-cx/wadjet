@@ -44,9 +44,9 @@ export const appFor = (
     blobs,
     files: d1FileIndex(env.DB),
     uploads: d1UploadIndex(env.DB),
-    // No purger on the Worker: a Worker's Cache API entries use a custom cache
-    // key that zone purge-by-URL can never reach, so purge only exists where
-    // ordinary zone caching does — the Node/Docker server behind the zone.
+    // No purger on the Worker: its responses never enter the zone cache, so
+    // there is nothing to purge. Purge exists where ordinary zone caching
+    // does — the Node/Docker server behind a proxied zone.
     purger: noopPurger,
     clock: () => new Date(),
     ids: randomId,
