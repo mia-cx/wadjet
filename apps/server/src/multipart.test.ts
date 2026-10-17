@@ -132,6 +132,102 @@ describe('multipart sessions', () => {
     }
   })
 
+  it('a superseded completer is fenced after a takeover', async () => {
+    const blobs = memoryBlobStore()
+    let release!: () => void
+    const gate = new Promise<void>((resolve) => (release = resolve))
+    const inner = blobs.completeMultipart.bind(blobs)
+    let calls = 0
+    blobs.completeMultipart = async (key, uploadId, parts) => {
+      if (++calls === 1) await gate
+      return inner(key, uploadId, parts)
+    }
+    let now = new Date('2026-10-16T12:00:00Z')
+    const { app } = testApp({ blobs, clock: () => now })
+
+    const started = await startUpload(app, 3)
+    const { id } = (await started.json()) as { id: string }
+    await putPart(app, id, 1, new Uint8Array([1, 2, 3]))
+
+    // A claims the lease and stalls inside completeMultipart.
+    const first = complete(app, id)
+    for (let i = 0; i < 100 && calls === 0; i++) await new Promise((r) => setTimeout(r, 5))
+    expect((await complete(app, id)).status).toBe(409) // lease held
+
+    // 16 minutes later the lease is stale; B takes over and completes.
+    now = new Date(now.getTime() + 16 * 60_000)
+    const second = await complete(app, id)
+    expect(second.status).toBe(201)
+    const deleted = await app.request(`/v1/files/${id}`, { method: 'DELETE', headers: AUTH })
+    expect(deleted.status).toBe(204)
+
+    // A wakes to find it owns nothing: no insert, no republish, just a 409.
+    release()
+    expect((await first).status).toBe(409)
+    expect((await app.request(`/v1/files/${id}`, { headers: AUTH })).status).toBe(404)
+  })
+
+  it('a completing session past expiresAt and its lease expires', async () => {
+    const blobs = memoryBlobStore()
+    let aborted = 0
+    const inner = blobs.abortMultipart.bind(blobs)
+    blobs.abortMultipart = async (key, uploadId) => {
+      aborted++
+      return inner(key, uploadId)
+    }
+    // completeMultipart fails: the row stays 'completing' with a held lease.
+    const innerC = blobs.completeMultipart.bind(blobs)
+    const fail = true
+    blobs.completeMultipart = async (key, uploadId, parts) => {
+      if (fail) throw new Error('injected storage failure')
+      return innerC(key, uploadId, parts)
+    }
+    let now = new Date('2026-10-16T12:00:00Z')
+    const { app } = testApp({ blobs, clock: () => now })
+
+    const started = await startUpload(app, 3)
+    const { id } = (await started.json()) as { id: string }
+    await putPart(app, id, 1, new Uint8Array([1, 2, 3]))
+    expect((await complete(app, id)).status).toBe(500)
+
+    // 48 h later: past both the 24 h TTL and the 15 min lease — the session
+    // expires, aborting its storage parts, and every call answers 410.
+    now = new Date(now.getTime() + 48 * 3_600_000)
+    const status = await app.request(`/v1/uploads/${id}`, { headers: AUTH })
+    expect(status.status).toBe(410)
+    expect(aborted).toBe(1)
+    expect((await complete(app, id)).status).toBe(410)
+  })
+
+  it('the lazy sweep also expires a completing session whose lease lapsed', async () => {
+    const uploads = memoryUploadIndex()
+    const blobs = memoryBlobStore()
+    let aborted = 0
+    const inner = blobs.abortMultipart.bind(blobs)
+    blobs.abortMultipart = async (key, uploadId) => {
+      aborted++
+      return inner(key, uploadId)
+    }
+    const { app } = testApp({ uploads, blobs })
+
+    // Seed a session that died mid-complete and is now past its TTL + lease.
+    const started = await startUpload(app, 3)
+    const { id } = (await started.json()) as { id: string }
+    const original = (await uploads.get(id))!
+    await uploads.delete(id)
+    await uploads.insert({
+      ...original,
+      state: 'completing',
+      expiresAt: new Date(Date.parse('2026-10-16T11:00:00Z')),
+      completingUntil: new Date(Date.parse('2026-10-16T11:05:00Z')),
+    })
+
+    // The next start sweeps it: storage parts aborted, row marked expired.
+    await startUpload(app, 3)
+    expect(aborted).toBe(1)
+    expect((await uploads.get(id))?.state).toBe('expired')
+  })
+
   it("a crashed completer's stale lease is taken over", async () => {
     const uploads = memoryUploadIndex()
     const blobs = memoryBlobStore()
@@ -199,7 +295,7 @@ describe('multipart sessions', () => {
     expect(first.status).toBe(500) // file row exists; only the session update failed
     // Its lease still holds: an immediate retry 409s until it lapses.
     expect((await complete(app, id)).status).toBe(409)
-    now = new Date(now.getTime() + 6 * 60_000) // past the 5 min lease
+    now = new Date(now.getTime() + 16 * 60_000) // past the 15 min lease
 
     const retry = await complete(app, id)
     expect(retry.status).toBe(200)
@@ -301,7 +397,7 @@ describe('thumbnails', () => {
   it('replacing bumps the version, purges the old URL, and frees the old blob', async () => {
     const { purged, purger } = trackingPurger()
     const blobs = memoryBlobStore()
-    const { app } = testApp({ purger, blobs })
+    const { app, files } = testApp({ purger, blobs })
 
     const uploaded = await upload(app, { body: new Uint8Array([1, 2, 3]) })
     const { id } = (await uploaded.json()) as { id: string }
@@ -312,13 +408,15 @@ describe('thumbnails', () => {
       `https://w.mia.cx/t/${id}?v=1`,
     )
 
+    const v1Key = (await files.get(id))!.thumbnailBlobKey!
+
     const second = await putThumbnail(app, id, new Uint8Array([8, 8, 8]), 'image/png')
     expect(second.status).toBe(200)
     expect(((await second.json()) as { thumbnailUrl: string }).thumbnailUrl).toBe(
       `https://w.mia.cx/t/${id}?v=2`,
     )
     expect(purged).toEqual([[`https://w.mia.cx/t/${id}?v=1`]])
-    expect(await blobs.get(`thumbnails/${id}-v1`)).toBeUndefined()
+    expect(await blobs.get(v1Key)).toBeUndefined()
 
     // The old version redirects to the current one, uncached.
     const old = await app.request(`/t/${id}?v=1`)
@@ -361,7 +459,7 @@ describe('thumbnails', () => {
       },
     }
     const blobs = memoryBlobStore()
-    const { app } = testApp({ purger, blobs })
+    const { app, files } = testApp({ purger, blobs })
 
     const uploaded = await upload(app, { body: new Uint8Array([1, 2, 3]) })
     const { id } = (await uploaded.json()) as { id: string }
@@ -372,6 +470,7 @@ describe('thumbnails', () => {
     expect(((await second.json()) as { thumbnailUrl: string }).thumbnailUrl).toBe(
       `https://w.mia.cx/t/${id}?v=2`,
     )
+    const thumbKey = (await files.get(id))!.thumbnailBlobKey
 
     const deleted = await app.request(`/v1/files/${id}`, { method: 'DELETE', headers: AUTH })
     expect(deleted.status).toBe(204)
@@ -382,11 +481,12 @@ describe('thumbnails', () => {
         `https://w.mia.cx/t/${id}?v=2`,
       ],
     ])
-    expect(await blobs.get(`thumbnails/${id}-v1`)).toBeUndefined()
-    expect(await blobs.get(`thumbnails/${id}-v2`)).toBeUndefined()
+    // Only the current version's blob is addressable — it was freed above.
+    const gone = await blobs.get(thumbKey!)
+    expect(gone).toBeUndefined()
   })
 
-  it('a failed thumbnail write keeps the current version serving', async () => {
+  it('failed thumbnail writes leave the current version serving', async () => {
     const blobs = memoryBlobStore()
     const inner = blobs.put.bind(blobs)
     let fail = true
@@ -402,10 +502,10 @@ describe('thumbnails', () => {
     fail = false
     expect((await putThumbnail(app, id, new Uint8Array([1, 1, 1]))).status).toBe(200)
     fail = true
-    const failed = await putThumbnail(app, id, new Uint8Array([2, 2, 2]), 'image/png')
-    expect(failed.status).toBe(500)
+    // Two PUTs dying inside the blob write — the row never learns about them.
+    expect((await putThumbnail(app, id, new Uint8Array([2, 2, 2]), 'image/png')).status).toBe(500)
+    expect((await putThumbnail(app, id, new Uint8Array([3, 3, 3]), 'image/jpeg')).status).toBe(500)
 
-    // The row rolled back to v1: list still shows it and it serves v1's bytes.
     const list = await app.request('/v1/files', { headers: AUTH })
     const items = ((await list.json()) as { items: { thumbnailUrl: string }[] }).items
     expect(items[0]?.thumbnailUrl).toBe(`https://w.mia.cx/t/${id}?v=1`)
@@ -415,12 +515,13 @@ describe('thumbnails', () => {
   })
 
   it('a claimed-but-unwritten thumbnail 404s, not 500s', async () => {
-    const { app, blobs } = testApp()
+    const { app, blobs, files } = testApp()
     const uploaded = await upload(app, { body: new Uint8Array([9, 9, 9]) })
     const { id } = (await uploaded.json()) as { id: string }
     expect((await putThumbnail(app, id, new Uint8Array([7]))).status).toBe(200)
     // The claim/put window, as if the blob never landed.
-    await blobs.delete(`thumbnails/${id}-v1`)
+    const key = (await files.get(id))!.thumbnailBlobKey!
+    await blobs.delete(key)
     const missing = await app.request(`/t/${id}?v=1`)
     expect(missing.status).toBe(404)
   })
@@ -453,13 +554,11 @@ describe('thumbnails', () => {
       `https://w.mia.cx/t/${id}?v=2`,
     ])
 
-    // Each version's blob holds its own bytes; ?v=2 is current and serves
-    // them, while ?v=1 redirects (only the current version streams).
-    expect(await bytes(blobs, `thumbnails/${id}-v1`)).toEqual(new Uint8Array([1, 1, 1]))
-    expect(await bytes(blobs, `thumbnails/${id}-v2`)).toEqual(new Uint8Array([2, 2, 2]))
+    // v2 was claimed by the gated request — the winner serves its bytes;
+    // ?v=1 redirects (only the current version streams).
     const v2 = await app.request(`/t/${id}?v=2`)
     expect(v2.status).toBe(200)
-    expect(new Uint8Array(await v2.arrayBuffer())).toEqual(new Uint8Array([2, 2, 2]))
+    expect(new Uint8Array(await v2.arrayBuffer())).toEqual(new Uint8Array([1, 1, 1]))
     const v1 = await app.request(`/t/${id}?v=1`)
     expect(v1.status).toBe(301)
     expect(v1.headers.get('Location')).toBe(`https://w.mia.cx/t/${id}?v=2`)
@@ -468,16 +567,17 @@ describe('thumbnails', () => {
   it('delete purges the file and thumbnail URLs and frees both blobs', async () => {
     const { purged, purger } = trackingPurger()
     const blobs = memoryBlobStore()
-    const { app } = testApp({ purger, blobs })
+    const { app, files } = testApp({ purger, blobs })
 
     const uploaded = await upload(app, { body: new Uint8Array([1, 2, 3]) })
     const { id } = (await uploaded.json()) as { id: string }
     await putThumbnail(app, id, new Uint8Array([9]), 'image/webp')
+    const thumbKey2 = (await files.get(id))!.thumbnailBlobKey
 
     const deleted = await app.request(`/v1/files/${id}`, { method: 'DELETE', headers: AUTH })
     expect(deleted.status).toBe(204)
     expect(purged).toEqual([[`https://w.mia.cx/${id}.png`, `https://w.mia.cx/t/${id}?v=1`]])
-    expect(await blobs.get(`thumbnails/${id}-v1`)).toBeUndefined()
+    expect(await blobs.get(thumbKey2!)).toBeUndefined()
 
     const thumb = await app.request(`/t/${id}?v=1`)
     expect(thumb.status).toBe(404)

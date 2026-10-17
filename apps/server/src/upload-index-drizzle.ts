@@ -70,7 +70,7 @@ export const drizzleUploadIndex = (
         ),
       )
       .run()) as { changes?: number; meta?: { changes?: number } }
-    return (changed.changes ?? changed.meta?.changes ?? 0) > 0
+    return (changed.changes ?? changed.meta?.changes ?? 0) > 0 ? until : null
   },
   async markCompleted(id, fileId) {
     await db
@@ -86,7 +86,15 @@ export const drizzleUploadIndex = (
     return await db
       .select()
       .from(uploads)
-      .where(and(eq(uploads.state, 'open'), lte(uploads.expiresAt, now)))
+      .where(
+        and(
+          lte(uploads.expiresAt, now),
+          or(
+            eq(uploads.state, 'open'),
+            and(eq(uploads.state, 'completing'), lte(uploads.completingUntil, now)),
+          ),
+        ),
+      )
       .limit(limit)
       .all()
   },

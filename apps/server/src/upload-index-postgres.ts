@@ -83,7 +83,7 @@ export const postgresUploadIndex = async (pool: pg.Pool): Promise<UploadIndex> =
             ),
           ),
         )
-      return (changed.rowCount ?? 0) > 0
+      return (changed.rowCount ?? 0) > 0 ? until : null
     },
     async markCompleted(id, fileId) {
       await db
@@ -98,7 +98,15 @@ export const postgresUploadIndex = async (pool: pg.Pool): Promise<UploadIndex> =
       return db
         .select()
         .from(uploads)
-        .where(and(eq(uploads.state, 'open'), lte(uploads.expiresAt, now)))
+        .where(
+          and(
+            lte(uploads.expiresAt, now),
+            or(
+              eq(uploads.state, 'open'),
+              and(eq(uploads.state, 'completing'), lte(uploads.completingUntil, now)),
+            ),
+          ),
+        )
         .limit(limit)
     },
   }

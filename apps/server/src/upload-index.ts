@@ -67,18 +67,22 @@ export interface UploadIndex {
   ): Promise<boolean>
   /**
    * Takes the completion lease: the row moves to 'completing' with
-   * `completingUntil = until`. Only an open session or an expired lease can
-   * be claimed, so at most one request completes a session at a time while a
-   * crashed complete recovers instead of locking it forever.
+   * `completingUntil = until`, and the granted `until` comes back for the
+   * caller's takeover fences. Only an open session or an expired lease can
+   * be claimed — returns null when the claim was lost.
    */
-  claimCompletion(id: string, now: Date, until: Date): Promise<boolean>
+  claimCompletion(id: string, now: Date, until: Date): Promise<Date | null>
   /**
    * Record the file a session completed into and release the lease; safe to
    * call repeatedly.
    */
   markCompleted(id: string, fileId: string): Promise<void>
   delete(id: string): Promise<void>
-  /** Up to `limit` open rows whose `expiresAt` passed, for the lazy sweeper. */
+  /**
+   * Up to `limit` rows whose `expiresAt` passed — open ones outright, plus
+   * 'completing' ones whose lease lapsed (a crashed completer can't hold a
+   * session past its TTL forever).
+   */
   expired(now: Date, limit: number): Promise<readonly UploadRow[]>
 }
 
@@ -133,9 +137,9 @@ export const memoryUploadIndex = (): UploadIndex => {
             row.completingUntil.getTime() <= now.getTime()
           ))
       )
-        return Promise.resolve(false)
+        return Promise.resolve(null)
       rows.set(id, { ...row, state: 'completing', completingUntil: until })
-      return Promise.resolve(true)
+      return Promise.resolve(until)
     },
     markCompleted(id, fileId) {
       const row = rows.get(id)
@@ -150,7 +154,14 @@ export const memoryUploadIndex = (): UploadIndex => {
     expired(now, limit) {
       return Promise.resolve(
         [...rows.values()]
-          .filter((row) => row.state === 'open' && row.expiresAt.getTime() <= now.getTime())
+          .filter(
+            (row) =>
+              row.expiresAt.getTime() <= now.getTime() &&
+              (row.state === 'open' ||
+                (row.state === 'completing' &&
+                  row.completingUntil !== null &&
+                  row.completingUntil.getTime() <= now.getTime())),
+          )
           .slice(0, limit),
       )
     },

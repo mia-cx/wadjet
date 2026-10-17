@@ -63,7 +63,7 @@ export interface LibraryLimits {
 const UPLOAD_TTL_MS = 24 * 3600 * 1000
 const EXPIRE_SWEEP_LIMIT = 10
 /** How long an in-flight complete holds its lease before another can take over. */
-const COMPLETE_LEASE_MS = 5 * 60_000
+const COMPLETE_LEASE_MS = 15 * 60_000
 
 const FILENAME_EXTENSION = /\.([0-9A-Za-z]{1,10})$/
 
@@ -118,11 +118,18 @@ export const createLibrary = (deps: LibraryDeps) => {
     const row = await deps.uploads.get(id)
     if (!row || row.owner !== owner) throw notFound(`No upload ${id}.`)
     if (row.state === 'expired') throw uploadExpired(row)
-    if (row.state === 'open' && row.expiresAt.getTime() <= deps.clock().getTime()) {
-      // Abort first: a failure leaves the row open so the next call retries,
-      // instead of stranding an 'expired' row with live storage parts.
+    const now = deps.clock().getTime()
+    const expirable =
+      row.expiresAt.getTime() <= now &&
+      (row.state === 'open' ||
+        (row.state === 'completing' &&
+          row.completingUntil !== null &&
+          row.completingUntil.getTime() <= now))
+    if (expirable) {
+      // Abort first: a failure leaves the row unexpired so the next call
+      // retries, instead of stranding it with live storage parts.
       await deps.blobs.abortMultipart(row.blobKey, row.storageUploadId)
-      await deps.uploads.transition(id, 'open', 'expired')
+      await deps.uploads.transition(id, row.state, 'expired')
       throw uploadExpired(row)
     }
     return row
@@ -242,43 +249,28 @@ export const createLibrary = (deps: LibraryDeps) => {
       if (size > limits.maxThumbnailBytes)
         throw tooLarge(`This server accepts thumbnails up to ${limits.maxThumbnailBytes} bytes.`)
 
-      // Claim a version first — overlapping PUTs each get their own, and the
-      // deterministic blob key means the winner's bytes own its URL.
+      // Write first, publish second: the row only ever points at bytes that
+      // exist. The blob key carries a fresh token (not the version) — a
+      // superseded blob can't be addressed by the version formula anymore.
+      const blobKey = `thumbnails/${id}-${crypto.randomUUID()}`
+      await deps.blobs.put(blobKey, body, size, contentType)
       for (let attempt = 0; attempt < MAX_ID_ATTEMPTS; attempt++) {
         const row = await deps.files.get(id)
-        if (!row || row.owner !== owner || row.deletedAt) throw notFound(`No file ${id}.`)
+        if (!row || row.owner !== owner || row.deletedAt) {
+          await deps.blobs.delete(blobKey)
+          throw notFound(`No file ${id}.`)
+        }
         const version = row.thumbnailVersion + 1
-        const blobKey = `thumbnails/${id}-v${version}`
         const claimed = await deps.files.setThumbnail(id, row.thumbnailVersion, {
           version,
           blobKey,
           contentType,
           size,
         })
-        if (!claimed) continue // another PUT took this version; re-read and retry
-        try {
-          await deps.blobs.put(blobKey, body, size, contentType)
-        } catch (error) {
-          // Roll the row back to the previous thumbnail so the current
-          // preview keeps serving; if another PUT already moved on, the
-          // conditional claim just loses — fine.
-          await deps.files.setThumbnail(
-            id,
-            version,
-            row.thumbnailVersion > 0 && row.thumbnailBlobKey !== null
-              ? {
-                  version: row.thumbnailVersion,
-                  blobKey: row.thumbnailBlobKey,
-                  contentType: row.thumbnailContentType!,
-                  size: row.thumbnailSize!,
-                }
-              : null,
-          )
-          throw error
-        }
+        if (!claimed) continue // another PUT published first; re-read and retry
         if (row.thumbnailVersion > 0) {
-          // The row already points at the new version; cleanup of the old one
-          // is best-effort — deletion sweeps every version regardless.
+          // Best-effort: a missed purge frees nothing and a missed blob
+          // delete leaves a small orphan, both fixed by nothing short of GC.
           try {
             await deps.purger.purge([`${deps.baseUrl}/t/${id}?v=${row.thumbnailVersion}`])
             if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
@@ -292,6 +284,8 @@ export const createLibrary = (deps: LibraryDeps) => {
         // the row on, but ours still serves its own bytes at ?v={version}.
         return toFile({ ...updated, thumbnailVersion: version, thumbnailBlobKey: blobKey })
       }
+      // Every claim attempt lost; our blob isn't referenced — free it.
+      await deps.blobs.delete(blobKey)
       throw new Error(`Could not claim a thumbnail version in ${MAX_ID_ATTEMPTS} attempts`)
     },
 
@@ -309,8 +303,10 @@ export const createLibrary = (deps: LibraryDeps) => {
       await deps.purger.purge(urls)
       // Blob last: a failure here leaves an unreachable blob, never a row that 500s.
       await deps.blobs.delete(row.blobKey)
-      for (let v = 1; v <= row.thumbnailVersion; v++)
-        await deps.blobs.delete(`thumbnails/${row.id}-v${v}`)
+      // Thumbnail blob keys are random now — only the current one is
+      // addressable; a superseded blob whose best-effort delete failed
+      // earlier stays a small orphan.
+      if (row.thumbnailBlobKey) await deps.blobs.delete(row.thumbnailBlobKey)
       await deps.files.delete(id)
     },
 
@@ -323,7 +319,7 @@ export const createLibrary = (deps: LibraryDeps) => {
       for (const stale of await deps.uploads.expired(deps.clock(), EXPIRE_SWEEP_LIMIT)) {
         try {
           await deps.blobs.abortMultipart(stale.blobKey, stale.storageUploadId)
-          await deps.uploads.transition(stale.id, 'open', 'expired')
+          await deps.uploads.transition(stale.id, stale.state, 'expired')
         } catch (error) {
           console.error(`upload ${stale.id}: expiry failed:`, error)
         }
@@ -432,16 +428,43 @@ export const createLibrary = (deps: LibraryDeps) => {
       // One completer at a time: the loser 409s and retries, a crashed
       // completer's lease expires so the session never locks.
       const now = deps.clock()
-      if (
-        !(await deps.uploads.claimCompletion(id, now, new Date(now.getTime() + COMPLETE_LEASE_MS)))
+      const claimed = await deps.uploads.claimCompletion(
+        id,
+        now,
+        new Date(now.getTime() + COMPLETE_LEASE_MS),
       )
+      if (claimed === null)
         throw new ProtocolError(
           409,
           'upload_incomplete',
           `Upload ${id} is still completing; retry shortly.`,
         )
+      // After a takeover we must touch nothing: the successor owns the
+      // storage object and the file row. A re-read right before each write
+      // fences a completer whose lease was taken over — a residual window
+      // between the check and the write remains (no cross-store
+      // transaction), which the file-id reconciliation below narrows to a
+      // harmless 200.
+      const checkStillOurs = async () => {
+        const fresh = await deps.uploads.get(id)
+        if (fresh?.state !== 'completing' || fresh.completingUntil?.getTime() !== claimed.getTime())
+          throw new ProtocolError(
+            409,
+            'upload_incomplete',
+            `Upload ${id} was taken over by a newer completion.`,
+          )
+      }
       const parts = received.map((part) => ({ number: part.number, etag: part.etag }))
-      await deps.blobs.completeMultipart(row.blobKey, row.storageUploadId, parts)
+      await checkStillOurs()
+      try {
+        await deps.blobs.completeMultipart(row.blobKey, row.storageUploadId, parts)
+      } catch (error) {
+        // Storage failing on an already-finished upload is how a superseded
+        // completer learns about its takeover — check first, rethrow storage.
+        await checkStillOurs()
+        throw error
+      }
+      await checkStillOurs()
       const prepared = await prepareFile(
         {
           owner,
@@ -463,12 +486,15 @@ export const createLibrary = (deps: LibraryDeps) => {
       } catch (error) {
         const earlier = await deps.files.get(id)
         if (earlier?.owner === owner && earlier.blobKey === row.blobKey) {
-          // Ours from an earlier or overlapping attempt.
+          // Ours from an earlier or overlapping attempt — unless the lease
+          // was taken over, in which case that row is the successor's.
+          await checkStillOurs()
           await deps.uploads.markCompleted(id, earlier.id)
           return { file: { ...toFile(earlier), deleteUrl: null }, created: false }
         }
         throw error
       }
+      await checkStillOurs()
       await deps.uploads.markCompleted(id, stored.id)
       return {
         file: { ...toFile(stored), deleteUrl: `${deps.baseUrl}/d/${prepared.token}` },
