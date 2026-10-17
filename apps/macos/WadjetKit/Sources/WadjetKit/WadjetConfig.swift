@@ -58,8 +58,20 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
             }
             try lookup(wf, recording: produces.isRecording, path: path)
         }
-        try lookup(defaultWorkflows.screenshot, recording: false, path: [CodingKeys.defaultWorkflows, CodingKeys.screenshot])
-        try lookup(defaultWorkflows.recording, recording: true, path: [CodingKeys.defaultWorkflows, CodingKeys.recording])
+        // legacy configs without `defaultWorkflows` merge the factory names in —
+        // if those names went away with the workflows, take the first of the kind
+        // instead of rejecting the file; an explicit dangling name still errors
+        for (key, name, recording, factory) in [
+            (CodingKeys.screenshot, defaultWorkflows.screenshot, false, DefaultWorkflows().screenshot),
+            (CodingKeys.recording, defaultWorkflows.recording, true, DefaultWorkflows().recording),
+        ] {
+            let ok = workflows.contains { $0.name == name && (recording ? $0.takes.isRecording : $0.takes == .screenshot) }
+            if !ok && name == factory, let first = workflows.first(where: { recording ? $0.takes.isRecording : $0.takes == .screenshot }) {
+                if recording { defaultWorkflows.recording = first.name } else { defaultWorkflows.screenshot = first.name }
+            } else {
+                try lookup(name, recording: recording, path: [CodingKeys.defaultWorkflows, key])
+            }
+        }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)

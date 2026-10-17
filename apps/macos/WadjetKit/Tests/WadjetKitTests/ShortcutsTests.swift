@@ -73,6 +73,30 @@ struct ShortcutsTests {
         #expect(err.message.contains(#"no Screenshot Workflow named "Nope""#))
     }
 
+    // a pre-#24 config with renamed workflows and no defaultWorkflows still loads
+    @Test func legacyConfigWithoutDefaultWorkflowsLoads() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"workflows":[{"name":"Clipboard","takes":"screenshot","steps":[{"type":"copyImage"}]},{"name":"Video","takes":"mp4","steps":[{"type":"showToast"}]}],"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url)
+        var errors: [ConfigError] = []
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        #expect(errors.isEmpty)
+        #expect(store.value.defaultWorkflows.screenshot == "Clipboard")
+        #expect(store.value.defaultWorkflows.recording == "Video")
+        #expect(store.value.tools.pickColour.format == .lab) // unrelated keys kept
+    }
+
+    // an explicitly dangling defaultWorkflows name still errors
+    @Test func danglingDefaultWorkflowNameFails() throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"defaultWorkflows":{"screenshot":"Nope"},"workflows":[{"name":"Clipboard","takes":"screenshot","steps":[{"type":"copyImage"}]}]}"#.utf8).write(to: url)
+        var errors: [ConfigError] = []
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        #expect(errors.first?.location == "defaultWorkflows.screenshot")
+        #expect(errors.first?.message.contains(#"no Screenshot Workflow named "Nope""#) == true)
+    }
+
     @Test func recordingToolNamingScreenshotWorkflowFails() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)

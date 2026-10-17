@@ -421,7 +421,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     func registerShortcuts() {
         let s = AppState.shared
-        for n in shortcutNames { KeyboardShortcuts.reset(n) }
+        for n in shortcutNames {
+            KeyboardShortcuts.reset(n)
+            KeyboardShortcuts.removeHandler(for: n) // reset leaves the handler; drop it too
+        }
         shortcutNames = []
         let apple = appleScreenshotHotkeys()
         AppLog.line("system screenshot hotkeys: \(apple)")
@@ -445,26 +448,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    // enabled macOS screenshot combos from the symbolic hotkey table
-    // (Carbon IDs 28–31, 184 are the Screenshots section of Keyboard Shortcuts)
+    // enabled macOS screenshot combos from the symbolic hotkey table; the array
+    // is indexed by symbolic ID and entries use the literal kHISymbolicHotKey*
+    // key names (Carbon exports them as strings, not Swift globals)
     func appleScreenshotHotkeys() -> [(keyCode: Int, mods: Int)] {
         var arr: Unmanaged<CFArray>?
         guard CopySymbolicHotKeys(&arr) == noErr,
               let list = arr?.takeRetainedValue() as? [[String: Any]] else { return [] }
-        let shotIDs = [28, 29, 30, 31, 184]
-        // each entry: "enabled" + "value" -> {parameters: [ascii, keyCode, mods]}
-        return shotIDs.compactMap { i in
+        // Carbon IDs for the Screenshots section of Keyboard Shortcuts
+        return [28, 29, 30, 31, 184].compactMap { i in
+            guard i < list.count else { return nil }
             let e = list[i]
-            guard (e["enabled"] as? Bool) == true,
-                  let v = e["value"] as? [String: Any],
-                  let p = v["parameters"] as? [Int], p.count >= 3 else { return nil }
-            return (p[1], p[2])
+            guard (e["kHISymbolicHotKeyEnabled"] as? Bool) == true,
+                  let kc = e["kHISymbolicHotKeyCode"] as? Int,
+                  let mods = e["kHISymbolicHotKeyModifiers"] as? Int else { return nil }
+            return (kc, mods)
         }
     }
 
-    // a Shortcut press: apply its options, hold its Workflow for this capture, trigger
+    // a Shortcut press: apply its options, hold its Workflow for this capture,
+    // trigger. Only an accepted press touches state — during a countdown a press
+    // is ignored, and a Record shortcut during a recording just stops it.
     func fireShortcut(_ sc: Shortcut, tool: Tool) {
         let s = AppState.shared
+        switch s.phase {
+        case .countdown: return
+        case .recording:
+            if tool.kind == .rec { trigger(tool) }
+            return
+        default: break
+        }
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
@@ -810,7 +823,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let s = AppState.shared
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
         if s.phase == .frozen { s.triggerWorkflow = nil; AppLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
-        if s.phase == .countdown { cancelCountdown(); return }
+        if s.phase == .countdown { s.triggerWorkflow = nil; cancelCountdown(); return }
         if let t = toastCtrl.items.first(where: { $0.showBar || $0.showRing }) {
             t.showBar = false; t.showRing = false; t.showCancel = false
             t.title = "Cancelled"; toastCtrl.startTimer(t)
