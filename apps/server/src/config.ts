@@ -13,6 +13,7 @@ export interface Config {
   readonly apiKeys: ReadonlyMap<string, string>
   readonly dataDir: string
   readonly port: number
+  readonly cloudflarePurge: { readonly zoneId: string; readonly apiToken: string } | null
   readonly limits: typeof Discovery.Type.limits
 }
 
@@ -86,10 +87,18 @@ export const loadConfig = (env: Record<string, string | undefined>): Config => {
   const apiKeys = decode('WADJET_API_KEYS', apiKeysSchema, apiKeysValue)
   if (Object.keys(apiKeys).length === 0) fail('WADJET_API_KEYS', 'needs at least one key')
 
+  const zoneId = env.WADJET_CLOUDFLARE_ZONE_ID
+  const apiToken = env.WADJET_CLOUDFLARE_API_TOKEN
+  if (zoneId !== undefined && apiToken === undefined)
+    fail('WADJET_CLOUDFLARE_API_TOKEN', 'is required when WADJET_CLOUDFLARE_ZONE_ID is set')
+  if (apiToken !== undefined && zoneId === undefined)
+    fail('WADJET_CLOUDFLARE_ZONE_ID', 'is required when WADJET_CLOUDFLARE_API_TOKEN is set')
+
   return {
     baseUrl,
     apiKeys: new Map(Object.entries(apiKeys)),
     dataDir: env.WADJET_DATA_DIR ?? './data',
+    cloudflarePurge: zoneId !== undefined && apiToken !== undefined ? { zoneId, apiToken } : null,
     port: intEnv(env, 'PORT', port, 8787),
     limits: {
       maxRequestBytes: intEnv(env, 'WADJET_MAX_REQUEST_BYTES', nonNegative, 100_000_000),
