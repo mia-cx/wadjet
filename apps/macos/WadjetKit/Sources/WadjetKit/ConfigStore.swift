@@ -163,6 +163,8 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
             let v = try decoder.decode(Config.self, from: merged)
             if v != value { value = v }
             broken = false
+            // a file missing newer keys gains them (and takes canonical form)
+            if (try? encoder.encode(v)).map({ $0 + [0x0A] }) != data { write() }
             if migration.migrated { write() } // plaintext secrets became {"keychain": …} references
         } catch {
             broken = true
