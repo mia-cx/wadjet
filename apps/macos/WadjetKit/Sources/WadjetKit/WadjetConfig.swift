@@ -14,6 +14,9 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     ]
     public var shortcuts: [Shortcut] = []
     public var defaultWorkflows = DefaultWorkflows()
+    /// Security-scoped bookmarks for folders chosen outside the sandbox's
+    /// Pictures/Movies grants; key is the path as written in config.json.
+    public var bookmarks: [String: Data] = [:]
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -38,6 +41,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         workflows = try c.decodeIfPresent([Workflow].self, forKey: .workflows) ?? WadjetConfig().workflows
         shortcuts = try c.decodeIfPresent([Shortcut].self, forKey: .shortcuts) ?? []
         defaultWorkflows = try c.decodeIfPresent(DefaultWorkflows.self, forKey: .defaultWorkflows) ?? DefaultWorkflows()
+        bookmarks = try c.decodeIfPresent([String: Data].self, forKey: .bookmarks) ?? [:]
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -61,6 +65,13 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try lookup(defaultWorkflows.screenshot, recording: false, path: [CodingKeys.defaultWorkflows, CodingKeys.screenshot])
         try lookup(defaultWorkflows.recording, recording: true, path: [CodingKeys.defaultWorkflows, CodingKeys.recording])
     }
+    /// Renames a Workflow and every reference (Shortcuts, defaultWorkflows).
+    public mutating func renameWorkflow(from old: String, to new: String) {
+        for i in workflows.indices where workflows[i].name == old { workflows[i].name = new }
+        for i in shortcuts.indices where shortcuts[i].workflow == old { shortcuts[i].workflow = new }
+        if defaultWorkflows.screenshot == old { defaultWorkflows.screenshot = new }
+        if defaultWorkflows.recording == old { defaultWorkflows.recording = new }
+    }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(tools, forKey: .tools)
@@ -68,9 +79,10 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(workflows, forKey: .workflows)
         try c.encode(shortcuts, forKey: .shortcuts)
         try c.encode(defaultWorkflows, forKey: .defaultWorkflows)
+        try c.encode(bookmarks, forKey: .bookmarks)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, workflow, screenshot, recording
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, workflow, screenshot, recording
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
