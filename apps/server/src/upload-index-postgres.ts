@@ -77,18 +77,11 @@ export const postgresUploadIndex = async (pool: pg.Pool): Promise<UploadIndex> =
       await db.delete(uploads).where(eq(uploads.id, id))
     },
     async expired(now, limit) {
-      const due = await db
+      return db
         .select()
         .from(uploads)
         .where(and(eq(uploads.state, 'open'), lte(uploads.expiresAt, now)))
         .limit(limit)
-      for (const row of due) {
-        await db
-          .update(uploads)
-          .set({ state: 'expired' })
-          .where(and(eq(uploads.id, row.id), eq(uploads.state, 'open')))
-      }
-      return due
     },
   }
 }
