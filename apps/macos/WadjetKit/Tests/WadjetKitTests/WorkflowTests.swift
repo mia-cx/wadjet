@@ -14,8 +14,12 @@ private func mkFile(_ dir: URL, _ name: String = "in.png") throws -> URL {
 
 final class FakeEffects: WorkflowEffects, @unchecked Sendable {
     private(set) var order: [String] = []
-    func copyImage(_ file: URL, run: UUID) async throws { order.append("copy") }
-    func showToast(_ file: URL, run: UUID) async throws { order.append("toast") }
+    private(set) var files: [URL] = []
+    func copyImage(_ file: URL, run: UUID) async throws { order.append("copy"); files.append(file) }
+    func copyFile(_ file: URL, run: UUID) async throws { order.append("copyFile"); files.append(file) }
+    func open(_ file: URL, app: String?, run: UUID) async throws { order.append("open"); files.append(file) }
+    func pin(_ file: URL, run: UUID) async throws { order.append("pin"); files.append(file) }
+    func showToast(_ file: URL, run: UUID) async throws { order.append("toast"); files.append(file) }
 }
 
 // injectable clock for CaptureFiles' `now:` — a @Sendable closure can't hold a var
@@ -35,6 +39,9 @@ private final class GatedEffects: WorkflowEffects, @unchecked Sendable {
     let gate: Gate
     init(_ g: Gate) { gate = g }
     func copyImage(_ file: URL, run: UUID) async throws { await gate.wait() }
+    func copyFile(_ file: URL, run: UUID) async throws {}
+    func open(_ file: URL, app: String?, run: UUID) async throws {}
+    func pin(_ file: URL, run: UUID) async throws {}
     func showToast(_ file: URL, run: UUID) async throws {}
 }
 
@@ -138,6 +145,40 @@ struct WorkflowTests {
         #expect(FileManager.default.fileExists(atPath: jail.appendingPathComponent("inner.png").path))
     }
 
+    // Steps after a Save file work on the saved copy, not the temp capture
+    @Test func effectsGetTheCurrentFile() async throws {
+        let dir = tempDir(), saveDir = tempDir()
+        let file = try mkFile(dir)
+        let fx = FakeEffects()
+        let wf = Workflow(name: "w", takes: .screenshot, steps: [.copyFile, .saveFile(folder: saveDir.path), .copyFile, .openIn(app: nil), .pin])
+        let savedURL = saveDir.appendingPathComponent("in.png")
+        for await _ in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir()) {}
+        #expect(fx.order == ["copyFile", "copyFile", "open", "pin"])
+        #expect(fx.files == [file, savedURL, savedURL, savedURL])
+    }
+
+    @Test func newStepsRoundTrip() throws {
+        let steps: [Step] = [.copyFile, .openIn(app: "com.apple.Preview"), .openIn(app: nil), .pin]
+        let back = try JSONDecoder().decode([Step].self, from: JSONEncoder().encode(steps))
+        #expect(back == steps)
+        // {"type":"openIn","app":"com.apple.Preview"} decodes; app omitted when nil
+        #expect(try JSONDecoder().decode(Step.self, from: Data(#"{"type":"openIn","app":"com.apple.Preview"}"#.utf8)) == .openIn(app: "com.apple.Preview"))
+        #expect(try JSONDecoder().decode(Step.self, from: Data(#"{"type":"openIn"}"#.utf8)) == .openIn(app: nil))
+        let nilApp = try JSONSerialization.jsonObject(with: JSONEncoder().encode(Step.openIn(app: nil))) as? [String: Any]
+        #expect(nilApp?["app"] == nil)
+    }
+
+    @Test func mp4WorkflowWithPinFailsAtTheStepIndex() throws {
+        let url = tempDir().appendingPathComponent("config.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"workflows":[{"name":"bad","takes":"mp4","steps":[{"type":"copyFile"},{"type":"pin"}]}]}"#.utf8).write(to: url)
+        var errors: [ConfigError] = []
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        let err = try #require(errors.first)
+        #expect(err.location == "workflows.0.steps.1")
+        #expect(err.message.contains("Pin to screen only works on Screenshots"))
+    }
+
     @Test func starterConfigRoundTrips() throws {
         let c = WadjetConfig()
         let back = try JSONDecoder().decode(WadjetConfig.self, from: JSONEncoder().encode(c))
@@ -157,7 +198,7 @@ struct WorkflowTests {
         var errors: [ConfigError] = []
         _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
         let err = try #require(errors.first)
-        #expect(err.location?.hasPrefix("workflows") == true)
+        #expect(err.location == "workflows.0.steps.0")
         #expect(err.message.contains("Copy image only works on Screenshots"))
     }
 

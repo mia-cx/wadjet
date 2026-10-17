@@ -2146,6 +2146,31 @@ final class AppWorkflowEffects: WorkflowEffects {
         }
     }
 
+    func copyFile(_ file: URL, run: UUID) async throws {
+        let pb = NSPasteboard.general
+        pb.clearContents()
+        pb.writeObjects([file as NSURL])
+        AppState.shared.lastClipboard = "<file \(file.lastPathComponent)>"
+    }
+
+    func open(_ file: URL, app: String?, run: UUID) async throws {
+        if let app {
+            guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app) else {
+                throw NSError(domain: "wadjet", code: 2, userInfo: [NSLocalizedDescriptionKey: "no app with id \(app)"])
+            }
+            try await NSWorkspace.shared.open([file], withApplicationAt: appURL, configuration: .init())
+        } else if !NSWorkspace.shared.open(file) {
+            throw NSError(domain: "wadjet", code: 3, userInfo: [NSLocalizedDescriptionKey: "couldn't open \(file.lastPathComponent)"])
+        }
+    }
+
+    func pin(_ file: URL, run: UUID) async throws {
+        guard let img = NSImage(contentsOf: file)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
+            throw NSError(domain: "wadjet", code: 1, userInfo: [NSLocalizedDescriptionKey: "couldn't read the image"])
+        }
+        AppDelegate.shared?.openPin(image: img)
+    }
+
     func showToast(_ file: URL, run: UUID) async throws {
         let img = NSImage(contentsOf: file)?.cgImage(forProposedRect: nil, context: nil, hints: nil)
         let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent, url: file, duration: nil))
