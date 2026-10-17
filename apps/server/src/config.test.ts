@@ -93,10 +93,29 @@ describe('loadConfig', () => {
       { ...GOOD, WADJET_CLOUDFLARE_ZONE_ID: 'zone123' },
       'WADJET_CLOUDFLARE_API_TOKEN',
     ],
+    [
+      'a token with an empty zone',
+      { ...GOOD, WADJET_CLOUDFLARE_ZONE_ID: '', WADJET_CLOUDFLARE_API_TOKEN: 'token456' },
+      'WADJET_CLOUDFLARE_ZONE_ID',
+    ],
+    [
+      'a zone with an empty token',
+      { ...GOOD, WADJET_CLOUDFLARE_ZONE_ID: 'zone123', WADJET_CLOUDFLARE_API_TOKEN: '' },
+      'WADJET_CLOUDFLARE_API_TOKEN',
+    ],
   ])('rejects %s', (_name, env, variable) => {
     expect(() => loadConfig(env)).toThrowError(
       expect.objectContaining({ message: expect.stringContaining(variable) }),
     )
+  })
+
+  it('treats empty Cloudflare vars as unset', () => {
+    const config = loadConfig({
+      ...GOOD,
+      WADJET_CLOUDFLARE_ZONE_ID: '',
+      WADJET_CLOUDFLARE_API_TOKEN: '',
+    })
+    expect(config.cloudflarePurge).toBeNull()
   })
 
   it('parses a full s3 + postgres env', () => {

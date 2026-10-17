@@ -1,6 +1,5 @@
 import { type AppDeps, createApp } from './app.ts'
 import { r2BlobStore } from './blob-store-r2.ts'
-import { cloudflarePurger } from './cloudflare-purger.ts'
 import { ConfigError, loadConfig } from './config.ts'
 import { randomId, randomToken } from './crypto.ts'
 import { d1FileIndex } from './file-index-d1.ts'
@@ -32,9 +31,7 @@ const R2_MIN_PART_BYTES = 5 * 1024 * 1024
 
 export const appFor = (
   env: Env,
-  seams: Partial<
-    Pick<AppDeps, 'blobs' | 'files' | 'uploads' | 'purger' | 'clock' | 'ids' | 'tokens'>
-  > = {},
+  seams: Partial<Pick<AppDeps, 'blobs' | 'files' | 'uploads' | 'clock' | 'ids' | 'tokens'>> = {},
 ) => {
   const config = configFor(env)
   const blobs = seams.blobs ?? r2BlobStore(env.BLOBS)
@@ -47,9 +44,10 @@ export const appFor = (
     blobs,
     files: d1FileIndex(env.DB),
     uploads: d1UploadIndex(env.DB),
-    purger: config.cloudflarePurge
-      ? cloudflarePurger({ ...config.cloudflarePurge, fetch })
-      : noopPurger,
+    // No purger on the Worker: its responses never enter the zone cache, so
+    // there is nothing to purge. Purge exists where ordinary zone caching
+    // does — the Node/Docker server behind a proxied zone.
+    purger: noopPurger,
     clock: () => new Date(),
     ids: randomId,
     tokens: randomToken,
@@ -58,39 +56,20 @@ export const appFor = (
 }
 
 /**
- * The Worker entrypoint. Caches file GETs at the zone's edge — only when a
- * purger exists to clear them, since Workers responses never enter the zone
- * cache by themselves. Range requests always go to storage: `cache.match`
- * applies its own Range handling, which breaks the protocol's full-200
- * fallback for unsatisfiable and multi-range requests.
+ * The Worker entrypoint. No edge-cache layer: `caches.default` entries can't
+ * be purged by zone purge-by-URL, and a `waitUntil(cache.put)` can land after
+ * a delete — every request goes straight to the app.
  */
 export const createHandler = (
   seams: Parameters<typeof appFor>[1] = {},
 ): Required<Pick<ExportedHandler<Env>, 'fetch'>> => {
-  let state: { app: ReturnType<typeof appFor>; edgeCache: boolean } | undefined
+  let app: ReturnType<typeof appFor> | undefined
   return {
-    async fetch(request, env, ctx) {
+    async fetch(request, env) {
       // Build lazily per isolate: a ConfigError rejects the request (visible in
       // logs, retryable) instead of being cached at startup.
-      state ??= { app: appFor(env, seams), edgeCache: configFor(env).cloudflarePurge !== null }
-      if (!state.edgeCache || request.method !== 'GET' || request.headers.has('Range')) {
-        return await state.app.fetch(request)
-      }
-      // The cache key is exactly the URL the purger deletes: path only for
-      // files, `/t/{id}?v={n}` (the only meaningful param) for thumbnails.
-      const url = new URL(request.url)
-      const v = url.searchParams.get('v')
-      const key = new URL(
-        url.pathname.startsWith('/t/') && v !== null ? `${url.pathname}?v=${v}` : url.pathname,
-        url.origin,
-      )
-      const matched = await caches.default.match(new Request(key))
-      if (matched) return matched
-      const response = await state.app.fetch(request)
-      if (response.status === 200 && response.headers.get('Cache-Control')?.includes('public')) {
-        ctx.waitUntil(caches.default.put(key, response.clone()))
-      }
-      return response
+      app ??= appFor(env, seams)
+      return await app.fetch(request)
     },
   }
 }
