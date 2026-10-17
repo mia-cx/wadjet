@@ -22,10 +22,18 @@ export interface UploadRow {
   readonly createdAt: Date
   /** When the session stops accepting calls (24 h after `createdAt`). */
   readonly expiresAt: Date
-  /** 'open' accepts parts; 'completed' has a file; 'expired' answers 410. */
-  readonly state: 'open' | 'completed' | 'expired'
+  /**
+   * 'open' accepts parts; 'completing' is claimed by an in-flight complete;
+   * 'completed' has a file; 'expired' answers 410.
+   */
+  readonly state: 'open' | 'completing' | 'completed' | 'expired'
   /** The file the completed upload produced; null until completion finishes. */
   readonly fileId: string | null
+  /**
+   * The lease on a 'completing' session; a complete request whose requestor
+   * died can be taken over once this passes. Null on every other state.
+   */
+  readonly completingUntil: Date | null
 }
 
 /**
@@ -57,7 +65,17 @@ export interface UploadIndex {
     to: UploadRow['state'],
     fileId?: string,
   ): Promise<boolean>
-  /** Record the file a session completed into; safe to call repeatedly. */
+  /**
+   * Takes the completion lease: the row moves to 'completing' with
+   * `completingUntil = until`. Only an open session or an expired lease can
+   * be claimed, so at most one request completes a session at a time while a
+   * crashed complete recovers instead of locking it forever.
+   */
+  claimCompletion(id: string, now: Date, until: Date): Promise<boolean>
+  /**
+   * Record the file a session completed into and release the lease; safe to
+   * call repeatedly.
+   */
   markCompleted(id: string, fileId: string): Promise<void>
   delete(id: string): Promise<void>
   /** Up to `limit` open rows whose `expiresAt` passed, for the lazy sweeper. */
@@ -104,9 +122,24 @@ export const memoryUploadIndex = (): UploadIndex => {
       rows.set(id, { ...row, state: to, fileId: fileId ?? row.fileId })
       return Promise.resolve(true)
     },
+    claimCompletion(id, now, until) {
+      const row = rows.get(id)
+      if (
+        !row ||
+        (row.state !== 'open' &&
+          !(
+            row.state === 'completing' &&
+            row.completingUntil !== null &&
+            row.completingUntil.getTime() <= now.getTime()
+          ))
+      )
+        return Promise.resolve(false)
+      rows.set(id, { ...row, state: 'completing', completingUntil: until })
+      return Promise.resolve(true)
+    },
     markCompleted(id, fileId) {
       const row = rows.get(id)
-      if (row) rows.set(id, { ...row, state: 'completed', fileId })
+      if (row) rows.set(id, { ...row, state: 'completed', fileId, completingUntil: null })
       return Promise.resolve()
     },
     delete(id) {

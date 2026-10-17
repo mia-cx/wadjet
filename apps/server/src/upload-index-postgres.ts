@@ -1,5 +1,5 @@
 import { fileURLToPath } from 'node:url'
-import { and, asc, eq, lte } from 'drizzle-orm'
+import { and, asc, eq, lte, or } from 'drizzle-orm'
 import { drizzle } from 'drizzle-orm/node-postgres'
 import { migrate } from 'drizzle-orm/node-postgres/migrator'
 import type pg from 'pg'
@@ -70,8 +70,26 @@ export const postgresUploadIndex = async (pool: pg.Pool): Promise<UploadIndex> =
         .where(and(eq(uploads.id, id), eq(uploads.state, from)))
       return (changed.rowCount ?? 0) > 0
     },
+    async claimCompletion(id, now, until) {
+      const changed = await db
+        .update(uploads)
+        .set({ state: 'completing', completingUntil: until })
+        .where(
+          and(
+            eq(uploads.id, id),
+            or(
+              eq(uploads.state, 'open'),
+              and(eq(uploads.state, 'completing'), lte(uploads.completingUntil, now)),
+            ),
+          ),
+        )
+      return (changed.rowCount ?? 0) > 0
+    },
     async markCompleted(id, fileId) {
-      await db.update(uploads).set({ state: 'completed', fileId }).where(eq(uploads.id, id))
+      await db
+        .update(uploads)
+        .set({ state: 'completed', fileId, completingUntil: null })
+        .where(eq(uploads.id, id))
     },
     async delete(id) {
       await db.delete(uploads).where(eq(uploads.id, id))

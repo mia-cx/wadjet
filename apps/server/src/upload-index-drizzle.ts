@@ -1,4 +1,4 @@
-import { and, asc, eq, lte } from 'drizzle-orm'
+import { and, asc, eq, lte, or } from 'drizzle-orm'
 import type { BaseSQLiteDatabase } from 'drizzle-orm/sqlite-core'
 import { uploadParts, uploads } from './db/schema.ts'
 import type { UploadIndex } from './upload-index.ts'
@@ -56,8 +56,28 @@ export const drizzleUploadIndex = (
       .run()) as { changes?: number; meta?: { changes?: number } }
     return (changed.changes ?? changed.meta?.changes ?? 0) > 0
   },
+  async claimCompletion(id, now, until) {
+    const changed = (await db
+      .update(uploads)
+      .set({ state: 'completing', completingUntil: until })
+      .where(
+        and(
+          eq(uploads.id, id),
+          or(
+            eq(uploads.state, 'open'),
+            and(eq(uploads.state, 'completing'), lte(uploads.completingUntil, now)),
+          ),
+        ),
+      )
+      .run()) as { changes?: number; meta?: { changes?: number } }
+    return (changed.changes ?? changed.meta?.changes ?? 0) > 0
+  },
   async markCompleted(id, fileId) {
-    await db.update(uploads).set({ state: 'completed', fileId }).where(eq(uploads.id, id)).run()
+    await db
+      .update(uploads)
+      .set({ state: 'completed', fileId, completingUntil: null })
+      .where(eq(uploads.id, id))
+      .run()
   },
   async delete(id) {
     await db.delete(uploads).where(eq(uploads.id, id)).run()

@@ -57,10 +57,10 @@ export const drizzleFileIndex = (db: BaseSQLiteDatabase<'sync' | 'async', unknow
     const changed = (await db
       .update(files)
       .set({
-        thumbnailVersion: thumbnail.version,
-        thumbnailBlobKey: thumbnail.blobKey,
-        thumbnailContentType: thumbnail.contentType,
-        thumbnailSize: thumbnail.size,
+        thumbnailVersion: thumbnail?.version ?? 0,
+        thumbnailBlobKey: thumbnail?.blobKey ?? null,
+        thumbnailContentType: thumbnail?.contentType ?? null,
+        thumbnailSize: thumbnail?.size ?? null,
       })
       .where(and(eq(files.id, id), eq(files.thumbnailVersion, expectedVersion)))
       .run()) as { changes?: number; meta?: { changes?: number } }

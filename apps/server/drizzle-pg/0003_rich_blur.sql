@@ -1,0 +1,1 @@
+ALTER TABLE "uploads" ADD COLUMN "completing_until" timestamp with time zone;

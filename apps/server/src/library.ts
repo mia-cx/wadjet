@@ -62,6 +62,8 @@ export interface LibraryLimits {
 
 const UPLOAD_TTL_MS = 24 * 3600 * 1000
 const EXPIRE_SWEEP_LIMIT = 10
+/** How long an in-flight complete holds its lease before another can take over. */
+const COMPLETE_LEASE_MS = 5 * 60_000
 
 const FILENAME_EXTENSION = /\.([0-9A-Za-z]{1,10})$/
 
@@ -254,7 +256,26 @@ export const createLibrary = (deps: LibraryDeps) => {
           size,
         })
         if (!claimed) continue // another PUT took this version; re-read and retry
-        await deps.blobs.put(blobKey, body, size, contentType)
+        try {
+          await deps.blobs.put(blobKey, body, size, contentType)
+        } catch (error) {
+          // Roll the row back to the previous thumbnail so the current
+          // preview keeps serving; if another PUT already moved on, the
+          // conditional claim just loses — fine.
+          await deps.files.setThumbnail(
+            id,
+            version,
+            row.thumbnailVersion > 0 && row.thumbnailBlobKey !== null
+              ? {
+                  version: row.thumbnailVersion,
+                  blobKey: row.thumbnailBlobKey,
+                  contentType: row.thumbnailContentType!,
+                  size: row.thumbnailSize!,
+                }
+              : null,
+          )
+          throw error
+        }
         if (row.thumbnailVersion > 0) {
           // The row already points at the new version; cleanup of the old one
           // is best-effort — deletion sweeps every version regardless.
@@ -338,6 +359,7 @@ export const createLibrary = (deps: LibraryDeps) => {
           expiresAt: new Date(now.getTime() + UPLOAD_TTL_MS),
           state: 'open',
           fileId: null,
+          completingUntil: null,
         }
         try {
           const stored = await deps.uploads.insert(candidate)
@@ -366,7 +388,7 @@ export const createLibrary = (deps: LibraryDeps) => {
     ): Promise<typeof PartReceipt.Type> {
       const row = await liveUpload(id, owner)
       if (row.state !== 'open')
-        throw new ProtocolError(409, 'upload_incomplete', `Upload ${id} is already completed.`)
+        throw new ProtocolError(409, 'upload_incomplete', `Upload ${id} is not open.`)
       if (n < 1 || n > row.partCount)
         throw invalidRequest(`Part ${n} is outside 1..${row.partCount}.`)
       const expected =
@@ -395,8 +417,8 @@ export const createLibrary = (deps: LibraryDeps) => {
         if (!file || file.deletedAt) throw notFound(`No file ${row.fileId}.`)
         return { file: { ...toFile(file), deleteUrl: null }, created: false }
       }
-      // Open, or 'completed' with no fileId (a request died mid-completion):
-      // every step below is idempotent, so just run them again.
+      // Open, or a 'completing' lease that expired (a request died mid-
+      // completion): every step below is idempotent, so just run them again.
       const received = await deps.uploads.parts(id)
       const byNumber = new Map(received.map((part) => [part.number, part]))
       for (let n = 1; n <= row.partCount; n++) {
@@ -407,6 +429,17 @@ export const createLibrary = (deps: LibraryDeps) => {
             `Part ${n} of ${row.partCount} is missing.`,
           )
       }
+      // One completer at a time: the loser 409s and retries, a crashed
+      // completer's lease expires so the session never locks.
+      const now = deps.clock()
+      if (
+        !(await deps.uploads.claimCompletion(id, now, new Date(now.getTime() + COMPLETE_LEASE_MS)))
+      )
+        throw new ProtocolError(
+          409,
+          'upload_incomplete',
+          `Upload ${id} is still completing; retry shortly.`,
+        )
       const parts = received.map((part) => ({ number: part.number, etag: part.etag }))
       await deps.blobs.completeMultipart(row.blobKey, row.storageUploadId, parts)
       const prepared = await prepareFile(

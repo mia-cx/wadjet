@@ -46,8 +46,10 @@ export const uploads = sqliteTable(
     idempotencyKey: text('idempotency_key'),
     createdAt: integer('created_at', { mode: 'timestamp' }).notNull(),
     expiresAt: integer('expires_at', { mode: 'timestamp' }).notNull(),
-    state: text('state', { enum: ['open', 'completed', 'expired'] }).notNull(),
+    state: text('state', { enum: ['open', 'completing', 'completed', 'expired'] }).notNull(),
     fileId: text('file_id'),
+    /// Lease on an in-flight complete; a stale one can be taken over.
+    completingUntil: integer('completing_until', { mode: 'timestamp' }),
   },
   (table) => [uniqueIndex('uploads_owner_idempotency').on(table.owner, table.idempotencyKey)],
 )

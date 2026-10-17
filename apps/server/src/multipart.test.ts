@@ -1,5 +1,9 @@
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { memoryBlobStore } from './blob-store.ts'
+import { filesystemBlobStore } from './blob-store-fs.ts'
 import type { CachePurger } from './ports.ts'
 import { testApp, upload } from './test-helpers.ts'
 import { memoryUploadIndex, type UploadRow } from './upload-index.ts'
@@ -74,20 +78,17 @@ describe('multipart sessions', () => {
 
     const first = complete(app, id)
     for (let i = 0; i < 100 && calls === 0; i++) await new Promise((r) => setTimeout(r, 5))
-    const second = complete(app, id)
+    // While the first complete holds the lease, a second loses the claim.
+    const second = await complete(app, id)
+    expect(second.status).toBe(409)
 
     release()
-    const [a, b] = await Promise.all([first, second])
-    // One request wins the file insert and gets 201 + the delete token; the
-    // other reconciles to 200 with no deleteUrl. Exactly one file exists.
-    const statuses = [a.status, b.status].sort()
-    expect(statuses).toEqual([200, 201])
-    const bodies = [a, b].map(
-      async (r) => (await r.json()) as { id: string; deleteUrl: string | null },
-    )
-    const pairs = await Promise.all(bodies)
-    expect(pairs.filter((f) => f.deleteUrl !== null)).toHaveLength(1)
+    const a = await first
+    expect(a.status).toBe(201)
+    const won = (await a.json()) as { id: string; deleteUrl: string | null }
+    expect(won.deleteUrl).not.toBeNull()
 
+    // A later retry reads the finished row: 200 with no deleteUrl.
     const again = await complete(app, id)
     expect(again.status).toBe(200)
     const file = (await again.json()) as { id: string; deleteUrl: string | null }
@@ -98,10 +99,40 @@ describe('multipart sessions', () => {
     expect(((await list.json()) as { items: { id: string }[] }).items).toEqual([
       expect.objectContaining({ id }),
     ])
-    expect(calls).toBe(2) // both ran completeMultipart; the second was idempotent
+    expect(calls).toBe(1) // the lease blocked the second complete entirely
   })
 
-  it('a session left completed-without-fileId finishes on retry', async () => {
+  it('overlapping completes on a filesystem blob store get one lease', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'wadjet-blobs-'))
+    try {
+      const blobs = filesystemBlobStore(dir)
+      let release!: () => void
+      const gate = new Promise<void>((resolve) => (release = resolve))
+      const inner = blobs.completeMultipart.bind(blobs)
+      let calls = 0
+      blobs.completeMultipart = async (key, uploadId, parts) => {
+        if (++calls === 1) await gate
+        return inner(key, uploadId, parts)
+      }
+      const { app } = testApp({ blobs })
+
+      const started = await startUpload(app, 3)
+      const { id } = (await started.json()) as { id: string }
+      await putPart(app, id, 1, new Uint8Array([1, 2, 3]))
+
+      const first = complete(app, id)
+      for (let i = 0; i < 100 && calls === 0; i++) await new Promise((r) => setTimeout(r, 5))
+      const second = await complete(app, id)
+      expect(second.status).toBe(409)
+      release()
+      expect((await first).status).toBe(201)
+      expect(calls).toBe(1) // filesystem complete never ran in parallel
+    } finally {
+      rmSync(dir, { recursive: true, force: true })
+    }
+  })
+
+  it("a crashed completer's stale lease is taken over", async () => {
     const uploads = memoryUploadIndex()
     const blobs = memoryBlobStore()
     const { app } = testApp({ uploads, blobs })
@@ -110,15 +141,43 @@ describe('multipart sessions', () => {
     const { id } = (await started.json()) as { id: string }
     await putPart(app, id, 1, new Uint8Array([1, 2, 3]))
 
-    // A request crashed between completeMultipart and markCompleted.
+    // A request died mid-completion and left its (now-lapsed) lease behind.
     const row = (await uploads.get(id))!
-    const crashed: UploadRow = { ...row, state: 'completed', fileId: null }
+    const crashed: UploadRow = {
+      ...row,
+      state: 'completing',
+      completingUntil: new Date(Date.parse('2026-10-16T11:59:00Z')),
+    }
     await uploads.delete(id)
     await uploads.insert(crashed)
     await uploads.putPart(id, { number: 1, size: 3, etag: 'e' })
 
     const done = await complete(app, id)
     expect(done.status).toBe(201)
+  })
+
+  it('a completer holding a live lease answers 409', async () => {
+    const uploads = memoryUploadIndex()
+    const { app } = testApp({ uploads })
+
+    const started = await startUpload(app, 3)
+    const { id } = (await started.json()) as { id: string }
+    await putPart(app, id, 1, new Uint8Array([1, 2, 3]))
+
+    const row = (await uploads.get(id))!
+    const held: UploadRow = {
+      ...row,
+      state: 'completing',
+      completingUntil: new Date(Date.parse('2026-10-16T12:04:00Z')),
+    }
+    await uploads.delete(id)
+    await uploads.insert(held)
+    await uploads.putPart(id, { number: 1, size: 3, etag: 'e' })
+
+    const done = await complete(app, id)
+    expect(done.status).toBe(409)
+    const err = (await done.json()) as { error: { message: string } }
+    expect(err.error.message).toContain('still completing')
   })
 
   it('a markCompleted failure retries to 200, not a duplicate-id 500', async () => {
@@ -129,7 +188,8 @@ describe('multipart sessions', () => {
       if (++calls === 1) throw new Error('injected markCompleted failure')
       return inner(id, fileId)
     }
-    const { app } = testApp({ uploads })
+    let now = new Date('2026-10-16T12:00:00Z')
+    const { app } = testApp({ uploads, clock: () => now })
 
     const started = await startUpload(app, 3)
     const { id } = (await started.json()) as { id: string }
@@ -137,6 +197,9 @@ describe('multipart sessions', () => {
 
     const first = await complete(app, id)
     expect(first.status).toBe(500) // file row exists; only the session update failed
+    // Its lease still holds: an immediate retry 409s until it lapses.
+    expect((await complete(app, id)).status).toBe(409)
+    now = new Date(now.getTime() + 6 * 60_000) // past the 5 min lease
 
     const retry = await complete(app, id)
     expect(retry.status).toBe(200)
@@ -321,6 +384,45 @@ describe('thumbnails', () => {
     ])
     expect(await blobs.get(`thumbnails/${id}-v1`)).toBeUndefined()
     expect(await blobs.get(`thumbnails/${id}-v2`)).toBeUndefined()
+  })
+
+  it('a failed thumbnail write keeps the current version serving', async () => {
+    const blobs = memoryBlobStore()
+    const inner = blobs.put.bind(blobs)
+    let fail = true
+    blobs.put = async (key, body, length, contentType) => {
+      if (key.startsWith('thumbnails/') && fail) throw new Error('injected put failure')
+      return inner(key, body, length, contentType)
+    }
+    const { app } = testApp({ blobs })
+
+    const uploaded = await upload(app, { body: new Uint8Array([1, 2, 3]) })
+    const { id } = (await uploaded.json()) as { id: string }
+
+    fail = false
+    expect((await putThumbnail(app, id, new Uint8Array([1, 1, 1]))).status).toBe(200)
+    fail = true
+    const failed = await putThumbnail(app, id, new Uint8Array([2, 2, 2]), 'image/png')
+    expect(failed.status).toBe(500)
+
+    // The row rolled back to v1: list still shows it and it serves v1's bytes.
+    const list = await app.request('/v1/files', { headers: AUTH })
+    const items = ((await list.json()) as { items: { thumbnailUrl: string }[] }).items
+    expect(items[0]?.thumbnailUrl).toBe(`https://w.mia.cx/t/${id}?v=1`)
+    const v1 = await app.request(`/t/${id}?v=1`)
+    expect(v1.status).toBe(200)
+    expect(new Uint8Array(await v1.arrayBuffer())).toEqual(new Uint8Array([1, 1, 1]))
+  })
+
+  it('a claimed-but-unwritten thumbnail 404s, not 500s', async () => {
+    const { app, blobs } = testApp()
+    const uploaded = await upload(app, { body: new Uint8Array([9, 9, 9]) })
+    const { id } = (await uploaded.json()) as { id: string }
+    expect((await putThumbnail(app, id, new Uint8Array([7]))).status).toBe(200)
+    // The claim/put window, as if the blob never landed.
+    await blobs.delete(`thumbnails/${id}-v1`)
+    const missing = await app.request(`/t/${id}?v=1`)
+    expect(missing.status).toBe(404)
   })
 
   it('overlapping thumbnail PUTs each get their own version', async () => {

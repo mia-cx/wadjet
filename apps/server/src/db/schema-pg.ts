@@ -62,8 +62,10 @@ export const uploads = pgTable(
     idempotencyKey: text('idempotency_key'),
     createdAt: timestamp('created_at', { withTimezone: true, mode: 'date' }).notNull(),
     expiresAt: timestamp('expires_at', { withTimezone: true, mode: 'date' }).notNull(),
-    state: text('state', { enum: ['open', 'completed', 'expired'] }).notNull(),
+    state: text('state', { enum: ['open', 'completing', 'completed', 'expired'] }).notNull(),
     fileId: collatedText('file_id'),
+    /// Lease on an in-flight complete; a stale one can be taken over.
+    completingUntil: timestamp('completing_until', { withTimezone: true, mode: 'date' }),
   },
   (table) => [uniqueIndex('uploads_owner_idempotency').on(table.owner, table.idempotencyKey)],
 )

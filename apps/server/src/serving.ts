@@ -133,6 +133,8 @@ export const serveThumbnail = async (
     headers['Content-Range'] = `bytes ${slice.offset}-${slice.offset + slice.length - 1}/${size}`
   if (method === 'HEAD') return { status, headers, body: null }
   const body = await deps.blobs.get(row.thumbnailBlobKey!, range ?? undefined)
-  if (!body) throw new Error(`Blob ${row.thumbnailBlobKey} is missing`)
+  // A claim-then-put write can leave the row ahead of its blob briefly; the
+  // version isn't here (yet), which is a 404 — and 404s aren't edge-cached.
+  if (!body) throw notFound(`No thumbnail v${row.thumbnailVersion} for ${id}.`)
   return { status, headers, body }
 }

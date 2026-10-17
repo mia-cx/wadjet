@@ -18,6 +18,7 @@ const row = (id: string, extra: Partial<UploadRow> = {}): UploadRow => ({
   expiresAt: new Date('2026-10-17T12:00:00Z'),
   state: 'open',
   fileId: null,
+  completingUntil: null,
   ...extra,
 })
 
@@ -73,6 +74,28 @@ export const uploadIndexContract = (
       expect((await uploads.expired(now, 10)).map((r) => r.id)).toEqual([])
       expect((await uploads.get('bbbb02'))?.state).toBe('completed')
       expect((await uploads.get('cccc03'))?.state).toBe('open')
+    })
+
+    it('claimCompletion is exclusive until its lease lapses', async () => {
+      const uploads = await index()
+      await uploads.insert(row('aaaa01'))
+      const t0 = new Date('2026-10-16T12:00:00Z')
+      const lease = new Date(t0.getTime() + 5 * 60_000)
+      // The first claim wins; while it holds, a second can't take it.
+      expect(await uploads.claimCompletion('aaaa01', t0, lease)).toBe(true)
+      expect((await uploads.get('aaaa01'))?.state).toBe('completing')
+      expect(await uploads.claimCompletion('aaaa01', t0, lease)).toBe(false)
+      // After the lease lapses, a stalled completer can be taken over.
+      const later = new Date(lease.getTime() + 1)
+      expect(await uploads.claimCompletion('aaaa01', later, new Date(later.getTime() + 1))).toBe(
+        true,
+      )
+      // markCompleted releases the lease: the row is completed again.
+      await uploads.markCompleted('aaaa01', 'file1')
+      const done = await uploads.get('aaaa01')
+      expect(done?.state).toBe('completed')
+      expect(done?.completingUntil).toBeNull()
+      expect(await uploads.claimCompletion('aaaa01', later, lease)).toBe(false)
     })
 
     it('delete removes the row and its parts', async () => {
