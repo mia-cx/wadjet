@@ -2077,9 +2077,9 @@ struct ToolbarView: View {
     var earW: CGFloat { recording ? 48 : 28 }
     // A fake island sizes like the notched one: the notch-width formula with
     // a 185 pt stand-in notch on displays that don't have one.
-    var islandW: CGFloat { (hasNotch ? max(126, notchW) : 185) + 2 * earW }
+    var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (recording ? 120 : 100) }
     var islandH: CGFloat { max(22, barH) }
-    var gap: CGFloat { hasNotch ? 0 : 2 }
+    var gap: CGFloat { hasNotch ? 0 : 3 }
     var pillH: CGFloat { islandH - 2 * gap }
     // expanded toolbar: 9 big circular glass buttons in three groups. The shape
     // is sized from the *measured* row — never a hand-coded width — so the
@@ -2221,8 +2221,9 @@ struct ToolbarView: View {
                 Image(systemName: (s.tool ?? .capRegion).symbol)
                     .resizable().scaledToFit()
                     .frame(width: min(pillH * 0.45, pillH - 14), height: min(pillH * 0.45, pillH - 14))
-                    .frame(width: islandSlot, height: pillH)
+                    // on the glyph's own frame, so size and position both travel
                     .matchedGeometryEffect(id: "selectedIcon", in: ns, isSource: !expanded)
+                    .frame(width: islandSlot, height: pillH)
             }
             Spacer(minLength: 0)
             if recording {
@@ -2230,7 +2231,7 @@ struct ToolbarView: View {
                 // edge exactly like the leading dot's edge
                 Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
                     .fixedSize()
-                    .padding(.trailing, hasNotch ? (earW - 30) / 2 : pillH / 2 - 4)
+                    .padding(.trailing, (islandSlot - 8) / 2) // = the dot's leading edge inset
                     .frame(height: pillH)
             }
         }
