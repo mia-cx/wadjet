@@ -22,11 +22,12 @@ public struct RecordingTimeline: Sendable {
         pauseStart = t
     }
 
-    /// End the current pause; the stretch gets added to the offset. A resume
-    /// without a pause is a no-op.
+    /// End the current pause; the stretch gets added to the offset — but only
+    /// once recording has begun. A pause that ends before the first sample
+    /// just delayed the epoch and contributes nothing.
     public mutating func resume(at t: CMTime) {
         guard let start = pauseStart else { return }
-        if t > start { pausedTotal = pausedTotal + (t - start) }
+        if origin != nil, t > start { pausedTotal = pausedTotal + (t - start) }
         pauseStart = nil
     }
 

@@ -2,6 +2,7 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import ScreenCaptureKit
 import Testing
 import WadjetKit
 
@@ -37,6 +38,8 @@ private func run(_ events: [Ev]) -> [Double?] {
      [0.0, 1.1, 2.2] as [Double?]),
     // pause before the first sample just delays the epoch
     ([.pause(0), .resume(10), .sample(20)], [0.0] as [Double?]),
+    // ...and the stretch it held contributes nothing to later samples
+    ([.pause(0), .resume(10), .sample(20), .sample(20.1)], [0.0, 0.1] as [Double?]),
     // double pause / resume without pause / samples at the boundary drop
     ([.sample(0), .pause(1), .pause(1.5), .resume(2), .resume(2.1), .sample(2.1), .sample(2.1), .sample(2.2)],
      [0.0, 1.1, nil, 1.2] as [Double?]),
@@ -73,6 +76,50 @@ func endTime(_ events: [Ev], _ stopAt: Double, _ expected: Double?) {
     let got = tl.endTime(at: CMTime(seconds: stopAt, preferredTimescale: 600))?.seconds
     if let got, let expected { #expect(abs(got - expected) < 0.001) }
     else { #expect(got == nil && expected == nil) }
+}
+
+@Test("endTime after a pre-epoch pause stays unshifted")
+func endTimeAfterPreEpochPause() {
+    var tl = RecordingTimeline()
+    tl.pause(at: CMTime(seconds: 0, preferredTimescale: 600))
+    tl.resume(at: CMTime(seconds: 10, preferredTimescale: 600))
+    _ = tl.outputTime(for: CMTime(seconds: 20, preferredTimescale: 600))
+    let end = tl.endTime(at: CMTime(seconds: 30, preferredTimescale: 600))
+    #expect(end != nil && abs(end!.seconds - 10.0) < 0.001)
+}
+
+private func sampleBuffer(withStatus status: Int?) throws -> CMSampleBuffer {
+    let pb = try makePixelBuffer(32, 32, seed: 1)
+    var sb: CMSampleBuffer?
+    var info = CMSampleTimingInfo(
+        duration: .invalid,
+        presentationTimeStamp: CMTime(seconds: 0, preferredTimescale: 600),
+        decodeTimeStamp: .invalid)
+    var fmt: CMVideoFormatDescription?
+    CMVideoFormatDescriptionCreateForImageBuffer(
+        allocator: kCFAllocatorDefault, imageBuffer: pb, formatDescriptionOut: &fmt)
+    guard CMSampleBufferCreateForImageBuffer(
+        allocator: kCFAllocatorDefault, imageBuffer: pb, dataReady: true,
+        makeDataReadyCallback: nil, refcon: nil, formatDescription: fmt!,
+        sampleTiming: &info, sampleBufferOut: &sb) == noErr, let sb
+    else { throw NSError(domain: "test", code: 2) }
+    guard CMSampleBufferGetNumSamples(sb) > 0 else { throw NSError(domain: "test", code: 3) }
+    if let status, let arr = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: true),
+       CFArrayGetCount(arr) > 0, let dict = CFArrayGetValueAtIndex(arr, 0) {
+        let d2 = unsafeBitCast(dict, to: CFMutableDictionary.self)
+        CFDictionarySetValue(
+            d2,
+            Unmanaged.passRetained(SCStreamFrameInfo.status.rawValue as CFString).autorelease().toOpaque(),
+            Unmanaged.passRetained(NSNumber(value: status)).autorelease().toOpaque())
+    }
+    return sb
+}
+
+@Test("isCompleteScreenFrame only accepts complete, imaged frames")
+func frameStatus() throws {
+    #expect(isCompleteScreenFrame(try sampleBuffer(withStatus: SCFrameStatus.complete.rawValue)))
+    #expect(!isCompleteScreenFrame(try sampleBuffer(withStatus: SCFrameStatus.idle.rawValue)))
+    #expect(!isCompleteScreenFrame(try sampleBuffer(withStatus: nil)))
 }
 
 // MARK: - MP4Writer

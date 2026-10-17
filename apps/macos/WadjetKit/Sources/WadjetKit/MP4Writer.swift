@@ -2,6 +2,17 @@ import AVFoundation
 import CoreMedia
 import CoreVideo
 import Foundation
+import ScreenCaptureKit
+
+/// A `.screen` sample buffer worth writing: a fully-rendered frame with an
+/// image buffer. Idle/blank/suspended buffers carry no new pixels.
+public func isCompleteScreenFrame(_ sb: CMSampleBuffer) -> Bool {
+    guard let attachments = CMSampleBufferGetSampleAttachmentsArray(sb, createIfNecessary: false)
+        as? [[SCStreamFrameInfo: Any]],
+        (attachments.first?[.status] as? Int) == SCFrameStatus.complete.rawValue
+    else { return false }
+    return CMSampleBufferGetImageBuffer(sb) != nil
+}
 
 public enum MP4WriterError: LocalizedError {
     case cannotAddInput, writerFailed(Error?), noFrames
@@ -70,6 +81,16 @@ public final class MP4Writer: @unchecked Sendable {
 
     public func pause(at t: CMTime) { q.sync { timeline.pause(at: t) } }
     public func resume(at t: CMTime) { q.sync { timeline.resume(at: t) } }
+
+    /// Abandon the recording without finishing: cancels the writer and deletes
+    /// its temp file. For a start that was cancelled while the stream warmed up.
+    public func cancel() {
+        q.sync {
+            finished = true
+            writer.cancelWriting()
+        }
+        try? FileManager.default.removeItem(at: writer.outputURL)
+    }
 
     /// Close the writer and return the finished file's URL. `hostTime` is the
     /// stop moment: SCK only sends frames when the screen changes, so the

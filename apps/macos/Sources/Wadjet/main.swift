@@ -271,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     var recStream: SCStream?
     var recWriter: MP4Writer?
     var recOutput: RecOutput?
+    let recDelegate = RecDelegate()
     /// The stream's frame queue — SCStream calls back here, the actor serializes writes.
     let recQueue = DispatchQueue(label: "wadjet.recstream")
 
@@ -722,17 +723,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
             return
         }
-        runCapture(file: file, kind: .screenshot, label: label)
-    }
-    /// Run a finished capture file through the Tool's Workflow, record it in
-    /// history, and finish any showToast items the run spawned.
-    func runCapture(file: URL, kind: CaptureKind, label: String) {
-        defer { AppState.shared.triggerWorkflow = nil } // the Shortcut's pick is one-shot
         let state = AppState.shared
-        let chosen = state.workflowFor(state.tool)
-            ?? (kind.isRecording ? state.config.value.defaultWorkflows.recording
-                                 : state.config.value.defaultWorkflows.screenshot)
-        let wf = state.config.value.workflows.first { $0.name == chosen && $0.takes == kind }
+        let workflow = state.workflowFor(state.tool) ?? state.config.value.defaultWorkflows.screenshot
+        state.triggerWorkflow = nil // the Shortcut's pick is one-shot; consumed
+        runCapture(file: file, kind: .screenshot, label: label, workflow: workflow)
+    }
+    /// Run a finished capture file through `workflow` (resolved by the caller
+    /// at capture time), record it in history, and finish any showToast items.
+    func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String) {
+        let state = AppState.shared
+        let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
             ?? WadjetConfig().workflows.first { $0.takes == kind }!
         let defaultFolder = expandingTilde(kind.isRecording
             ? state.config.value.folders.recordings
@@ -793,17 +793,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: recording
 
+    /// The system can kill the stream (another capture client, the display
+    /// sleeping): finish what's already on disk through the normal path.
+    final class RecDelegate: NSObject, SCStreamDelegate, @unchecked Sendable {
+        func stream(_ stream: SCStream, didStopWithError error: Error) {
+            // The stream itself isn't Sendable; its identity is what matters.
+            let id = ObjectIdentifier(stream), reason = error.localizedDescription
+            Task { @MainActor in
+                AppDelegate.shared?.streamStopped(id, reason: reason)
+            }
+        }
+    }
+
     /// The frames ScreenCaptureKit hands us go straight to the MP4 writer on
     /// its own queue; the timeline drops paused frames.
     final class RecOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         let writer: MP4Writer
         init(writer: MP4Writer) { self.writer = writer }
         func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
-            guard type == .screen,
-                  (sb.attachments[SCStreamFrameInfo.status.rawValue]?.value as? Int) == SCFrameStatus.complete.rawValue,
+            guard type == .screen, isCompleteScreenFrame(sb),
                   let pb = CMSampleBufferGetImageBuffer(sb) else { return }
-            let pts = CMSampleBufferGetPresentationTimeStamp(sb)
-            writer.append(pb, at: pts)
+            writer.append(pb, at: CMSampleBufferGetPresentationTimeStamp(sb))
         }
     }
 
@@ -822,8 +832,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // wadjet's own panels (border, island, toasts) never appear in the video
         let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-        if s.tool == .recWindow, let id = recordingWindowID,
-           let win = overlayCtrl.scWindows[id] {
+        if s.tool == .recWindow {
+            // Resolve against fresh content: overlayCtrl's map is from Freeze
+            // time, and a Record Window that can't find its window must never
+            // fall back to capturing the whole display.
+            guard let id = recordingWindowID,
+                  let win = content.windows.first(where: { $0.windowID == id }) else {
+                AppLog.line("record: window \(recordingWindowID.map(String.init) ?? "?") is gone")
+                return nil
+            }
             let sc = f.screen.backingScaleFactor
             return (SCContentFilter(desktopIndependentWindow: win),
                     CGSize(width: win.frame.width * sc, height: win.frame.height * sc),
@@ -955,10 +972,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !sourceRect.isNull { conf.sourceRect = sourceRect }
         do {
             let writer = try MP4Writer(url: file, width: conf.width, height: conf.height, fps: cfg.recording.fps)
-            let stream = SCStream(filter: filter, configuration: conf, delegate: nil)
+            let stream = SCStream(filter: filter, configuration: conf, delegate: recDelegate)
             let output = RecOutput(writer: writer)
             try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: recQueue)
             try await stream.startCapture()
+            // An Esc during startup cancelled this; don't start recording.
+            guard s.phase == .countdown else {
+                try? await stream.stopCapture()
+                writer.cancel()
+                return
+            }
             recStream = stream; recWriter = writer; recOutput = output
             s.phase = .recording; self.recStart = Date()
             AppLog.line("phase=recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
@@ -1017,17 +1040,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         statusItem.button?.title = ""; statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
         rebuildMenu()
         overlayCtrl.closeAllPanelsOnly()
+        // The Workflow is decided now — a Shortcut fired while this finishes
+        // must not reach back and change it.
+        let workflow = s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.recording
+        s.triggerWorkflow = nil // consumed now, whatever fires later starts fresh
         Task { @MainActor in
             guard let writer else { return }
+            do { try await stream?.stopCapture() }
+            catch { AppLog.line("record: stopCapture failed (finishing anyway): \(error.localizedDescription)") }
             do {
-                try await stream?.stopCapture()
                 let file = try await writer.finish(at: stoppedAt)
-                runCapture(file: file, kind: .mp4, label: label)
+                runCapture(file: file, kind: .mp4, label: label, workflow: workflow)
             } catch {
                 AppLog.line("record: finish failed: \(error.localizedDescription)")
                 errorToast("Recording was lost", error.localizedDescription)
             }
         }
+    }
+
+    /// The stream died under us: finish the partial recording the same way a
+    /// Stop press does, and surface the reason. A stale callback from an
+    /// earlier stream does nothing.
+    func streamStopped(_ id: ObjectIdentifier, reason: String) {
+        guard let stream = recStream, ObjectIdentifier(stream) == id,
+              AppState.shared.phase == .recording else { return }
+        AppLog.line("record: stream stopped: \(reason)")
+        errorToast("Recording stopped", reason)
+        stopRecording()
     }
     func fmtT(_ t: TimeInterval) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
 
