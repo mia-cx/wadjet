@@ -19,6 +19,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     public var bookmarks: [String: Data] = [:]
     /// Days before temporary Capture files are swept; their history entries stay.
     public var retentionDays = 7
+    public var recording = Recording()
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -33,6 +34,13 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     public struct Tools: Codable, Equatable, Sendable { public var pickColour = PickColour(); public var measure = Measure(); public init() {} }
     public struct PickColour: Codable, Equatable, Sendable { public var format = ColourFormat.hex; public init() {} }
     public struct Measure: Codable, Equatable, Sendable { public var mode = MeasureMode.spacing; public init() {} }
+    /// Video capture shape: `resolution` is the longest output edge in pixels
+    /// (the source is never upscaled, only scaled down), `fps` the frame rate.
+    public struct Recording: Codable, Equatable, Sendable {
+        public var resolution = 1920
+        public var fps = 30
+        public init() {}
+    }
 
     /// Custom so missing keys still fall back to defaults and cross-references
     /// (Shortcut.workflow, defaultWorkflows) validate against `workflows`.
@@ -45,6 +53,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         defaultWorkflows = try c.decodeIfPresent(DefaultWorkflows.self, forKey: .defaultWorkflows) ?? DefaultWorkflows()
         bookmarks = try c.decodeIfPresent([String: Data].self, forKey: .bookmarks) ?? [:]
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 7
+        recording = try c.decodeIfPresent(Recording.self, forKey: .recording) ?? Recording()
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -68,6 +77,12 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         if retentionDays < 1 {
             try bad("retentionDays must be at least 1", path: [CodingKeys.retentionDays])
         }
+        if recording.resolution < 2 {
+            try bad("recording.resolution must be at least 2", path: [CodingKeys.recording, CodingKeys.resolution])
+        }
+        if !(1...120).contains(recording.fps) {
+            try bad("recording.fps must be 1...120", path: [CodingKeys.recording, CodingKeys.fps])
+        }
         try lookup(defaultWorkflows.screenshot, recording: false, path: [CodingKeys.defaultWorkflows, CodingKeys.screenshot])
         try lookup(defaultWorkflows.recording, recording: true, path: [CodingKeys.defaultWorkflows, CodingKeys.recording])
     }
@@ -87,9 +102,10 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(defaultWorkflows, forKey: .defaultWorkflows)
         try c.encode(bookmarks, forKey: .bookmarks)
         try c.encode(retentionDays, forKey: .retentionDays)
+        try c.encode(recording, forKey: .recording)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, workflow, screenshot, recording
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
