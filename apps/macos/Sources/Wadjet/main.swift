@@ -53,7 +53,7 @@ extension Color {
     static let wadjetAccent = Color(red: 0.20, green: 0.84, blue: 0.58)
 }
 
-let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under it
+// nothing — lensZoom removed: the shader lens replaces magnification
 let dimAlpha: CGFloat = 0.4  // Freeze Frame dim outside the capture target
 let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used until the window's own corner is measured
 
@@ -2319,6 +2319,15 @@ struct ToolbarView: View {
     @State var holdTask: Task<Void, Never>?
     @State var hoverInside = false
     var lensActive: Bool { pressing || dragging }
+    /// with the clear-glass patch the Metal lens layer owns the pressed look —
+    /// the in-row accent/cut-out lens pieces must not draw under it
+    var shaderLensActive: Bool {
+        #if CLEAR_GLASS_PATCH
+        return lensActive
+        #else
+        return false
+        #endif
+    }
 
     func openToolMenu(_ t: Tool) {
         guard t.hasMenu else { return }
@@ -2380,7 +2389,10 @@ struct ToolbarView: View {
                     .frame(width: panelW, height: panelH)
                     .blur(radius: 6)
             }
+            // measured: inside-lens bar read ~13,13,13 vs the real glass
+            // ~31,33,33 — a faint white lift matches them
             shape.fill(Color.black.opacity(0.4))
+                .overlay { shape.fill(Color.white.opacity(0.07)) }
                 .frame(width: shapeW, height: shapeH)
                 .padding(.top, shapeTop)
             ZStack {
@@ -2395,33 +2407,14 @@ struct ToolbarView: View {
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
-    /// lensSource refracted through the shader, masked to the lens capsule —
-    /// overlays the bar so it can overhang its edges
+    /// lensSource refracted through the shader — all lens drawing runs
+    /// through LensEffect so the mask, rim and SDF share the same
+    /// interpolated values every frame (shader args don't animate on
+    /// their own — the mask would run ahead of them during the springs)
     var lensLayer: some View {
         lensSource
-            .layerEffect(
-                ShaderLibrary.lens(.float2(lensCentre.x, lensCentre.y),
-                                   .float2(lensW, lensH),
-                                   .float2(stretchX, stretchY), .float(1.0)),
-                maxSampleOffset: CGSize(width: 64, height: 64))
-            .mask {
-                Capsule().frame(width: lensW + 2, height: lensH + 2)
-                    .scaleEffect(x: stretchX, y: stretchY)
-                    .position(lensCentre)
-            }
-            // the lens's own body and fresnel rim, independent of what it
-            // samples — so it reads as glass even where it overhangs the bar
-            .overlay {
-                Capsule()
-                    .fill(.white.opacity(0.05))
-                    .overlay(Capsule().strokeBorder(
-                        LinearGradient(colors: [.white.opacity(0.7), .white.opacity(0.08), .white.opacity(0.45)],
-                                       startPoint: .top, endPoint: .bottom),
-                        lineWidth: 1.2))
-                    .frame(width: lensW, height: lensH)
-                    .scaleEffect(x: stretchX, y: stretchY)
-                    .position(lensCentre)
-            }
+            .modifier(LensEffect(centre: lensCentre, size: lensSize,
+                                 stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
             .allowsHitTesting(false)
@@ -2460,7 +2453,8 @@ struct ToolbarView: View {
             .mask {
                 ZStack {
                     Rectangle()
-                    selShape.offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
+                    selShape.opacity(shaderLensActive ? 0 : 1)
+                        .offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
                 }
                 .compositingGroup()
             }
@@ -2525,11 +2519,8 @@ struct ToolbarView: View {
                     ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
                 }
                 .padding(.horizontal, d + (selW - toolD) / 2)
-                // magnified about the lens centre, so only what's inside the lens looks bigger
-                .scaleEffect(lensActive ? lensZoom : 1, anchor: rowSize.width > 0
-                             ? UnitPoint(x: blobX / rowSize.width, y: blobY / rowSize.height) : .center)
             }
-            .mask(selShape.position(x: blobX, y: blobY))
+            .mask(selShape.opacity(shaderLensActive ? 0 : 1).position(x: blobX, y: blobY))
             .foregroundStyle(Color.wadjetAccent)
             .allowsHitTesting(false)
         }
@@ -2640,6 +2631,53 @@ struct ToolbarView: View {
         .padding(.top, contentTop)
     }
 }
+
+#if CLEAR_GLASS_PATCH
+/// The pressed-lens effect as one animatable unit: shader, capsule mask and
+/// glass body/rim all read the same interpolated centre/size/stretch.
+struct LensEffect: ViewModifier, @preconcurrency Animatable {
+    var centre: CGPoint
+    var size: CGSize
+    var stretch: CGSize
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
+                                      AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
+                                                      AnimatablePair<CGFloat, CGFloat>>> {
+        get { .init(.init(centre.x, centre.y),
+                    .init(.init(size.width, size.height), .init(stretch.width, stretch.height))) }
+        set {
+            centre = CGPoint(x: newValue.first.first, y: newValue.first.second)
+            size = CGSize(width: newValue.second.first.first, height: newValue.second.first.second)
+            stretch = CGSize(width: newValue.second.second.first, height: newValue.second.second.second)
+        }
+    }
+    func body(content: Content) -> some View {
+        content
+            .layerEffect(
+                ShaderLibrary.lens(.float2(centre.x, centre.y),
+                                   .float2(size.width, size.height),
+                                   .float2(stretch.width, stretch.height), .float(1.0)),
+                maxSampleOffset: CGSize(width: 64, height: 64))
+            .mask {
+                Capsule().frame(width: size.width + 2, height: size.height + 2)
+                    .scaleEffect(x: stretch.width, y: stretch.height)
+                    .position(centre)
+            }
+            // the lens's own body and fresnel rim, independent of what it
+            // samples — so it reads as glass even where it overhangs the bar
+            .overlay {
+                Capsule()
+                    .fill(.white.opacity(0.05))
+                    .overlay(Capsule().strokeBorder(
+                        LinearGradient(colors: [.white.opacity(0.7), .white.opacity(0.08), .white.opacity(0.45)],
+                                       startPoint: .top, endPoint: .bottom),
+                        lineWidth: 1.2))
+                    .frame(width: size.width, height: size.height)
+                    .scaleEffect(x: stretch.width, y: stretch.height)
+                    .position(centre)
+            }
+    }
+}
+#endif
 
 // catches right-clicks without blocking left ones — the view only claims the
 // hit while a rightMouseDown is being dispatched
