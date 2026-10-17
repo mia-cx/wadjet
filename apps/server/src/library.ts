@@ -155,7 +155,6 @@ export const createLibrary = (deps: LibraryDeps) => {
       // and any failure below leaves the tombstone for a retried DELETE to finish.
       if (!row.deletedAt) await deps.files.markDeleted(id, deps.clock())
       await deps.purger.purge([fileUrl(row)]) // #51 adds the thumbnail URL
-      // Blob last: a failure here leaves an unreachable blob, never a row that 500s.
       await deps.blobs.delete(row.blobKey)
       await deps.files.delete(id)
     },
