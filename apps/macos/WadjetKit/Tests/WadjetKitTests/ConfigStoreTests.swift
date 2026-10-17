@@ -93,6 +93,30 @@ struct ConfigStoreTests {
         #expect(store.value.tools.measure.mode == .vertical) // in-memory change still applies
     }
 
+    // the initial load normalizes: a file missing newer keys gains them
+    @Test func firstLoadAddsMissingKeys() throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"tools":{"pickColour":{"format":"lab()"}}}"#.utf8).write(to: url)
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        let obj = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String: Any]
+        #expect(obj?["folders"] != nil)
+        #expect(obj?["workflows"] != nil)
+        #expect((obj?["tools"] as? [String: Any])?["pickColour"] != nil) // her values kept
+    }
+
+    // once running, a live edit is never rewritten — odd formatting stays
+    @Test func liveEditKeepsItsBytes() async throws {
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"folders":{}}"#.utf8).write(to: url)
+        let store = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        let written = Data(#"{ "tools" : { "measure" : { "mode" : "Vertical" } } }"#.utf8)
+        try written.write(to: url, options: .atomic)
+        #expect(await eventually { store.value.tools.measure.mode == .vertical })
+        #expect(try Data(contentsOf: url) == written) // the file she just saved is untouched
+    }
+
     @Test func plaintextSecretLeavesForTheKeychain() throws {
         struct Vault: Codable, Equatable, Sendable { var token: Secret? = nil }
         let url = tempFile()

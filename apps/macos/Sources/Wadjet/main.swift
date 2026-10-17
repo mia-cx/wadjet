@@ -323,8 +323,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
-        case "steperror" where parts.count > 1:
-            AppLog.line("cmd: steperror removed (real Step errors exist now)")
         case "stop": if s.phase == .recording { stopRecording() }
         case "pause": if s.phase == .recording { togglePause() }
         case "esc": handleEsc()
@@ -482,8 +480,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         let img = thumb!
         // HEIC with an ISO gain map when the display gave HDR pixels, else PNG
-        let bytes = heicData(img) ?? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
-        let ext = heicData(img) != nil ? "heic" : "png"
+        let heic = heicData(img)
+        let bytes = heic ?? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
+        let ext = heic != nil ? "heic" : "png"
         guard let bytes, let file = try? captureFiles.newFile(ext: ext) else {
             AppLog.line("capture: could not name/write temp file")
             return
@@ -2138,6 +2137,8 @@ final class AppWorkflowEffects: WorkflowEffects {
         } else if let img = NSImage(contentsOf: file) {
             pb.writeObjects([img as NSPasteboardWriting])
             AppState.shared.lastClipboard = "<image \(file.lastPathComponent)>"
+        } else {
+            throw NSError(domain: "wadjet", code: 1, userInfo: [NSLocalizedDescriptionKey: "couldn't read the image"])
         }
     }
 

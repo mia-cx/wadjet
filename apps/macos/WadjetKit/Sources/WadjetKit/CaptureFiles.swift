@@ -25,6 +25,8 @@ public struct CaptureFiles: Sendable {
     public func newFile(ext: String) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         let f = DateFormatter()
+        f.locale = Locale(identifier: "en_US_POSIX") // names never vary with region
+        f.calendar = Calendar(identifier: .gregorian)
         f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
         let base = directory.appendingPathComponent("Wadjet \(f.string(from: now()))")
         var url = base.appendingPathExtension(ext)

@@ -122,7 +122,7 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
         self.value = defaults
         self.onError = onError
         try? FileManager.default.createDirectory(at: file.deletingLastPathComponent(), withIntermediateDirectories: true)
-        load()
+        load(normalize: true)
         watchDirectory()
         watchFile()
     }
@@ -146,7 +146,10 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
 
     // MARK: load
 
-    private func load() {
+    /// `normalize`: rewrite the file in canonical form if it's missing newer
+    /// keys — only on the initial load, so a live edit Mia just saved is never
+    /// rewritten out from under her editor.
+    private func load(normalize: Bool = false) {
         guard let data = try? Data(contentsOf: file) else {
             write() // missing file: put the current value back
             return
@@ -164,7 +167,7 @@ public final class ConfigStore<Config: Codable & Equatable & Sendable> {
             if v != value { value = v }
             broken = false
             // a file missing newer keys gains them (and takes canonical form)
-            if (try? encoder.encode(v)).map({ $0 + [0x0A] }) != data { write() }
+            if normalize, (try? encoder.encode(v)).map({ $0 + [0x0A] }) != data { write() }
             if migration.migrated { write() } // plaintext secrets became {"keychain": …} references
         } catch {
             broken = true
