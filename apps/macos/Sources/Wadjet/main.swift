@@ -459,23 +459,29 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             }
         }
         // a folder that moved since the bookmark was made resolves at its new
-        // location — point config at it so saves don't hit the dead path
+        // location — point config at it so saves don't hit the dead path.
+        // Apply all moves at once: swapped paths would otherwise rewrite each
+        // other's already-migrated references depending on iteration order.
         guard !moved.isEmpty else { return }
         let home = expandingTilde("~").path
+        let remap = moved.mapValues { url in
+            url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
+        }
         AppState.shared.config.update { c in
-            for (old, url) in moved {
-                let new = url.path.hasPrefix(home + "/") ? "~" + url.path.dropFirst(home.count) : url.path
+            for (old, new) in remap {
                 if c.folders.screenshots == old { c.folders.screenshots = new }
                 if c.folders.recordings == old { c.folders.recordings = new }
-                c.workflows = c.workflows.map { w in
-                    var w = w
-                    w.steps = w.steps.map { $0 == .saveFile(folder: old) ? .saveFile(folder: new) : $0 }
-                    return w
-                }
-                let mark = c.bookmarks.removeValue(forKey: old)
-                c.bookmarks[new] = mark
-                grantedFolders[new] = grantedFolders.removeValue(forKey: old) ?? url
             }
+            c.workflows = c.workflows.map { w in
+                var w = w
+                w.steps = w.steps.map { st in
+                    if case .saveFile(let f) = st, let f, let new = remap[f] { return .saveFile(folder: new) }
+                    return st
+                }
+                return w
+            }
+            c.bookmarks = Dictionary(uniqueKeysWithValues: c.bookmarks.map { (remap[$0.key] ?? $0.key, $0.value) })
+            grantedFolders = Dictionary(uniqueKeysWithValues: grantedFolders.map { (remap[$0.key] ?? $0.key, $0.value) })
             AppLog.line("bookmarks: \(moved.count) moved folder(s) re-pointed in config")
         }
     }
