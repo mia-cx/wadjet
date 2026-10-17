@@ -480,8 +480,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 }
                 return w
             }
-            c.bookmarks = Dictionary(uniqueKeysWithValues: c.bookmarks.map { (remap[$0.key] ?? $0.key, $0.value) })
-            grantedFolders = Dictionary(uniqueKeysWithValues: grantedFolders.map { (remap[$0.key] ?? $0.key, $0.value) })
+            // two original paths can converge on one destination; keep the
+            // first entry seen for it rather than trapping
+            var newMarks: [String: Data] = [:], newGrants: [String: URL] = [:]
+            for (p, d) in c.bookmarks { newMarks[remap[p] ?? p] = newMarks[remap[p] ?? p] ?? d }
+            for (p, u) in grantedFolders { newGrants[remap[p] ?? p] = newGrants[remap[p] ?? p] ?? u }
+            c.bookmarks = newMarks
+            grantedFolders = newGrants
             AppLog.line("bookmarks: \(moved.count) moved folder(s) re-pointed in config")
         }
     }
