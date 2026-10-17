@@ -391,7 +391,9 @@ export const createLibrary = (deps: LibraryDeps) => {
       const row = await liveUpload(id, owner)
       if (row.state === 'completed' && row.fileId !== null) {
         const file = await deps.files.get(row.fileId)
-        if (file) return { file: { ...toFile(file), deleteUrl: null }, created: false }
+        // The file it made was deleted since; there's nothing left to complete.
+        if (!file || file.deletedAt) throw notFound(`No file ${row.fileId}.`)
+        return { file: { ...toFile(file), deleteUrl: null }, created: false }
       }
       // Open, or 'completed' with no fileId (a request died mid-completion):
       // every step below is idempotent, so just run them again.
