@@ -119,8 +119,7 @@ export const createLibrary = (deps: LibraryDeps) => {
     const urls = [fileUrl(row)]
     // Every version ever attached: a superseded thumbnail whose cleanup
     // failed earlier must still be purged and freed now.
-    for (let v = 1; v <= row.thumbnailVersion; v++)
-      urls.push(`${deps.baseUrl}/t/${row.id}?v=${v}`)
+    for (let v = 1; v <= row.thumbnailVersion; v++) urls.push(`${deps.baseUrl}/t/${row.id}?v=${v}`)
     await deps.purger.purge(urls)
     // Blob last: a failure here leaves an unreachable blob, never a row that 500s.
     await deps.blobs.delete(row.blobKey)
