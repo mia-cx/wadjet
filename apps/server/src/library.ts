@@ -150,8 +150,9 @@ export const createLibrary = (deps: LibraryDeps) => {
     async delete(owner: string, id: string): Promise<void> {
       const row = await deps.files.get(id)
       if (!row || row.owner !== owner) throw notFound(`No file ${id}.`)
-      await deps.blobs.delete(row.blobKey)
+      // Row first: a failure after it leaves an unreachable blob, never a row that 500s.
       await deps.files.delete(id)
+      await deps.blobs.delete(row.blobKey)
       // #51 adds the thumbnail URL to this purge
       await deps.purger.purge([fileUrl(row)])
     },
