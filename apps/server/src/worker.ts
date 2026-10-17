@@ -87,10 +87,7 @@ export const createHandler = (
       const matched = await caches.default.match(new Request(key))
       if (matched) return matched
       const response = await state.app.fetch(request)
-      if (
-        (response.status === 200 || response.status === 206) &&
-        response.headers.get('Cache-Control')?.includes('public')
-      ) {
+      if (response.status === 200 && response.headers.get('Cache-Control')?.includes('public')) {
         ctx.waitUntil(caches.default.put(key, response.clone()))
       }
       return response
