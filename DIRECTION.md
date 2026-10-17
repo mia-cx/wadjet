@@ -6,8 +6,10 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions; the [macOS v1 PRD](https://github.com/mia-cx/wadjet/issues/17) turns them into a build plan, sliced into #18–#45. The [Wadjet Server PRD](https://github.com/mia-cx/wadjet/issues/47) does the same for the server (#48–#56); its 18 drafting decisions follow their recommendations until Mia reviews them.
-The native prototype of the Freeze Frame overlay, toolbar, and toast became the app itself: v0.0.1 lives in `apps/macos`, now an Xcode project with the UI-free `WadjetKit` package, built by CI on every change.
-Recording, uploads, Destinations, History, and Settings are still simulated or stubbed there.
+The native prototype of the Freeze Frame overlay, toolbar, and toast became the app itself: `apps/macos`, an Xcode project with the UI-free `WadjetKit` package, built by CI on every change.
+Shipped on the Mac: sandbox, the live `config.json` store, the Workflow runner with every local Step, Shortcuts, the Settings window, and the History store with OCR and the Recent submenu. Still simulated: Recording and uploads; the History window, Destinations, and GIF are not built yet.
+Shipped on the server: the protocol doc with replayed fixtures, the Hono core on Node (filesystem + SQLite), the Docker image (S3 + Postgres optional), and the Cloudflare Worker (R2, D1, edge purge; dry-run only, not deployed). Multipart uploads, thumbnails, deletion links, and the `.sxcu` are in review; OAuth, Helm, and deployment follow.
+Not yet checked on a real Mac: anything that needs a capture, because Wadjet has no Screen Recording grant yet.
 
 ## Direction
 
