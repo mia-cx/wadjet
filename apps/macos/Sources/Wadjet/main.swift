@@ -2049,12 +2049,17 @@ final class OverlayNSView: NSView {
     }
     /// the arrow over a toolbar/menu, the Tool's own cursor over the frame —
     /// only while frozen; a late cursorUpdate after close must not re-assert
+    var lastCursorSig = ""
     func updateCursor() {
         guard AppState.shared.phase == .frozen else { return }
-        if ctrl?.pointerOverUI ?? false { NSCursor.arrow.set() }
+        syncConfirmTool()
+        let overUI = ctrl?.pointerOverUI ?? false
+        if overUI { NSCursor.arrow.set() }
         else { WadjetCursors.cursor(for: tool).set() }
+        // event-rate file I/O is silly — only log when the choice changes
         let cur = NSCursor.currentSystem ?? NSCursor.current
-        AppLog.line("cursor -> sys=\(cur.image.size) hot=\(cur.hotSpot) tool=\(tool.rawValue) overUI=\(ctrl?.pointerOverUI ?? false)")
+        let sig = "\(cur.image.size)x\(cur.hotSpot)x\(tool.rawValue)x\(overUI)"
+        if sig != lastCursorSig { lastCursorSig = sig; AppLog.line("cursor -> sys=\(cur.image.size) hot=\(cur.hotSpot) tool=\(tool.rawValue) overUI=\(overUI)") }
     }
     // a non-activating panel still gets cursorUpdate for its tracking area —
     // that's the reliable hook, mouseMoved alone loses to the system
