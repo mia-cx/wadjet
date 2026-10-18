@@ -110,6 +110,7 @@ final class AppState: ObservableObject {
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
     @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
+    @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -453,6 +454,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
         case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
             s.debugTap = Tool(rawValue: String(parts[1]))
+        case "hold" where parts.count > 1: // debug: keep the pressed lens up for inspection
+            s.debugHold = Tool(rawValue: String(parts[1])) // "off" -> nil
         case "record" where parts.count > 1 && parts[1] == "screen": // debug: a Record Screen pick on the pointer's display
             if s.phase == .desktop && !s.recActive {
                 let di = overlayCtrl.mouseDisplay()
@@ -2938,6 +2941,12 @@ struct ToolbarView: View {
             .onChange(of: s.debugTap) { // cmd.sh tap — same path as a tap release
                 if let t = s.debugTap, expanded, t != s.tool { s.debugTap = nil; travelTap(t) }
                 else if s.debugTap != nil { s.debugTap = nil }
+            }
+            .onChange(of: s.debugHold) { // cmd.sh hold — snap the lens to the cell, pressed
+                guard expanded else { return }
+                if let t = s.debugHold, let c = cellCentres[t] {
+                    snapLens(to: c); pressing = true
+                } else if s.debugHold == nil { pressing = false }
             }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
     }
