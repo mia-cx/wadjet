@@ -2799,11 +2799,13 @@ struct ToolbarView: View {
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
-                // a pressed reflow keeps this cell where the pointer left it
+                // a pressed reflow keeps the anchor cell under the pointer:
+                // correct per frame (geometry reports the animated position)
+                // until the press ends, not just at the landed frame
                 if let a = pendingAnchor, a.tool == t {
-                    pendingAnchor = nil
                     var tx = Transaction(); tx.disablesAnimations = true
                     withTransaction(tx) { barOffsetX += a.x - f.midX }
+                    if !lensActive { pendingAnchor = nil }
                 }
             }
     }
@@ -2867,6 +2869,9 @@ struct ToolbarView: View {
                 if dragging {
                     let (lo, hi) = rowEnds
                     setLensTarget(x: min(hi, max(lo, v.location.x)), pointerY: v.location.y)
+                    // hover callbacks don't fire mid-drag — open the group
+                    // under the lens ourselves, anchored on that cell
+                    if let t = nearestTool(to: v.location.x) { openTheGroup(t.kind, anchor: t) }
                 }
             }
             .onEnded { v in
