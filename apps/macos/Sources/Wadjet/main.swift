@@ -3029,6 +3029,8 @@ struct ToolbarView: View {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
                 if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
+                // a tap's travel follows its Tool if a group reflow moves it mid-flight
+                else if travelling, !dragging, !pressing, s.tool == t { setLensTarget(x: $0.x + toolD / 2) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
@@ -3260,11 +3262,11 @@ struct ToolMenuView: View {
             switch tool.kind {
             case .shot:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
-                if tool == .capRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", stays: false) {
+                if tool == .capRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", toggle: true) {
                         s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
             case .rec:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil }
-                if tool == .recRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", stays: false) {
+                if tool == .recRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", toggle: true) {
                         s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
                 divider()
                 section("Options", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
@@ -3288,8 +3290,8 @@ struct ToolMenuView: View {
 
     /// a native-looking menu row: 20 pt checkmark column + title, hover
     /// highlight behind it. `stays`: toggles leave the menu open, picks close it
-    func row(_ title: String, on: Bool, stays: Bool = false, action: @escaping () -> Void) -> some View {
-        MenuRow(title: title, on: on) {
+    func row(_ title: String, on: Bool, stays: Bool = false, toggle: Bool = false, action: @escaping () -> Void) -> some View {
+        MenuRow(title: title, on: on, isToggle: toggle) {
             action()
             if !stays { s.openMenu = nil; ctrl.syncMenu() }
         }
@@ -3312,7 +3314,7 @@ struct ToolMenuView: View {
             ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),
             ("Click circles", $s.clickCircles), ("Show island while recording", $s.showIslandWhileRecording)]
         ForEach(rows, id: \.0) { label, on in
-            MenuRow(title: label, on: on.wrappedValue) { on.wrappedValue.toggle() } // toggles keep the menu open
+            MenuRow(title: label, on: on.wrappedValue, isToggle: true) { on.wrappedValue.toggle() } // toggles keep the menu open
         }
     }
 }
@@ -3322,6 +3324,8 @@ struct ToolMenuView: View {
 struct MenuRow: View {
     let title: String
     let on: Bool
+    /// an on/off option rather than one pick of several — VoiceOver reads it as a toggle
+    var isToggle = false
     let action: () -> Void
     @State var hovering = false
     var body: some View {
@@ -3339,6 +3343,8 @@ struct MenuRow: View {
             .onHover { hovering = $0 }
         }
         .buttonStyle(.plain)
+        .accessibilityAddTraits(isToggle ? .isToggle : (on ? .isSelected : []))
+        .accessibilityValue(isToggle ? (on ? "On" : "Off") : "")
     }
 }
 
