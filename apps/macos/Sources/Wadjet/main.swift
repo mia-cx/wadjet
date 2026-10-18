@@ -485,6 +485,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "stop": if s.recActive { stopRecording() }
         case "pause": if s.recActive { togglePause() }
         case "settings": openSettings()
+        case "closesettings": settingsWindow?.close()
         case "esc": handleEsc()
         default: AppLog.line("cmd: unhandled \(cmd)")
         }

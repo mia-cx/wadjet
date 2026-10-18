@@ -125,15 +125,37 @@ enum SettingsPanes: String, CaseIterable {
 
 // MARK: - Shortcuts
 
+/// every Tool listed like OBS's hotkey settings; Shortcuts get added under
+/// their Tool with the + — several per Tool stay possible, each with its own
+/// Workflow and options
 @MainActor struct ShortcutsPane: View {
-    @State private var pending = false
+    @State private var pendingTool: Tool? = nil // the block currently holding a new-Shortcut recorder
+    var body: some View {
+        Section("Screenshots") { ForEach(Tool.allCases.filter { $0.kind == .shot }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Recordings") { ForEach(Tool.allCases.filter { $0.kind == .rec }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Utilities") { ForEach(Tool.allCases.filter { $0.kind == .util }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+    }
+}
+
+/// one Tool's header plus its Shortcuts; + starts recording a new Shortcut
+/// for this Tool
+@MainActor struct ToolShortcuts: View {
+    let tool: Tool
+    @Binding var pendingTool: Tool?
     var body: some View {
         let cfg = AppState.shared.config.value
-        Section("Shortcuts") {
-            ForEach(Array(cfg.shortcuts.indices), id: \.self) { i in
-                ShortcutRow(i: i)
+        let mine = cfg.shortcuts.indices.filter { cfg.shortcuts[$0].tool == tool.toolID }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(tool.title, systemImage: tool.symbol)
+                Spacer()
+                Button { pendingTool = tool } label: { Image(systemName: "plus.circle") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Add Shortcut")
+                    .accessibilityLabel("Add Shortcut for \(tool.title)")
             }
-            if pending {
+            ForEach(mine, id: \.self) { ShortcutRow(i: $0) }
+            if pendingTool == tool {
                 HStack {
                     KeyboardShortcuts.Recorder(for: .init("settings.newShortcut")) { ks in
                         guard let ks else { return }
@@ -142,15 +164,14 @@ enum SettingsPanes: String, CaseIterable {
                             KeyboardShortcuts.reset(.init("settings.newShortcut"))
                             return
                         }
-                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: .captureRegion)) }
+                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: tool.toolID)) }
                         KeyboardShortcuts.reset(.init("settings.newShortcut"))
-                        pending = false
+                        pendingTool = nil
                     }
                     Spacer()
-                    Button("Cancel") { pending = false }
+                    Button("Cancel") { pendingTool = nil }
                 }
-            } else {
-                Button("Add Shortcut") { pending = true }
+                .padding(.leading, 28)
             }
         }
     }
@@ -175,24 +196,6 @@ enum SettingsPanes: String, CaseIterable {
                         AppLog.line("shortcut \(i): recorded key isn't a config KeyCombo — keeping the old one")
                     }
                 }
-                // changing the Tool drops a Workflow the new Tool can't run,
-                // or any Workflow on a util Tool — else the file won't decode
-                Picker("Tool", selection: Binding(get: { sc.tool }, set: { newID in
-                    edit { c in guard i < c.shortcuts.count else { return }
-                        c.shortcuts[i].tool = newID
-                        if let wf = c.shortcuts[i].workflow {
-                            let ok = newID.produces.map { k in
-                                c.workflows.contains { w in w.name == wf && (k.isRecording ? w.takes.isRecording : w.takes == .screenshot) }
-                            } ?? false
-                            if !ok { c.shortcuts[i].workflow = nil }
-                        }
-                        // confirm-off only makes sense on Window/Screen Tools
-                        if Tool(rawValue: newID.rawValue)?.confirmOptional != true { c.shortcuts[i].options.confirm = nil }
-                    }
-                })) {
-                    ForEach(Tool.allCases, id: \.rawValue) { Text($0.title).tag($0.toolID) }
-                }
-                .labelsHidden()
                 Spacer()
                 Button { edit { guard i < $0.shortcuts.count else { return }; $0.shortcuts.remove(at: i) } }
                     label: { Image(systemName: "minus.circle") }
@@ -227,7 +230,8 @@ enum SettingsPanes: String, CaseIterable {
                     optionRow("Click circles", \.clickCircles)
                 }
             }
-        })
+        }
+        .padding(.leading, 28))
     }
     // 0=Default(nil) 1=On 2=Off
     func opt(_ key: WritableKeyPath<ShortcutOptions, Int?>, i: Int) -> Binding<Int> {
