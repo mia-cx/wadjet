@@ -94,6 +94,7 @@ final class AppState: ObservableObject {
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
+    @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -392,6 +393,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             default: AppLog.line("cmd option: unknown key \(key)")
             }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
+        case "group" where parts.count > 1: // debug: animated group switch on the expanded toolbar
+            s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
         case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
@@ -2449,6 +2452,14 @@ struct ToolbarView: View {
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
+            .onChange(of: s.debugGroup) { // cmd.sh group — the expanded bar animates it
+                if let k = s.debugGroup, expanded {
+                    s.debugGroup = nil; openTheGroup(k)
+                    Task { try? await Task.sleep(for: .milliseconds(600)); syncHit() // log the settled cell rects
+                        AppLog.line("all centres d\(displayIndex) @ " + (ToolbarBtnFrames.rects[displayIndex] ?? [:])
+                            .sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.title):\(Int($0.value.midX))" }.joined(separator: " ")) }
+                }
+            }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
     }
 
@@ -2596,6 +2607,7 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
+    let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
@@ -2750,7 +2762,12 @@ struct ToolbarView: View {
     func openTheGroup(_ k: Tool.Kind) {
         guard k != openGroup else { return }
         AppLog.line("openTheGroup \(k)")
-        withAnimation(.spring(duration: 0.35)) { openGroup = k }
+        if reduceMotion { // no bouncy layout spring under Reduce Motion
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { openGroup = k }
+        } else {
+            withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
+        }
     }
     func nearestTool(to x: CGFloat) -> Tool? {
         cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
@@ -2762,13 +2779,33 @@ struct ToolbarView: View {
     /// the row laid out once, shared by the real cells, the accent copy and
     /// the lens's icon strip — every copy keeps the same geometry
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: cellGap) {
             ForEach(Tool.Kind.allCases, id: \.self) { k in
                 if k != .shot { // thin divider between groups
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                 }
-                ForEach(slots(in: k), id: \.tool) { make($0.tool, $0.collapsed) }
+                // every group always renders all three Tools (stable identity,
+                // no inserts/removals): closed groups give EVERY slot zero
+                // width — leading-aligned — so the siblings stack on the rep
+                // wherever it sits, and open groups take a cell + gap each.
+                // The spread is real layout, so the geometry readers
+                // (cellCentres, ToolbarBtnFrames) report true positions
+                let open = k == openGroup, g = groupTools(k)
+                HStack(spacing: 0) {
+                    ForEach(Array(g.enumerated()), id: \.element) { i, t in
+                        let rep = t == lastUsedTool(k), shown = open || rep
+                        make(t, !open && rep)
+                            .scaleEffect(shown ? 1 : 0.5)
+                            .opacity(shown ? 1 : 0)
+                            .allowsHitTesting(shown)
+                            .accessibilityHidden(!shown)
+                            .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : 0,
+                                   alignment: .leading)
+                            .zIndex(rep ? 1 : 0)
+                    }
+                }
+                .frame(width: open ? toolD * 3 + cellGap * 2 : toolD, alignment: .leading)
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
@@ -2780,6 +2817,7 @@ struct ToolbarView: View {
         VStack(spacing: 3) {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
                         Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
@@ -2913,6 +2951,7 @@ struct ToolbarView: View {
         return VStack(spacing: 3) {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
                 // it travels into the bar (and back) as the shape morphs
                 .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
@@ -2952,7 +2991,7 @@ struct ToolbarView: View {
                 // the menu droplet budding off the rest capsule's top corner —
                 // hidden while pressing/dragging; high-priority tap so the
                 // row's drag can't take it
-                if t.hasMenu && selected && !lensActive {
+                if t.hasMenu && selected && !collapsed && !lensActive {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
@@ -2966,7 +3005,6 @@ struct ToolbarView: View {
                 }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
-            .transition(.scale(scale: 0.6).combined(with: .opacity))
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
