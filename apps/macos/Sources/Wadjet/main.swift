@@ -3990,9 +3990,11 @@ struct ToastView: View {
     var card: some View {
         ZStack(alignment: .bottom) {
             if let cg = item.cap.thumb {
+                // sized to the capture's own aspect so the rim hugs the image
+                let k = min(220 / CGFloat(cg.width), 160 / CGFloat(cg.height), 1)
                 Image(cg, scale: 1, label: Text(""))
-                    .resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 220, maxHeight: 160)
+                    .resizable()
+                    .frame(width: CGFloat(cg.width) * k, height: CGFloat(cg.height) * k)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.9), lineWidth: 2))
                     .shadow(radius: 10, y: 4)
