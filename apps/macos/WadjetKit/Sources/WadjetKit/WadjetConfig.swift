@@ -31,9 +31,13 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         public var recording = "MP4"
         public init() {}
     }
-    public struct Tools: Codable, Equatable, Sendable { public var pickColour = PickColour(); public var measure = Measure(); public init() {} }
+    public struct Tools: Codable, Equatable, Sendable { public var pickColour = PickColour(); public var measure = Measure(); public var region = Region(); public init() {} }
     public struct PickColour: Codable, Equatable, Sendable { public var format = ColourFormat.hex; public init() {} }
     public struct Measure: Codable, Equatable, Sendable { public var mode = MeasureMode.spacing; public init() {} }
+    public struct Region: Codable, Equatable, Sendable { public var confirm = RegionConfirm.release; public init() {} }
+    /// `release` runs the capture at mouse-up; `manual` keeps the selection
+    /// editable with handles until confirmed (button / Return)
+    public enum RegionConfirm: String, Codable, Equatable, Sendable { case release, manual }
     /// Video capture shape: `resolution` is the longest output edge in pixels
     /// (the source is never upscaled, only scaled down), `fps` the frame rate.
     public struct Recording: Codable, Equatable, Sendable {
