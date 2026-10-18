@@ -1365,9 +1365,7 @@ final class OverlayController {
         hideMenu()
         // 40 pt of headroom above the menu so its scale-in never clips
         let headroom: CGFloat = 40
-        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom))
-        h.frame.size = h.fittingSize
-        var f = NSRect(origin: .zero, size: h.fittingSize)
+        var f = NSRect(origin: .zero, size: NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom)).fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
         let bar = toolbarShapeScreenRect(on: di)
         let anchor = buttonScreenRect(t, on: di) ?? bar ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
@@ -1375,6 +1373,17 @@ final class OverlayController {
         let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
                            y: max(scr.minY + 8, top - (f.height - headroom)))
+        // the menu's own frost: the Freeze Frame under its body, blurred and
+        // darkened, under .regular glass for the rim — nil without a Freeze
+        var backdrop: CGImage? = nil
+        #if CLEAR_GLASS_PATCH
+        if di < Freeze.shared.displays.count {
+            backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: f.minY - scr.minY,
+                                                     width: f.width, height: f.height - headroom), on: di)
+        }
+        #endif
+        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self, backdrop: backdrop).padding(.top, headroom))
+        h.frame.size = f.size
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
@@ -3262,6 +3271,7 @@ enum TipPanel {
 struct ToolMenuView: View {
     let tool: Tool
     let ctrl: OverlayController
+    var backdrop: CGImage? = nil // Freeze Frame crop under the menu body
     @ObservedObject var s = AppState.shared
     @State var shown = false // spring in from the cell it hangs under
     var body: some View {
@@ -3288,6 +3298,18 @@ struct ToolMenuView: View {
         }
         .padding(.horizontal, 6).padding(.vertical, 8)
         .frame(width: 280)
+        // heavy frost like the reference menu: the frozen world behind, hard
+        // blurred and darkened, under the glass's rim and highlight
+        .background {
+            if let backdrop {
+                ZStack {
+                    Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280).resizable()
+                        .blur(radius: 24, opaque: true)
+                    Color.black.opacity(0.28)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            }
+        }
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .scaleEffect(shown ? 1 : 0.85, anchor: .top)
         .opacity(shown ? 1 : 0)
@@ -3330,7 +3352,7 @@ struct ToolMenuView: View {
             MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
             MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.cursor, isToggle: true) { s.cursor.toggle() },
             MenuTile(icon: "cursorarrow.click.2", caption: "Clicks", on: s.clickCircles, isToggle: true) { s.clickCircles.toggle() },
-            MenuTile(icon: "capsule.portrait", filledIcon: "capsule.portrait.fill", caption: "Island", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
+            MenuTile(icon: "capsule", caption: "Island", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
         ]
     }
     /// Measure's four modes as pick tiles — they close the menu
@@ -3367,11 +3389,11 @@ struct MenuRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Group {
-                    if on { Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold)) }
-                    else if let icon { Image(systemName: icon).font(.system(size: 15)) }
-                }
-                .frame(width: 22)
+                Color.clear.frame(width: 22, height: 22) // fixed column, empty or not
+                    .overlay {
+                        if on { Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold)) }
+                        else if let icon { Image(systemName: icon).font(.system(size: 15)) }
+                    }
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.system(size: 15)).foregroundStyle(.white)
                     if let subtitle { Text(subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
