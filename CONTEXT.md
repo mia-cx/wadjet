@@ -31,8 +31,8 @@ _Avoid_: Screencast, video capture
 ### Markup
 
 **Markup Tool**:
-A Tool in the toolbar's Markup group that draws Annotations anywhere on the live screen or the Freeze Frame, with no region selection.
-It captures nothing itself; Capture and Record Tools capture whatever Annotations are on screen.
+A Tool in the toolbar's Markup group that draws Annotations anywhere on the live screen or the Freeze Frame.
+Markup Tools run no Workflow; Capture and Record Tools capture whatever Annotations are on screen. Freeze region is the one Markup Tool that captures, and only into Markup: the selected region becomes a pasted Canvas.
 _Avoid_: Drawing tool, annotation tool
 
 **Annotation**:
