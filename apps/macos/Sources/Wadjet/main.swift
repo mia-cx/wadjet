@@ -70,6 +70,10 @@ final class AppState: ObservableObject {
     static let shared = AppState()
     @Published var phase: Phase = .desktop
     @Published var recActive = false // a Recording is running (independent of the overlay)
+    // Screenshot options, toggled live on an open Freeze Frame — session state
+    // like the recording toggles, not persisted
+    @Published var shotCursor = true { didSet { AppDelegate.shared?.overlayCtrl.swapFrozenImages() } }
+    @Published var shotWadjet = true { didSet { AppDelegate.shared?.overlayCtrl.swapFrozenImages() } }
     @Published var bubblesDying = false // set while a recording bubble merges back into the island
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
@@ -137,6 +141,27 @@ struct FrozenDisplay {
     /// cursor-free SDR frame; every pixel read — Pick Colour, the loupe, Measure — uses it so the frozen cursor never shows up in a reading
     let clean: CGImage
     var hdrImage: CGImage?      // extended-sRGB variant when the display is HDR
+    var cleanHDR: CGImage?      // cursor-free HDR pair, for cursor-off Screenshots
+    /// the whole-display variants with EVERY Wadjet window excluded — captured
+    /// at freeze time only when we had more than the always-excluded compact
+    /// chrome on this display; nil means "share the regular images"
+    var bare: CGImage?, bareHDR: CGImage?, bareClean: CGImage?, bareCleanHDR: CGImage?
+    var bareCaptured = false
+    /// the image a Screenshot shows and saves, picked by the Cursor/Wadjet
+    /// toggles — pixel reads keep using `clean` regardless
+    @MainActor var outputHDR: CGImage? {
+        let s = AppState.shared
+        return s.shotWadjet
+            ? (s.shotCursor ? hdrImage : cleanHDR)
+            : (s.shotCursor ? bareHDR ?? hdrImage : bareCleanHDR ?? cleanHDR)
+    }
+    @MainActor func output(hdr: Bool) -> CGImage {
+        let s = AppState.shared
+        let sdr = s.shotWadjet
+            ? (s.shotCursor ? image : clean)
+            : (s.shotCursor ? bare ?? image : bareClean ?? clean)
+        return (hdr ? outputHDR : nil) ?? sdr
+    }
     var bitmap: UnsafePointer<UInt8>? // sRGB, premultiplied ARGB, pixel coords
     var bitmapWidth = 0, bitmapHeight = 0
     var pixels: PixelBuffer? { bitmap.map { PixelBuffer(base: $0, width: bitmapWidth, height: bitmapHeight) } }
@@ -171,7 +196,7 @@ final class Freeze {
     func crop(rect: CGRect, on d: Int, hdr: Bool = false) -> CGImage? {
         guard d < displays.count else { return nil }
         let f = displays[d]
-        let src = (hdr ? f.hdrImage : nil) ?? f.image
+        let src = f.output(hdr: hdr)
         let sx = CGFloat(src.width) / f.screen.frame.width
         let sy = CGFloat(src.height) / f.screen.frame.height
         let r = CGRect(x: rect.origin.x * sx, y: (f.screen.frame.height - rect.origin.y - rect.height) * sy,
@@ -1362,6 +1387,20 @@ final class OverlayController {
     /// an overlay is up, the live screens while only a Recording runs (the
     /// Freeze Frame is gone then, so nothing else can supply them)
     var chromeScreens: [NSScreen] = []
+    var frozenImageViews: [NSView] = [] // each Freeze panel's picture layer
+    /// the Cursor/Wadjet toggles act on the Freeze Frame already up — swap every
+    /// panel's picture to the new pick, keeping HDR where the variant has it
+    func swapFrozenImages() {
+        let s = AppState.shared
+        for (i, v) in frozenImageViews.enumerated() {
+            guard i < Freeze.shared.displays.count else { continue }
+            let fd = Freeze.shared.displays[i]
+            v.layer?.contents = fd.output(hdr: true)
+            v.layer?.preferredDynamicRange = fd.outputHDR != nil ? .high : .standard
+        }
+        if s.openMenu != nil { syncMenu() } // the menu's frost crops the frozen image
+        AppLog.line("freeze swap: cursor=\(s.shotCursor ? "on" : "off") wadjet=\(s.shotWadjet ? "on" : "off")")
+    }
     var recBubblePanels: [Int: NSPanel] = [:] // the detached recording bubble, one per display
     var bubbleSizes: [Int: CGSize] = [:]
     var dyingBubbles: [Int: NSPanel] = [:]   // mid-merge bubbles awaiting their close
@@ -1515,7 +1554,7 @@ final class OverlayController {
                 for (i, fd) in Freeze.shared.displays.enumerated() {
                     let img = fd.hdrImage ?? fd.image
                     let f = fd.screen.frame
-                    AppLog.line("freeze d\(i) \(fd.screen.localizedName): \(Int(f.width))×\(Int(f.height)) pt @\(Int(fd.screen.backingScaleFactor))x → \(img.width)×\(img.height) px\(fd.hdrImage != nil ? " HDR" : "")")
+                    AppLog.line("freeze d\(i) \(fd.screen.localizedName): \(Int(f.width))×\(Int(f.height)) pt @\(Int(fd.screen.backingScaleFactor))x → \(img.width)×\(img.height) px\(fd.hdrImage != nil ? " HDR" : "") bare=\(fd.bareCaptured ? "captured" : "shared")")
                 }
                 if let p50 = self.freezeLatencies.percentile(50), let p95 = self.freezeLatencies.percentile(95) {
                     AppLog.line("freeze p50 \(Int(p50)) ms, p95 \(Int(p95)) ms over \(self.freezeLatencies.count) opens (target p95 ≤ 200 ms)")
@@ -1540,21 +1579,42 @@ final class OverlayController {
         let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
         let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        // the standard shot leaves out only the compact chrome (island, notch,
+        // bubble); the bare shot leaves out every Wadjet window, and is taken
+        // only if we have a window up beyond that chrome — otherwise the bare
+        // fields just share the regular images
+        let chromeExcluded = frozenExcludedWindows(from: content)
+        let stdFilter = SCContentFilter(display: disp, excludingWindows: chromeExcluded)
+        let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        let bareFilter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        let chromeIDs = Set(chromeExcluded.map(\.windowID))
+        let primaryH = NSScreen.screens[0].frame.height
+        let scrTL = CGRect(x: screen.frame.minX, y: primaryH - screen.frame.maxY,
+                           width: screen.frame.width, height: screen.frame.height)
+        let needBare = content.windows.contains { w in
+            w.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+                && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
+        }
         // MainActor-inheriting tasks created on the actor itself: the SCK
-        // calls suspend off-actor so the two captures overlap, while `disp`
+        // calls suspend off-actor so the captures overlap, while `disp`
         // never leaves its region (no SCK type is Sendable, so `async let`
         // can't carry them itself)
-        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, content: content) }
-        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false, content: content) }
+        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, filter: stdFilter) }
+        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: hdr, filter: stdFilter) }
+        let bareShot = needBare ? Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, filter: bareFilter) } : nil
+        let bareCleanShot = needBare ? Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: hdr, filter: bareFilter) } : nil
         let (out, cleanOut) = try await (shot.value, cleanShot.value)
+        let (bareOut, bareCleanOut) = (try await bareShot?.value, try await bareCleanShot?.value)
         guard let img = out.sdr ?? out.hdr, let clean = cleanOut.sdr else { throw CaptureError("screenshot returned no image") }
         var fd = FrozenDisplay(screen: screen, image: img, clean: clean)
-        fd.hdrImage = out.hdr
+        fd.hdrImage = out.hdr; fd.cleanHDR = cleanOut.hdr
+        fd.bare = bareOut?.sdr ?? bareOut?.hdr; fd.bareHDR = bareOut?.hdr
+        fd.bareClean = bareCleanOut?.sdr ?? bareCleanOut?.hdr; fd.bareCleanHDR = bareCleanOut?.hdr
+        fd.bareCaptured = needBare
         // CGWindowList is front-to-back, so first-hit is the frontmost
         // window — SCShareableContent's windows list isn't ordered
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let sy = screen.frame
-        let primaryH = NSScreen.screens[0].frame.height
         fd.windowFrames = infos.compactMap { w in
             guard (w[kCGWindowLayer as String] as? Int) == 0,
                   (w[kCGWindowOwnerPID as String] as? Int32) != ProcessInfo.processInfo.processIdentifier,
@@ -1600,14 +1660,13 @@ final class OverlayController {
         let set = Set(nums)
         return content.windows.filter { set.contains($0.windowID) }
     }
-    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool, content: SCShareableContent) async throws -> (sdr: CGImage?, hdr: CGImage?) {
+    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool, filter: SCContentFilter) async throws -> (sdr: CGImage?, hdr: CGImage?) {
         let cfg = SCScreenshotConfiguration()
         cfg.width = width; cfg.height = height
         cfg.showsCursor = cursor; cfg.displayIntent = .local
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         let out = try await SCScreenshotManager.captureScreenshot(
-            contentFilter: SCContentFilter(display: disp, excludingWindows: frozenExcludedWindows(from: content)),
-            configuration: cfg)
+            contentFilter: filter, configuration: cfg)
         return (out.sdrImage, out.hdrImage)
     }
     // measure each window's real corner radius from a corner screenshot, so the
@@ -1682,12 +1741,12 @@ final class OverlayController {
             p.hidesOnDeactivate = false
             // the frozen frame lives in its own layer under the overlay drawing so
             // HDR captures can render with extended dynamic range
-            let img = fd.hdrImage ?? fd.image
             let imageView = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
             imageView.wantsLayer = true
-            imageView.layer?.contents = img
+            imageView.layer?.contents = fd.output(hdr: true)
             imageView.layer?.contentsGravity = .resize
-            if fd.hdrImage != nil { imageView.layer?.preferredDynamicRange = .high }
+            if fd.outputHDR != nil { imageView.layer?.preferredDynamicRange = .high }
+            frozenImageViews.append(imageView)
             let ov = OverlayNSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size), displayIndex: i, controller: self)
             let container = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
             container.addSubview(imageView); container.addSubview(ov)
@@ -1837,7 +1896,7 @@ final class OverlayController {
     }
     func closeAllPanelsOnly() {
         panels.forEach { $0.close() }
-        panels = []
+        panels = []; frozenImageViews = []
         hideMenu()
         if AppState.shared.openMenu != nil { AppState.shared.openMenu = nil }
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
