@@ -50,7 +50,8 @@ jobs:
 
   # the version-PR job: runs one at a time, and only for the commit main
   # points at — changesets/action versions and force-pushes from github.sha,
-  # so an older run finishing late would otherwise overwrite a newer plan
+  # so an older run finishing late would otherwise overwrite a newer plan.
+  # queue: max keeps every pending job, so a stale one can't displace main's
   release-pr:
     needs: version
     runs-on: ubuntu-latest
@@ -61,6 +62,7 @@ jobs:
     concurrency:
       group: release-pr
       cancel-in-progress: false
+      queue: max
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
