@@ -2797,7 +2797,7 @@ struct ToolbarView: View {
     }
 
     func openToolMenu(_ t: Tool) {
-        guard t.hasMenu else { return }
+        guard t.hasMenu, !toolDisabled(t) else { return }
         TipPanel.hide()
         if s.tool != t { AppDelegate.shared?.trigger(t) }
         s.openMenu = s.openMenu == t ? nil : t
@@ -2819,7 +2819,7 @@ struct ToolbarView: View {
     /// open a group — the same centred spring as hover; the lens retargets
     /// onto the pointer's position in the new layout, so no jump
     func openTheGroup(_ k: Tool.Kind) {
-        guard k != openGroup else { return }
+        guard k != openGroup, !(s.recActive && k == .rec) else { return }
         AppLog.line("openTheGroup \(k)")
         if reduceMotion { // no bouncy layout spring under Reduce Motion
             var t = Transaction(); t.disablesAnimations = true
@@ -2828,8 +2828,18 @@ struct ToolbarView: View {
             withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
         }
     }
+    /// Record Tools are dead while a Recording runs
+    func toolDisabled(_ t: Tool) -> Bool { s.recActive && t.kind == .rec }
+    /// the Tool whose visible cell actually contains x — gaps and hidden
+    /// stacked cells return nil
+    func hitTool(at x: CGFloat) -> Tool? {
+        cellCentres.first { visibleTools.contains($0.key) && abs($0.value.x - x) <= toolD / 2 }?.key
+    }
+    /// press and drag targets skip disabled Tools; a gap still snaps to the
+    /// nearest live cell
     func nearestTool(to x: CGFloat) -> Tool? {
-        cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
+        cellCentres.filter { visibleTools.contains($0.key) && !toolDisabled($0.key) }
+            .min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
     }
     var rowEnds: (CGFloat, CGFloat) {
         let xs = cellCentres.filter { visibleTools.contains($0.key) }.values.map(\.x)
@@ -2856,7 +2866,7 @@ struct ToolbarView: View {
                         let rep = t == lastUsedTool(k), shown = open || rep
                         make(t, !open && rep)
                             .scaleEffect(shown ? 1 : 0.5)
-                            .opacity(shown ? 1 : 0)
+                            .opacity(shown ? (toolDisabled(t) ? 0.35 : 1) : 0) // a Recording greys the video group
                             .allowsHitTesting(shown)
                             .accessibilityHidden(!shown)
                             .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : 0,
@@ -3116,11 +3126,14 @@ struct ToolbarView: View {
                     // lens where it is mid-flight, don't snap back to selected
                     let wasTravelling = travelling; travelling = false
                     pressX = v.startLocation.x
-                    pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
+                    // the real cell under the finger (gaps pick the nearest
+                    // cell); a greyed Record cell swallows the press entirely
+                    pressTool = hitTool(at: v.startLocation.x) ?? nearestTool(to: v.startLocation.x)
+                    if let pt = pressTool, toolDisabled(pt) { pressTool = nil }
                     // the lens only pops for an actual switch — a press on the
                     // selected Tool (its menu tap) shows none; a travel in
                     // flight keeps it up so it can't vanish mid-flight
-                    pressing = wasTravelling || pressTool != s.tool
+                    pressing = wasTravelling || (pressTool != nil && pressTool != s.tool)
                     // start the sim exactly where the rest highlight was —
                     // unless it's still travelling from the last tap
                     if !wasTravelling, let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
@@ -3154,7 +3167,11 @@ struct ToolbarView: View {
                 // hover events may not have arrived during the drag — refresh
                 // before lensActive falls, so releasing outside collapses
                 hoverInside = pointerInside()
-                if wasDragging {
+                let under = hitTool(at: v.location.x)
+                if let u = under, toolDisabled(u) {
+                    // dropped on a greyed Record cell: the lens goes home
+                    if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) }
+                } else if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
                         // the spring carries it home — overshoot is the wobble
