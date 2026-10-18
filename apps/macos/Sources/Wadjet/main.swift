@@ -54,7 +54,7 @@ enum Tool: String, CaseIterable {
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
 }
 
-enum Phase { case desktop, frozen, countdown, recording }
+enum Phase { case desktop, frozen, countdown } // the overlay's phase only — a Recording lives in recActive
 
 extension Color {
     // Wadjet means "the green one": a malachite green, used instead of the system accent
@@ -69,6 +69,8 @@ let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used
 final class AppState: ObservableObject {
     static let shared = AppState()
     @Published var phase: Phase = .desktop
+    @Published var recActive = false // a Recording is running (independent of the overlay)
+    @Published var bubblesDying = false // set while a recording bubble merges back into the island
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
     /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
@@ -398,12 +400,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
         case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
             s.debugTap = Tool(rawValue: String(parts[1]))
+        case "record" where parts.count > 1 && parts[1] == "screen": // debug: a Record Screen pick on the pointer's display
+            if s.phase == .desktop && !s.recActive {
+                let di = overlayCtrl.mouseDisplay()
+                trigger(.recScreen) // the normal Freeze path; the start follows
+                Task { @MainActor in
+                    for _ in 0..<60 {
+                        if s.phase == .frozen { break }
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                    guard s.phase == .frozen, Freeze.shared.displays.count > di else { return }
+                    startRecording(rect: CGRect(origin: .zero, size: Freeze.shared.displays[di].screen.frame.size), display: di)
+                }
+            }
         case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
-        case "stop": if s.phase == .recording { stopRecording() }
-        case "pause": if s.phase == .recording { togglePause() }
+        case "stop": if s.recActive { stopRecording() }
+        case "pause": if s.recActive { togglePause() }
         case "settings": openSettings()
         case "esc": handleEsc()
         default: AppLog.line("cmd: unhandled \(cmd)")
@@ -642,13 +657,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // is ignored, and a Record shortcut during a recording just stops it.
     func fireShortcut(_ sc: Shortcut, tool: Tool) {
         let s = AppState.shared
-        switch s.phase {
-        case .countdown: return
-        case .recording:
-            if tool.kind == .rec { trigger(tool) }
-            return
-        default: break
-        }
+        if s.phase == .countdown { return }
+        // a Record Shortcut always stops the Recording, Freeze Frame or not —
+        // and must not touch the Recording's options or its stored Workflow
+        if s.recActive && tool.kind == .rec { stopRecording(); return }
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
@@ -661,9 +673,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: trigger
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now) {
         let s = AppState.shared
-        if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
-        // switching Tools while frozen keeps the same Freeze Frame
-        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)") }; return }
+        // switching Tools while frozen keeps the same Freeze Frame — Record
+        // Tools are disabled while a Recording runs
+        if s.phase == .frozen {
+            if s.tool != tool {
+                guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
+                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)")
+            }
+            return
+        }
+        // a Record Shortcut while recording stops it
+        if s.phase == .desktop && s.recActive && tool.kind == .rec { stopRecording(); return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
@@ -865,8 +885,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("record: shareable content failed: \(error.localizedDescription)")
             return nil
         }
-        // wadjet's own panels (border, island, toasts) never appear in the video
-        let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
         if s.tool == .recWindow {
             // Resolve against fresh content: overlayCtrl's map is from Freeze
             // time, and a Record Window that can't find its window must never
@@ -886,7 +904,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("record: no shareable display for index \(display)")
             return nil
         }
-        let filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        // the Recording shows whatever is on screen — Wadjet's own Freeze
+        // Frame, toolbar and markup included; only the red region border is out
+        let border = content.windows.filter { $0.windowID == CGWindowID(recordingPanel?.windowNumber ?? -1) }
+        let filter = SCContentFilter(display: disp, excludingWindows: border)
         // sourceRect is display-local points with a top-left origin; the
         // overlay's rect is view coords (bottom-left).
         var sourceRect = CGRect.null
@@ -912,9 +933,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             height: 2 * Int((source.height * scale / 2).rounded(.toNearestOrEven)))
     }
 
+    /// the Tool and Workflow the Recording started with — a Screenshot taken
+    /// mid-Recording switches s.tool and consumes triggerWorkflow, so neither
+    /// can be read back at stop time
+    var recContext: (tool: Tool?, workflow: String)?
     func startRecording(rect: CGRect, display: Int) {
         let s = AppState.shared
+        recContext = (s.tool, s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.recording)
+        s.triggerWorkflow = nil // consumed by the Recording, not the next capture
         overlayCtrl.closeAllPanelsOnly() // live screen returns
+        // the region border goes up now — recordSource needs the panel to
+        // exist so it can exclude it from the video
+        showRecBorder(rect: rect, display: display)
+        overlayCtrl.chromeScreens = Freeze.shared.displays.isEmpty
+            ? NSScreen.screens : Freeze.shared.displays.map(\.screen)
         recordingRect = rect; recordingDisplay = display
         pauseAcc = 0; s.recordingElapsed = 0; s.recordingPaused = false
         // .countdown holds until beginStream lands .recording or .desktop —
@@ -958,14 +990,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // Recording is always stoppable from the status item AND the island; the
     // "Show Island While Recording" option only toggles the island part.
+    // the Recording's own menu bar item beside the Wadjet eye — the main
+    // item keeps its icon and normal menu throughout
+    var recStatusItem: NSStatusItem?
     func updateRecChrome() {
         let s = AppState.shared
-        statusItem.button?.title = "● " + fmtT(s.recordingElapsed)
-        statusItem.button?.image = nil
+        if recStatusItem == nil { recStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength) }
+        recStatusItem?.button?.title = (s.recordingPaused ? "❚❚ " : "● ") + fmtT(s.recordingElapsed)
         let m = NSMenu()
         m.addItem(mi(s.recordingPaused ? "Resume" : "Pause", #selector(recPause), on: false))
         m.addItem(mi("Stop Recording", #selector(recStop), on: false))
-        statusItem.menu = m
+        recStatusItem?.menu = m
+        AppLog.line("menu bar: wadjet=\(statusItem.button?.image == nil ? "?" : "eye") rec=\(recStatusItem?.button?.title ?? "-")")
         overlayCtrl.refreshToolbars()
     }
     @objc func recPause() { togglePause() }
@@ -995,7 +1031,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let file = try? captureFiles.newFile(ext: "mp4") else {
             guard live() else { return } // cancelled: nothing to report
             AppLog.line("record: could not resolve the source or name the file")
-            s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            s.recActive = false; s.phase = .desktop; recContext = nil
+            rebuildMenu(); overlayCtrl.closeAllPanelsOnly(); overlayCtrl.chromeScreens = []
+            recordingPanel?.close(); recordingPanel = nil
             errorToast("Couldn't record", "No capture source — Screen Recording permission may be off.")
             return
         }
@@ -1022,15 +1060,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
             recStream = stream; recWriter = writer; recOutput = output
-            s.phase = .recording; self.recStart = Date()
-            AppLog.line("phase=recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
+            s.recActive = true; s.phase = .desktop; self.recStart = Date()
+            AppLog.line("recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
             self.updateEscHotkey()
-            self.showRecBorder(rect: recordingRect, display: recordingDisplay)
             self.updateRecChrome()
         } catch {
             AppLog.line("record: stream failed to start: \(error.localizedDescription)")
             guard live() else { return } // a cancelled attempt must not reset a newer one
-            s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            s.recActive = false; s.phase = .desktop; recContext = nil
+            rebuildMenu(); overlayCtrl.closeAllPanelsOnly(); overlayCtrl.chromeScreens = []
+            recordingPanel?.close(); recordingPanel = nil
             errorToast("Couldn't record", error.localizedDescription)
         }
     }
@@ -1051,16 +1090,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func recTick() {
         let s = AppState.shared
-        guard s.phase == .recording, !s.recordingPaused, let st = recStart else { return }
+        guard s.recActive, !s.recordingPaused, let st = recStart else { return }
         s.recordingElapsed = Date().timeIntervalSince(st) - pauseAcc
-        statusItem.button?.title = "● " + fmtT(s.recordingElapsed)
+        recStatusItem?.button?.title = "● " + fmtT(s.recordingElapsed)
     }
     // Esc during countdown cancels before the Recording starts.
     func cancelCountdown() {
         let s = AppState.shared
         guard s.phase == .countdown else { return }
         CountdownHUD.hide()
-        s.phase = .desktop; recStart = nil
+        s.phase = .desktop; recStart = nil; recContext = nil
+        recordingPanel?.close(); recordingPanel = nil
         overlayCtrl.closeAllPanelsOnly()
         AppLog.line("esc: cancelled countdown")
         rebuildMenu(); updateEscHotkey()
@@ -1069,21 +1109,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         s.recordingElapsed = recStart.map { Date().timeIntervalSince($0) - pauseAcc } ?? s.recordingElapsed
         let dur = s.recordingElapsed
-        let label = "\(s.tool?.title ?? "Recording") \(fmtT(dur))"
+        let label = "\(recContext?.tool?.title ?? "Recording") \(fmtT(dur))"
         let stoppedAt = hostNow()
         let stream = recStream, writer = recWriter
         recStream = nil; recWriter = nil; recOutput = nil
         recordingPanel?.close(); recordingPanel = nil
-        s.phase = .desktop; recStart = nil
+        s.recActive = false; recStart = nil
+        // stopping ends only the Recording — a Freeze Frame that's up is an
+        // unrelated Screenshot in progress and stays up (its Shortcut one-shot
+        // Workflow survives too). Without one, the recording chrome goes.
+        if s.phase != .frozen {
+            s.phase = .desktop
+            overlayCtrl.chromeScreens = []
+            overlayCtrl.closeAllPanelsOnly()
+        } else {
+            // the bubble dies without the merge (there's no recording island to
+            // merge into) and the island returns to the plain toolbar
+            overlayCtrl.syncBubbles()
+            overlayCtrl.refreshToolbars()
+        }
         updateEscHotkey()
-        AppLog.line("phase=desktop (recording stopped, \(String(format: "%.1f", dur))s)")
-        statusItem.button?.title = ""; statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
+        AppLog.line("recording stopped (\(String(format: "%.1f", dur))s) \(label)")
+        if let ri = recStatusItem { NSStatusBar.system.removeStatusItem(ri); recStatusItem = nil }
         rebuildMenu()
-        overlayCtrl.closeAllPanelsOnly()
         // The Workflow is decided now — a Shortcut fired while this finishes
         // must not reach back and change it.
-        let workflow = s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.recording
-        s.triggerWorkflow = nil // consumed now, whatever fires later starts fresh
+        let workflow = recContext?.workflow ?? s.config.value.defaultWorkflows.recording
+        recContext = nil
         Task { @MainActor in
             guard let writer else { return }
             do { try await stream?.stopCapture() }
@@ -1103,7 +1155,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// earlier stream does nothing.
     func streamStopped(_ id: ObjectIdentifier, reason: String) {
         guard let stream = recStream, ObjectIdentifier(stream) == id,
-              AppState.shared.phase == .recording else { return }
+              AppState.shared.recActive else { return }
         AppLog.line("record: stream stopped: \(reason)")
         errorToast("Recording stopped", reason)
         stopRecording()
@@ -1306,6 +1358,14 @@ final class OverlayController {
     weak var app: AppDelegate?
     var panels: [NSPanel] = []
     var toolbarPanels: [Int: NSPanel] = [:] // one per Freeze display index
+    /// the screens that carry island/bubble chrome — the Freeze Frame's while
+    /// an overlay is up, the live screens while only a Recording runs (the
+    /// Freeze Frame is gone then, so nothing else can supply them)
+    var chromeScreens: [NSScreen] = []
+    var recBubblePanels: [Int: NSPanel] = [:] // the detached recording bubble, one per display
+    var bubbleSizes: [Int: CGSize] = [:]
+    var dyingBubbles: [Int: NSPanel] = [:]   // mid-merge bubbles awaiting their close
+    var bubbleExpanded: [Int: Bool] = [:]    // RecBubbleView reports its controls state
     var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
     var cornerRadii: [CGWindowID: CGFloat] = [:] // windowID -> measured corner radius, points
     var menuPanel: NSPanel?
@@ -1329,6 +1389,7 @@ final class OverlayController {
         for (di, _) in toolbarPanels {
             if toolbarShapeScreenRect(on: di)?.contains(m) == true { return true }
         }
+        for (_, p) in recBubblePanels { if p.frame.contains(m) { return true } }
         if let mp = menuPanel, mp.frame.contains(m) { return true }
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
@@ -1483,8 +1544,8 @@ final class OverlayController {
         // calls suspend off-actor so the two captures overlap, while `disp`
         // never leaves its region (no SCK type is Sendable, so `async let`
         // can't carry them itself)
-        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr) }
-        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false) }
+        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, content: content) }
+        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false, content: content) }
         let (out, cleanOut) = try await (shot.value, cleanShot.value)
         guard let img = out.sdr ?? out.hdr, let clean = cleanOut.sdr else { throw CaptureError("screenshot returned no image") }
         var fd = FrozenDisplay(screen: screen, image: img, clean: clean)
@@ -1523,13 +1584,30 @@ final class OverlayController {
     }
     // one display screenshot at pixel resolution: `cursor` decides whether the
     // pointer is composited in, `hdr` asks for an extended-sRGB variant
-    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool) async throws -> (sdr: CGImage?, hdr: CGImage?) {
+    // every full-display capture leaves out Wadjet's compact chrome — the
+    // collapsed island/notch and the collapsed recording bubble — so no stale
+    // remnant of our own UI freezes under the live one. Expanded toolbars and
+    // expanded bubble controls DO freeze into the shot, like any window.
+    func frozenExcludedWindows(from content: SCShareableContent) -> [SCWindow] {
+        var nums: [CGWindowID] = []
+        let expanded = AppState.shared.expandedDisplay
+        for (di, p) in toolbarPanels {
+            if di != expanded { nums.append(CGWindowID(p.windowNumber)) }
+        }
+        for (di, p) in recBubblePanels {
+            if bubbleExpanded[di] != true { nums.append(CGWindowID(p.windowNumber)) }
+        }
+        let set = Set(nums)
+        return content.windows.filter { set.contains($0.windowID) }
+    }
+    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool, content: SCShareableContent) async throws -> (sdr: CGImage?, hdr: CGImage?) {
         let cfg = SCScreenshotConfiguration()
         cfg.width = width; cfg.height = height
         cfg.showsCursor = cursor; cfg.displayIntent = .local
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         let out = try await SCScreenshotManager.captureScreenshot(
-            contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
+            contentFilter: SCContentFilter(display: disp, excludingWindows: frozenExcludedWindows(from: content)),
+            configuration: cfg)
         return (out.sdrImage, out.hdrImage)
     }
     // measure each window's real corner radius from a corner screenshot, so the
@@ -1594,6 +1672,7 @@ final class OverlayController {
     func showPanels(tool: Tool) {
         let s = AppState.shared
         s.phase = .frozen; s.tool = tool
+        chromeScreens = Freeze.shared.displays.map(\.screen)
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
             let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -1645,14 +1724,14 @@ final class OverlayController {
     // one toolbar panel per Freeze display — the island/notch form is chosen
     // inside ToolbarView from its own screen
     func showToolbars() {
-        for (idx, fd) in Freeze.shared.displays.enumerated() {
+        for (idx, sc) in chromeScreens.enumerated() {
             let tv = ToolbarView(displayIndex: idx, ctrl: self)
             let hosting = PassthroughHostingView(rootView: tv)
             hosting.displayIndex = idx
             let size = NSSize(width: tv.panelW, height: tv.panelH)
             hosting.frame = NSRect(origin: .zero, size: size)
-            let p = NSPanel(contentRect: NSRect(x: fd.screen.frame.midX - size.width / 2,
-                                                y: fd.screen.frame.maxY - size.height,
+            let p = NSPanel(contentRect: NSRect(x: sc.frame.midX - size.width / 2,
+                                                y: sc.frame.maxY - size.height,
                                                 width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
@@ -1663,6 +1742,82 @@ final class OverlayController {
             toolbarPanels[idx] = p
             AppLog.line("toolbar panel d\(idx) \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
         }
+        syncBubbles()
+    }
+
+    /// the recording bubble exists only while a Freeze Frame is open mid-
+    /// Recording with the island shown — one per display, 8 pt right of the
+    /// island/toolbar shape
+    func syncBubbles() {
+        let want = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
+            && AppState.shared.phase == .frozen
+        for di in chromeScreens.indices {
+            if want, recBubblePanels[di] == nil {
+                if let d = dyingBubbles[di] { d.close(); dyingBubbles[di] = nil } // cancel a merge still in flight
+                let h = NSHostingView(rootView: RecBubbleView(displayIndex: di, ctrl: self))
+                let p = NSPanel(contentRect: NSRect(origin: .zero, size: h.fittingSize),
+                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
+                p.hasShadow = false
+                p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+                p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
+                p.contentView = h; p.orderFront(nil)
+                recBubblePanels[di] = p
+            } else if !want {
+                closeBubble(di: di, merge: AppState.shared.recActive && AppState.shared.showIslandWhileRecording)
+            }
+        }
+        for (di, _) in recBubblePanels { layoutBubble(on: di) }
+    }
+
+    /// the island pill's midline and height on a display — the same maths the
+    /// ToolbarView uses (islandH/gap/pillH), so the bubble stays centred on the
+    /// pill whatever shape the toolbar is in
+    func islandPill(on di: Int) -> (midY: CGFloat, h: CGFloat)? {
+        guard di < chromeScreens.count else { return nil }
+        let sc = chromeScreens[di]
+        let hasNotch = sc.safeAreaInsets.top > 0 && !AppState.shared.islandMode
+        let islandH = max(22, max(0, sc.frame.maxY - sc.visibleFrame.maxY))
+        let gap: CGFloat = hasNotch ? 0 : 3
+        let pillH = islandH - 2 * gap
+        return (sc.frame.maxY - gap - pillH / 2, pillH)
+    }
+    /// leading edge 8 pt off the right edge of whatever shape is up (island or
+    /// expanded bar), centred on the island pill — called on every
+    /// shape/layout change via syncHit
+    func layoutBubble(on di: Int, size: CGSize? = nil) {
+        if let size { bubbleSizes[di] = size }
+        guard let p = recBubblePanels[di], let shape = toolbarShapeScreenRect(on: di),
+              let pill = islandPill(on: di) else { return }
+        let sz = bubbleSizes[di] ?? p.frame.size
+        // top edge anchored to the pill's top: the compact bubble IS the pill,
+        // and the taller expanded controls grow downward, staying on screen
+        let r = NSRect(x: shape.maxX + 8, y: pill.midY + pill.h / 2 - sz.height, width: sz.width, height: sz.height)
+        guard r != p.frame else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.1)
+            p.animator().setFrame(r, display: true)
+        }
+    }
+    /// overlay close mid-Recording: the bubble slides back into the island's
+    /// right edge (scale 0.6, fade, ~0.3 s) before its panel goes; every other
+    /// path closes it at once
+    func closeBubble(di: Int, merge: Bool) {
+        guard let p = recBubblePanels[di] else { return }
+        recBubblePanels[di] = nil; bubbleSizes[di] = nil
+        guard merge else { p.close(); return }
+        dyingBubbles[di] = p
+        AppState.shared.bubblesDying = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            p.close()
+            if self.dyingBubbles[di] === p { self.dyingBubbles[di] = nil }
+        }
+    }
+    func bubbleScreenRect(_ r: CGRect, on di: Int) -> CGRect? {
+        guard let p = recBubblePanels[di], let cv = p.contentView else { return nil }
+        return p.convertToScreen(cv.convert(r, to: nil))
     }
     // the expanded row's true size lands after the panel is created; resize to
     // fit it, staying centred on the display
@@ -1677,7 +1832,8 @@ final class OverlayController {
         toolbarPanels.values.forEach { $0.close() }
         toolbarPanels = [:]
         let p = AppState.shared.phase
-        if p == .frozen || (p == .recording && AppState.shared.showIslandWhileRecording) { showToolbars() }
+        if p == .frozen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording) { showToolbars() }
+        AppLog.line("chrome: \(toolbarPanels.count) islands, \(recBubblePanels.count) bubbles on \(chromeScreens.count) screens")
     }
     func closeAllPanelsOnly() {
         panels.forEach { $0.close() }
@@ -1687,6 +1843,8 @@ final class OverlayController {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
+        let merge = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
+        for di in recBubblePanels.keys { closeBubble(di: di, merge: merge) }
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]
         // every teardown — Recording start, Esc, failures — hands activation
         // back unless the user switched apps meanwhile
@@ -1705,6 +1863,11 @@ final class OverlayController {
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
         closeAllPanelsOnly()
+        // mid-Recording the recording island returns once the overlay is gone;
+        // the Freeze Frame is about to be freed, so the islands ride the live
+        // screens from here on
+        if AppState.shared.recActive { chromeScreens = NSScreen.screens; refreshToolbars() }
+        else { chromeScreens = [] }
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
@@ -2329,7 +2492,7 @@ struct ToolbarView: View {
     var expanded: Bool { s.expandedDisplay == displayIndex }
     @Namespace var ns
     var screen: NSScreen? {
-        displayIndex < Freeze.shared.displays.count ? Freeze.shared.displays[displayIndex].screen : NSScreen.main
+        displayIndex < ctrl.chromeScreens.count ? ctrl.chromeScreens[displayIndex] : NSScreen.main
     }
     var hasNotch: Bool { (screen?.safeAreaInsets.top ?? 0) > 0 && !s.islandMode }
     // menu bar band height on this display (the island lives inside it)
@@ -2342,7 +2505,9 @@ struct ToolbarView: View {
         let l = sc.auxiliaryTopLeftArea?.width ?? 0, r = sc.auxiliaryTopRightArea?.width ?? 0
         return max(0, sc.frame.width - l - r)
     }
-    var recording: Bool { s.phase == .recording && s.showIslandWhileRecording }
+    // the compact recording island — only while no Freeze Frame is up;
+    // during one the island holds the toolbar and the Recording is the bubble
+    var recording: Bool { s.recActive && s.showIslandWhileRecording && s.phase != .frozen }
 
     // Notched display: black, flush with the top edge, rounded bottom corners,
     // centred on (and slightly wider than) the notch.
@@ -2420,6 +2585,7 @@ struct ToolbarView: View {
 
     func syncHit() {
         ToolbarHit.rects[displayIndex] = hoverRect
+        ctrl.layoutBubble(on: displayIndex)
         if expanded {
             let xs = visibleTools.sorted { $0.rawValue < $1.rawValue }
                 .compactMap { t -> String? in
@@ -2578,51 +2744,10 @@ struct ToolbarView: View {
     @State var recRowSize = CGSize(width: 220, height: 64)
     @State var islandTimeW: CGFloat = 20 // measured "mm:ss" glyph width
     var recControls: some View {
-        // leading: the same red dot + time as the island; trailing: pause and
-        // stop as glass circles, all centred in the selH-tall row
-        HStack(spacing: 16) {
-            HStack(spacing: 8) {
-                Circle().fill(.red).frame(width: 8, height: 8)
-                Text(fmtT(s.recordingElapsed)).font(.system(size: 14)).monospacedDigit().fixedSize()
-            }
-            Spacer(minLength: 0)
-            recButton(s.recordingPaused ? "play.fill" : "pause.fill",
-                      label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
-            recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
-        }
-        .foregroundStyle(.white)
-        // the outer circles' edges sit so their centres meet the corner
-        // centres (radius selH/2 + d) — concentric, like the tool capsule
-        .padding(.horizontal, selH / 2 + d - 24)
-        .frame(height: selH)
-        .padding(.top, contentTop)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
-    }
-
-    // one recording control: a glass circle, TipPanel tooltip on hover
-    func recButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 18))
-                .frame(width: 48, height: 48)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
-            ToolbarBtnFrames.recRects[displayIndex, default: [:]][label] = $0
-        }
-        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
-            switch phase {
-            case .active:
-                // the button's own frame, not a box around the pointer
-                if let r = ToolbarBtnFrames.recRects[displayIndex]?[label] {
-                    TipPanel.hover(label, anchor: ctrl.panelScreenRect(r, on: displayIndex) ?? .zero)
-                }
-            case .ended:
-                TipPanel.hide()
-            }
-        }
+        RecControlsView(displayIndex: displayIndex, ctrl: ctrl,
+                        screenRect: { ctrl.panelScreenRect($0, on: displayIndex) })
+            .padding(.top, contentTop)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
     }
 
     let toolD: CGFloat = 72
@@ -2771,7 +2896,7 @@ struct ToolbarView: View {
     }
 
     func openToolMenu(_ t: Tool) {
-        guard t.hasMenu else { return }
+        guard t.hasMenu, !toolDisabled(t) else { return }
         TipPanel.hide()
         if s.tool != t { AppDelegate.shared?.trigger(t) }
         s.openMenu = s.openMenu == t ? nil : t
@@ -2793,7 +2918,7 @@ struct ToolbarView: View {
     /// open a group — the same centred spring as hover; the lens retargets
     /// onto the pointer's position in the new layout, so no jump
     func openTheGroup(_ k: Tool.Kind) {
-        guard k != openGroup else { return }
+        guard k != openGroup, !(s.recActive && k == .rec) else { return }
         AppLog.line("openTheGroup \(k)")
         if reduceMotion { // no bouncy layout spring under Reduce Motion
             var t = Transaction(); t.disablesAnimations = true
@@ -2802,8 +2927,18 @@ struct ToolbarView: View {
             withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
         }
     }
+    /// Record Tools are dead while a Recording runs
+    func toolDisabled(_ t: Tool) -> Bool { s.recActive && t.kind == .rec }
+    /// the Tool whose visible cell actually contains x — gaps and hidden
+    /// stacked cells return nil
+    func hitTool(at x: CGFloat) -> Tool? {
+        cellCentres.first { visibleTools.contains($0.key) && abs($0.value.x - x) <= toolD / 2 }?.key
+    }
+    /// press and drag targets skip disabled Tools; a gap still snaps to the
+    /// nearest live cell
     func nearestTool(to x: CGFloat) -> Tool? {
-        cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
+        cellCentres.filter { visibleTools.contains($0.key) && !toolDisabled($0.key) }
+            .min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
     }
     var rowEnds: (CGFloat, CGFloat) {
         let xs = cellCentres.filter { visibleTools.contains($0.key) }.values.map(\.x)
@@ -2830,7 +2965,7 @@ struct ToolbarView: View {
                         let rep = t == lastUsedTool(k), shown = open || rep
                         make(t, !open && rep)
                             .scaleEffect(shown ? 1 : 0.5)
-                            .opacity(shown ? 1 : 0)
+                            .opacity(shown ? (toolDisabled(t) ? 0.35 : 1) : 0) // a Recording greys the video group
                             .allowsHitTesting(shown)
                             .accessibilityHidden(!shown)
                             .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : 0,
@@ -3090,11 +3225,14 @@ struct ToolbarView: View {
                     // lens where it is mid-flight, don't snap back to selected
                     let wasTravelling = travelling; travelling = false
                     pressX = v.startLocation.x
-                    pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
+                    // the real cell under the finger (gaps pick the nearest
+                    // cell); a greyed Record cell swallows the press entirely
+                    pressTool = hitTool(at: v.startLocation.x) ?? nearestTool(to: v.startLocation.x)
+                    if let pt = pressTool, toolDisabled(pt) { pressTool = nil }
                     // the lens only pops for an actual switch — a press on the
                     // selected Tool (its menu tap) shows none; a travel in
                     // flight keeps it up so it can't vanish mid-flight
-                    pressing = wasTravelling || pressTool != s.tool
+                    pressing = wasTravelling || (pressTool != nil && pressTool != s.tool)
                     // start the sim exactly where the rest highlight was —
                     // unless it's still travelling from the last tap
                     if !wasTravelling, let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
@@ -3128,7 +3266,11 @@ struct ToolbarView: View {
                 // hover events may not have arrived during the drag — refresh
                 // before lensActive falls, so releasing outside collapses
                 hoverInside = pointerInside()
-                if wasDragging {
+                let under = hitTool(at: v.location.x)
+                if let u = under, toolDisabled(u) {
+                    // dropped on a greyed Record cell: the lens goes home
+                    if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) }
+                } else if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
                         // the spring carries it home — overshoot is the wobble
@@ -3206,6 +3348,112 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
     }
 }
 #endif
+
+/// the recording controls row — shared by the recording island's expansion
+/// and the detached recording bubble: dot + time, Pause, Stop
+struct RecControlsView: View {
+    let displayIndex: Int
+    let ctrl: OverlayController
+    /// the button's frame in its panel, converted to screen coords
+    let screenRect: (CGRect) -> CGRect?
+    @ObservedObject var s = AppState.shared
+    var body: some View {
+        // leading: the same red dot + time as the island; trailing: pause and
+        // stop as glass circles, all centred in the selH-tall row
+        HStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text(fmtT(s.recordingElapsed)).font(.system(size: 14)).monospacedDigit().fixedSize()
+            }
+            Spacer(minLength: 0)
+            recButton(s.recordingPaused ? "play.fill" : "pause.fill",
+                      label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
+            recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
+        }
+        .foregroundStyle(.white)
+        // the outer circles' edges sit so their centres meet the corner
+        // centres (radius 32 + 10) — concentric, like the tool capsule
+        .padding(.horizontal, 18)
+        .frame(height: 64)
+    }
+
+    // one recording control: a glass circle, TipPanel tooltip on hover
+    func recButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 18))
+                .frame(width: 48, height: 48)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
+            ToolbarBtnFrames.recRects[displayIndex, default: [:]][label] = $0
+        }
+        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
+            switch phase {
+            case .active:
+                // the button's own frame, not a box around the pointer
+                if let r = ToolbarBtnFrames.recRects[displayIndex]?[label] {
+                    TipPanel.hover(label, anchor: screenRect(r) ?? .zero)
+                }
+            case .ended:
+                TipPanel.hide()
+            }
+        }
+    }
+}
+
+/// the detached recording bubble: a black capsule with the dot + time that
+/// springs out of the island's right edge when a Freeze Frame opens mid-
+/// Recording. Its own small panel sits 8 pt right of the island/toolbar
+/// shape, so it slides outward as the bar expands. Hover expands it into the
+/// full recording controls — unless this display's bar is already expanded.
+struct RecBubbleView: View {
+    let displayIndex: Int
+    let ctrl: OverlayController
+    @ObservedObject var s = AppState.shared
+    @State var hovering = false
+    @State var emerged = false
+    var expanded: Bool { hovering && s.expandedDisplay != displayIndex }
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if expanded {
+                RecControlsView(displayIndex: displayIndex, ctrl: ctrl,
+                                screenRect: { ctrl.bubbleScreenRect($0, on: displayIndex) })
+            } else {
+                HStack(spacing: 7) {
+                    Circle().fill(.red).frame(width: 8, height: 8)
+                    Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
+                }
+                .padding(.horizontal, 12).frame(height: ctrl.islandPill(on: displayIndex)?.h ?? 28)
+            }
+        }
+        .foregroundStyle(.white).fixedSize()
+        .background(Capsule().fill(.black))
+        .contentShape(Capsule())
+        .scaleEffect(emerged ? 1 : 0.6, anchor: .leading) // buds off the island's edge
+        .opacity(emerged ? 1 : 0)
+        .onAppear {
+            s.bubblesDying = false
+            withAnimation(.spring(duration: 0.35, bounce: 0.15)) { emerged = true }
+        }
+        .onChange(of: s.bubblesDying) { _, dying in
+            if dying { withAnimation(.spring(duration: 0.3)) { emerged = false } }
+        }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active: hovering = true
+            case .ended: hovering = false
+            }
+        }
+        .onChange(of: hovering) { ctrl.markOverlaysDirty() }
+        .onChange(of: expanded) { ctrl.bubbleExpanded[displayIndex] = expanded }
+        .onAppear { ctrl.bubbleExpanded[displayIndex] = expanded }
+        .animation(.spring(duration: 0.3), value: expanded)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { ctrl.layoutBubble(on: displayIndex, size: $0) }
+    }
+}
 
 // catches right-clicks without blocking left ones — the view only claims the
 // hit while a rightMouseDown is being dispatched
@@ -3762,7 +4010,7 @@ struct StateHUDView: View {
             Text("workflow: \(s.workflowFor(s.tool) ?? "-")")
             Text("colour=\(s.colourFmt) measure=\(s.measureMode) countdown=\(s.countdown)")
             Text("audio=\(s.sysAudio ? "on" : "off")/\(s.mic ? "on" : "off") cursor=\(s.cursor ? "on" : "off") island=\(s.showIslandWhileRecording ? "on" : "off")")
-            Text("rec: \(s.phase == .recording ? fmtT(s.recordingElapsed) + (s.recordingPaused ? " (paused)" : "") : "-")")
+            Text("rec: \(s.recActive ? fmtT(s.recordingElapsed) + (s.recordingPaused ? " (paused)" : "") : "-")")
             Text("clip: \(String(s.lastClipboard.prefix(80)))").lineLimit(2)
             Text("freeze latency: \(s.latencyText)").foregroundStyle(.secondary)
         }

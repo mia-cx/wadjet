@@ -41,9 +41,10 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - Copy image is unavailable for Recordings; use Copy file instead.
 - Every Capture has a file. It is temporary unless a Save file Step keeps a permanent copy.
 - Steps have no conditions. A failed Step is skipped, the rest still run, and the error shows in the toast and history.
-- A new Capture can start while earlier Captures still run their Steps or upload. Only one Freeze Frame or Recording is on screen at a time.
+- A new Capture can start while earlier Captures still run their Steps or upload. One Freeze Frame and one Recording at a time, but a Freeze Frame can open during a Recording, for Screenshots (and later markup) mid-Recording.
 - Recordings can pause, so wadjet writes them with its own `AVAssetWriter` instead of ScreenCaptureKit's file recorder.
-- Recording controls (time, Pause, Stop) sit on the menu bar icon and in the island. Either one stops, as does the Shortcut again. Esc never cancels a Recording.
+- A Recording gets its own menu bar item (time, Pause, Stop) beside the Wadjet icon, which keeps working. On the island it shows the dot and time; when a Freeze Frame opens mid-Recording, the island holds the toolbar and the Recording splits off into a detached bubble, like two Live Activities on iOS. Hovering either expands it. Record Tools are greyed out during a Recording; a Record Shortcut pressed again stops it. Esc never cancels a Recording.
+- A Recording captures whatever is on screen, Wadjet's own Freeze Frame, toolbar and markup included; only its region border is left out.
 - Record Tool options: countdown, system audio, microphone, cursor, click circles, and show island while recording. Cursor and island are on by default; the rest are off.
 - A resized window is scaled into the Recording's starting size, with bars where the shape changes.
 - MP4 resolution and fps are configurable (1920 px, 30 fps by default) with no length limit.
