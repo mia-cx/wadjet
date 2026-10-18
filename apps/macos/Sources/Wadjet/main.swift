@@ -359,6 +359,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ClearGlassPatch.install()
         #endif
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = buildMainMenu() // accessory ignores it; it shows while .regular
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
         rebuildMenu()
@@ -565,17 +566,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
+    /// the Dock/⌘-Tab-visible app's minimal menu, shown only while .regular
+    /// — standard Edit selectors with nil targets reach the first responder
+    /// (⌘C/⌘V work in Settings' text fields)
+    func buildMainMenu() -> NSMenu {
+        func mi(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+            NSMenuItem(title: title, action: action, keyEquivalent: key)
+        }
+        let main = NSMenu()
+        let app = NSMenuItem(); app.submenu = NSMenu()
+        app.submenu!.addItem(mi("Settings…", #selector(openSettings), ","))
+        app.submenu!.addItem(.separator())
+        app.submenu!.addItem(mi("Hide Wadjet", #selector(NSApplication.hide(_:)), "h"))
+        app.submenu!.addItem(mi("Quit Wadjet", #selector(NSApplication.terminate(_:)), "q"))
+        let editM = NSMenuItem(); editM.submenu = NSMenu(title: "Edit")
+        editM.submenu!.addItem(mi("Undo", Selector(("undo:")), "z"))
+        editM.submenu!.addItem(mi("Redo", Selector(("redo:")), "Z"))
+        editM.submenu!.addItem(.separator())
+        editM.submenu!.addItem(mi("Cut", #selector(NSText.cut(_:)), "x"))
+        editM.submenu!.addItem(mi("Copy", #selector(NSText.copy(_:)), "c"))
+        editM.submenu!.addItem(mi("Paste", #selector(NSText.paste(_:)), "v"))
+        editM.submenu!.addItem(mi("Select All", #selector(NSText.selectAll(_:)), "a"))
+        let win = NSMenuItem(); win.submenu = NSMenu(title: "Window")
+        win.submenu!.addItem(mi("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"))
+        win.submenu!.addItem(mi("Close", #selector(NSWindow.performClose(_:)), "w"))
+        main.items = [app, editM, win]
+        return main
+    }
+    /// a Dock-icon click (or ⌘-Tab back) reopens Settings
+    func applicationShouldHandleReopen(_ a: NSApplication, hasVisibleWindows f: Bool) -> Bool {
+        openSettings()
+        return true
+    }
     var settingsWindow: NSWindow?
     @objc func openSettings() {
         if settingsWindow == nil {
             let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
             w.title = "Wadjet Settings"
             w.isReleasedWhenClosed = false
+            // back to menu-bar-only when Settings closes
+            NotificationCenter.default.addObserver(self, selector: #selector(settingsClosed(_:)),
+                name: NSWindow.willCloseNotification, object: w)
             settingsWindow = w
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
-        AppLog.line("settings: window opened")
+        AppLog.line("settings: window opened (regular)")
+    }
+    @objc func settingsClosed(_ n: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        AppLog.line("settings: closed")
     }
 
     // MARK: folder bookmarks
@@ -795,11 +836,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
     }
     /// the frontmost app's first window that's also in the frozen window list —
-    /// nil when Wadjet is frontmost or nothing matches (window numbers are
-    /// compared as Int; CGWindowID() traps on bad values)
+    /// nil when nothing matches (window numbers are compared as Int;
+    /// CGWindowID() traps on bad values). Settings counts — it's a normal window.
     func focusedWindow() -> (id: CGWindowID, frame: CGRect, display: Int)? {
-        guard let front = NSWorkspace.shared.frontmostApplication,
-              front.processIdentifier != getpid() else { return nil }
+        guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         for w in infos {
             guard (w[kCGWindowLayer as String] as? Int) == 0,
@@ -1758,9 +1798,10 @@ final class OverlayController {
         // window — SCShareableContent's windows list isn't ordered
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let sy = screen.frame
+        // our own layer-0 windows (Settings) ARE capturable; every overlay
+        // panel rides at a non-zero level, so the layer check excludes them
         fd.windowFrames = infos.compactMap { w in
             guard (w[kCGWindowLayer as String] as? Int) == 0,
-                  (w[kCGWindowOwnerPID as String] as? Int32) != ProcessInfo.processInfo.processIdentifier,
                   (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let wn = w[kCGWindowNumber as String] as? Int else { return nil }
