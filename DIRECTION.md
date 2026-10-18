@@ -67,7 +67,7 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.
 - Failed uploads retry 3 times on network and server errors, then offer Retry. Offline uploads fail at once instead of queueing.
 - The toast shows upload progress and Cancel. Known size limits are checked before uploading.
-- History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default.
+- History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default. Their Canvases degrade instead: SDR and lossy after 7 days, unused displays dropped after 30, deleted after 90, all configurable; a Canvas another Canvas links to lives as long as that one.
 - History searches the text inside Screenshots, filters by kind, Destination, and date, and merges Wadjet Server listings from other Macs.
 - Include Screenshots, MP4 and GIF Recording, capture history, and every Tool above in v1.
 - Keep settings in a human-readable JSON config file in the app's container, reloaded live on outside edits, and secrets in the Keychain.
@@ -80,6 +80,6 @@ Upload starts disabled. wadjet ships no Shortcuts, like iShare, and flags a hotk
 
 ## Later efforts
 
-Scrolling capture and public release are later efforts.
+Scrolling capture, Xnapper-style beautify (background, padding, shadow), and public release are later efforts.
 A free public Wadjet Server with 30-day storage may come with public release.
 Use [CONTEXT.md](CONTEXT.md) for the glossary and the map's linked tickets for decision details.

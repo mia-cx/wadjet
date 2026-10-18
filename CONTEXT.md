@@ -40,7 +40,7 @@ One object drawn or pasted with Markup, such as a shape, line, text, step counte
 _Avoid_: A markup, drawing, mark
 
 **Canvas**:
-wadjet's editable image document, saved as a `.wadjet` file: the whole uncropped screen, the crop and its corner radius, and every Annotation as its own layer.
+wadjet's editable image document, saved as a `.wadjet` file: every uncropped display, the crop and its corner radius, optionally each window as a layer, and every Annotation as its own layer.
 History keeps a Canvas for each Screenshot; the clipboard and the Workflow get the flattened image.
 _Avoid_: Project, document, layered image
 
