@@ -2418,7 +2418,9 @@ struct ToolbarView: View {
             dt -= h
         }
         blobX = p.x; blobY = p.y; lensVel = v
-        if lensActive { TipPanel.follow(nearestTool(to: p.x)) }
+        if lensActive, let t = nearestTool(to: p.x) {
+            TipPanel.follow(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex))
+        }
         // squash/stretch from the sim's own velocity, low-passed; below
         // 120 pt/s nothing stretches, overshoot does the settle wobble
         let raw = 1 + min(max((abs(v.x) - 120) / 1400, 0), 0.3)
@@ -2790,13 +2792,13 @@ enum TipPanel {
     static var tool: Tool? // button currently hovered, so the tip doesn't chase
     static var current: String?
     static var tipSize = CGSize.zero
-    /// ~14 pt right and ~18 pt below the pointer, flipped to stay on screen
+    static var anchor = CGRect.zero
+    /// centred under the anchor (a Tool cell or control), just below the
+    /// bar's edge — the cell sits `belowCell` points above it — kept on screen
+    static let belowCell: CGFloat = 10 + 6
     static func tipOrigin(_ size: CGSize) -> CGPoint {
-        let m = NSEvent.mouseLocation
-        var o = CGPoint(x: m.x + 14, y: m.y - 18 - size.height)
-        if let scr = NSScreen.screens.first(where: { $0.frame.contains(m) }) {
-            if o.x + size.width > scr.frame.maxX - 4 { o.x = m.x - 14 - size.width }
-            if o.y < scr.frame.minY + 4 { o.y = m.y + 18 }
+        var o = CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY - belowCell - size.height)
+        if let scr = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) {
             o.x = min(max(scr.frame.minX + 4, o.x), scr.frame.maxX - size.width - 4)
         }
         return o
@@ -2811,14 +2813,15 @@ enum TipPanel {
         tool = nil
         show(label, anchor: anchor)
     }
-    /// the tool under the lens, glued to the pointer while pressed/dragged
-    static func follow(_ t: Tool?) {
-        guard let t else { hide(); return }
+    /// the tool under the lens, under its cell while pressed/dragged
+    static func follow(_ t: Tool?, anchor: CGRect?) {
+        guard let t, let anchor else { hide(); return }
         guard AppState.shared.openMenu == nil else { hide(); return }
-        show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: .zero)
+        show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: anchor)
     }
-    static func show(_ label: String, anchor: CGRect) {
-        // same label: just keep it glued to the pointer
+    static func show(_ label: String, anchor a: CGRect) {
+        anchor = a
+        // same label: just re-anchor
         if let p = panel, current == label { p.setFrameOrigin(tipOrigin(tipSize)); return }
         panel?.close()
         let h = NSHostingView(rootView: Text(label).font(.system(size: 11)).foregroundStyle(.white)
