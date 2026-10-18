@@ -3289,7 +3289,7 @@ struct ToolMenuView: View {
                 countdownRows()
             case .util where tool == .pickColour:
                 ForEach(ColourFormat.allCases.map(\.rawValue), id: \.self) { f in
-                    row(f, on: f == s.colourFmt) { s.colourFmt = f }
+                    row(f, icon: f == "Hex" ? "number" : f == "SwiftUI" ? "swift" : "function", on: f == s.colourFmt) { s.colourFmt = f }
                 }
             case .util where tool == .measure:
                 tileRow(measureTiles)
@@ -3316,7 +3316,7 @@ struct ToolMenuView: View {
         .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
     }
 
-    func row(_ title: String, subtitle: String? = nil, icon: String? = nil, on: Bool, isToggle: Bool = false, action: @escaping () -> Void) -> some View {
+    func row(_ title: String, subtitle: String? = nil, icon: String, on: Bool, isToggle: Bool = false, action: @escaping () -> Void) -> some View {
         MenuRow(title: title, subtitle: subtitle, icon: icon, on: on, isToggle: isToggle) {
             action()
             s.openMenu = nil; ctrl.syncMenu()
@@ -3332,7 +3332,9 @@ struct ToolMenuView: View {
     /// Workflow radio rows, subtitled with each Workflow's Steps
     @ViewBuilder func workflowRows() -> some View {
         ForEach(s.workflows(for: tool), id: \.self) { w in
-            row(w, subtitle: s.config.value.workflows.first { $0.name == w }?.steps.map(\.title).joined(separator: " · "),
+            let wf = s.config.value.workflows.first { $0.name == w }
+            row(w, subtitle: wf?.steps.map(\.title).joined(separator: " · "),
+                icon: wf?.takes == .screenshot ? "photo" : wf?.takes == .mp4 ? "film" : "photo.stack",
                 on: w == s.workflowFor(tool)) {
                 s.workflowByTool[tool] = w; s.triggerWorkflow = nil // a menu pick wins over the Shortcut's
             }
@@ -3340,7 +3342,7 @@ struct ToolMenuView: View {
     }
     func confirmRow() -> some View {
         // a two-state pick, so it closes the menu like the other rows
-        row("Confirm on Release", on: s.confirmMode == "release", isToggle: true) {
+        row("Confirm on Release", icon: "hand.tap", on: s.confirmMode == "release", isToggle: true) {
             s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
         }
     }
@@ -3368,7 +3370,7 @@ struct ToolMenuView: View {
     @ViewBuilder func countdownRows() -> some View {
         ForEach(["Off", "3 s", "5 s", "10 s"], id: \.self) { v in
             let current = s.countdown == "Off" ? "Off" : s.countdown + " s"
-            row(v == "Off" ? "No Countdown" : "\(v) Countdown", icon: "timer", on: v == current) {
+            row(v == "Off" ? "No Countdown" : "\(v) Countdown", icon: v == "Off" ? "bolt" : "timer", on: v == current) {
                 s.countdown = v.replacingOccurrences(of: " s", with: "")
             }
         }
@@ -3380,7 +3382,7 @@ struct ToolMenuView: View {
 struct MenuRow: View {
     let title: String
     var subtitle: String? = nil
-    var icon: String? = nil
+    let icon: String // leading column — every row gets one
     let on: Bool
     /// an on/off option rather than one pick of several — VoiceOver reads it as a toggle
     var isToggle = false
@@ -3389,17 +3391,19 @@ struct MenuRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 12) {
-                Color.clear.frame(width: 22, height: 22) // fixed column, empty or not
-                    .overlay {
-                        if on { Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold)) }
-                        else if let icon { Image(systemName: icon).font(.system(size: 15)) }
-                    }
+                Image(systemName: icon).font(.system(size: 15))
+                    .foregroundStyle(.white).frame(width: 22)
                 VStack(alignment: .leading, spacing: 1) {
                     Text(title).font(.system(size: 15)).foregroundStyle(.white)
                     if let subtitle { Text(subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
                         .lineLimit(1).truncationMode(.tail) }
                 }
                 Spacer()
+                Color.clear.frame(width: 22, height: 22) // fixed trailing slot
+                    .overlay {
+                        if on { Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white) }
+                    }
             }
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .padding(.horizontal, 14)
