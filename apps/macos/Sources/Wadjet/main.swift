@@ -70,6 +70,7 @@ final class AppState: ObservableObject {
     static let shared = AppState()
     @Published var phase: Phase = .desktop
     @Published var recActive = false // a Recording is running (independent of the overlay)
+    @Published var bubblesDying = false // set while a recording bubble merges back into the island
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
     /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
@@ -1332,6 +1333,8 @@ final class OverlayController {
     var toolbarPanels: [Int: NSPanel] = [:] // one per Freeze display index
     var recBubblePanels: [Int: NSPanel] = [:] // the detached recording bubble, one per display
     var bubbleSizes: [Int: CGSize] = [:]
+    var dyingBubbles: [Int: NSPanel] = [:]   // mid-merge bubbles awaiting their close
+    var bubbleExpanded: [Int: Bool] = [:]    // RecBubbleView reports its controls state
     var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
     var cornerRadii: [CGWindowID: CGFloat] = [:] // windowID -> measured corner radius, points
     var menuPanel: NSPanel?
@@ -1355,6 +1358,7 @@ final class OverlayController {
         for (di, _) in toolbarPanels {
             if toolbarShapeScreenRect(on: di)?.contains(m) == true { return true }
         }
+        for (_, p) in recBubblePanels { if p.frame.contains(m) { return true } }
         if let mp = menuPanel, mp.frame.contains(m) { return true }
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
@@ -1509,8 +1513,8 @@ final class OverlayController {
         // calls suspend off-actor so the two captures overlap, while `disp`
         // never leaves its region (no SCK type is Sendable, so `async let`
         // can't carry them itself)
-        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr) }
-        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false) }
+        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, content: content) }
+        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false, content: content) }
         let (out, cleanOut) = try await (shot.value, cleanShot.value)
         guard let img = out.sdr ?? out.hdr, let clean = cleanOut.sdr else { throw CaptureError("screenshot returned no image") }
         var fd = FrozenDisplay(screen: screen, image: img, clean: clean)
@@ -1549,13 +1553,30 @@ final class OverlayController {
     }
     // one display screenshot at pixel resolution: `cursor` decides whether the
     // pointer is composited in, `hdr` asks for an extended-sRGB variant
-    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool) async throws -> (sdr: CGImage?, hdr: CGImage?) {
+    // every full-display capture leaves out Wadjet's compact chrome — the
+    // collapsed island/notch and the collapsed recording bubble — so no stale
+    // remnant of our own UI freezes under the live one. Expanded toolbars and
+    // expanded bubble controls DO freeze into the shot, like any window.
+    func frozenExcludedWindows(from content: SCShareableContent) -> [SCWindow] {
+        var nums: [CGWindowID] = []
+        let expanded = AppState.shared.expandedDisplay
+        for (di, p) in toolbarPanels {
+            if di != expanded { nums.append(CGWindowID(p.windowNumber)) }
+        }
+        for (di, p) in recBubblePanels {
+            if bubbleExpanded[di] != true { nums.append(CGWindowID(p.windowNumber)) }
+        }
+        let set = Set(nums)
+        return content.windows.filter { set.contains($0.windowID) }
+    }
+    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool, content: SCShareableContent) async throws -> (sdr: CGImage?, hdr: CGImage?) {
         let cfg = SCScreenshotConfiguration()
         cfg.width = width; cfg.height = height
         cfg.showsCursor = cursor; cfg.displayIntent = .local
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         let out = try await SCScreenshotManager.captureScreenshot(
-            contentFilter: SCContentFilter(display: disp, excludingWindows: []), configuration: cfg)
+            contentFilter: SCContentFilter(display: disp, excludingWindows: frozenExcludedWindows(from: content)),
+            configuration: cfg)
         return (out.sdrImage, out.hdrImage)
     }
     // measure each window's real corner radius from a corner screenshot, so the
@@ -1700,6 +1721,7 @@ final class OverlayController {
             && AppState.shared.phase == .frozen
         for (di, _) in Freeze.shared.displays.enumerated() {
             if want, recBubblePanels[di] == nil {
+                if let d = dyingBubbles[di] { d.close(); dyingBubbles[di] = nil } // cancel a merge still in flight
                 let h = NSHostingView(rootView: RecBubbleView(displayIndex: di, ctrl: self))
                 let p = NSPanel(contentRect: NSRect(origin: .zero, size: h.fittingSize),
                                 styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
@@ -1709,21 +1731,55 @@ final class OverlayController {
                 p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
                 p.contentView = h; p.orderFront(nil)
                 recBubblePanels[di] = p
-            } else if !want, let p = recBubblePanels[di] {
-                p.close(); recBubblePanels[di] = nil; bubbleSizes[di] = nil
+            } else if !want {
+                closeBubble(di: di, merge: AppState.shared.recActive && AppState.shared.showIslandWhileRecording)
             }
         }
         for (di, _) in recBubblePanels { layoutBubble(on: di) }
     }
 
-    /// anchor the bubble's leading edge 8 pt off the shape's right edge,
-    /// centred on it — called on every shape/layout change via syncHit
+    /// the island pill's midline and height on a display — the same maths the
+    /// ToolbarView uses (islandH/gap/pillH), so the bubble stays centred on the
+    /// pill whatever shape the toolbar is in
+    func islandPill(on di: Int) -> (midY: CGFloat, h: CGFloat)? {
+        guard di < Freeze.shared.displays.count else { return nil }
+        let sc = Freeze.shared.displays[di].screen
+        let hasNotch = sc.safeAreaInsets.top > 0 && !AppState.shared.islandMode
+        let islandH = max(22, max(0, sc.frame.maxY - sc.visibleFrame.maxY))
+        let gap: CGFloat = hasNotch ? 0 : 3
+        let pillH = islandH - 2 * gap
+        return (sc.frame.maxY - gap - pillH / 2, pillH)
+    }
+    /// leading edge 8 pt off the right edge of whatever shape is up (island or
+    /// expanded bar), centred on the island pill — called on every
+    /// shape/layout change via syncHit
     func layoutBubble(on di: Int, size: CGSize? = nil) {
         if let size { bubbleSizes[di] = size }
-        guard let p = recBubblePanels[di], let shape = toolbarShapeScreenRect(on: di) else { return }
+        guard let p = recBubblePanels[di], let shape = toolbarShapeScreenRect(on: di),
+              let pill = islandPill(on: di) else { return }
         let sz = bubbleSizes[di] ?? p.frame.size
-        p.setFrame(NSRect(x: shape.maxX + 8, y: shape.midY - sz.height / 2,
-                          width: sz.width, height: sz.height), display: true)
+        let r = NSRect(x: shape.maxX + 8, y: pill.midY - sz.height / 2, width: sz.width, height: sz.height)
+        guard r != p.frame else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.3
+            ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.2, 0.9, 0.3, 1.1)
+            p.animator().setFrame(r, display: true)
+        }
+    }
+    /// overlay close mid-Recording: the bubble slides back into the island's
+    /// right edge (scale 0.6, fade, ~0.3 s) before its panel goes; every other
+    /// path closes it at once
+    func closeBubble(di: Int, merge: Bool) {
+        guard let p = recBubblePanels[di] else { return }
+        recBubblePanels[di] = nil; bubbleSizes[di] = nil
+        guard merge else { p.close(); return }
+        dyingBubbles[di] = p
+        AppState.shared.bubblesDying = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(320))
+            p.close()
+            if self.dyingBubbles[di] === p { self.dyingBubbles[di] = nil }
+        }
     }
     func bubbleScreenRect(_ r: CGRect, on di: Int) -> CGRect? {
         guard let p = recBubblePanels[di], let cv = p.contentView else { return nil }
@@ -1752,7 +1808,8 @@ final class OverlayController {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
-        recBubblePanels.values.forEach { $0.close() }; recBubblePanels = [:]; bubbleSizes = [:]
+        let merge = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
+        for di in recBubblePanels.keys { closeBubble(di: di, merge: merge) }
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]
         // every teardown — Recording start, Esc, failures — hands activation
         // back unless the user switched apps meanwhile
@@ -3331,7 +3388,7 @@ struct RecBubbleView: View {
                     Circle().fill(.red).frame(width: 8, height: 8)
                     Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
                 }
-                .padding(.horizontal, 12).frame(height: 28)
+                .padding(.horizontal, 12).frame(height: ctrl.islandPill(on: displayIndex)?.h ?? 28)
             }
         }
         .foregroundStyle(.white).fixedSize()
@@ -3339,13 +3396,22 @@ struct RecBubbleView: View {
         .contentShape(Capsule())
         .scaleEffect(emerged ? 1 : 0.6, anchor: .leading) // buds off the island's edge
         .opacity(emerged ? 1 : 0)
-        .onAppear { withAnimation(.spring(duration: 0.35, bounce: 0.15)) { emerged = true } }
+        .onAppear {
+            s.bubblesDying = false
+            withAnimation(.spring(duration: 0.35, bounce: 0.15)) { emerged = true }
+        }
+        .onChange(of: s.bubblesDying) { _, dying in
+            if dying { withAnimation(.spring(duration: 0.3)) { emerged = false } }
+        }
         .onContinuousHover { phase in
             switch phase {
             case .active: hovering = true
             case .ended: hovering = false
             }
         }
+        .onChange(of: hovering) { ctrl.markOverlaysDirty() }
+        .onChange(of: expanded) { ctrl.bubbleExpanded[displayIndex] = expanded }
+        .onAppear { ctrl.bubbleExpanded[displayIndex] = expanded }
         .animation(.spring(duration: 0.3), value: expanded)
         .onGeometryChange(for: CGSize.self) { $0.size } action: { ctrl.layoutBubble(on: displayIndex, size: $0) }
     }
