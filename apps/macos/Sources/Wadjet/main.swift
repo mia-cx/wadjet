@@ -2275,6 +2275,7 @@ enum ToolbarHit {
 // measured button frames in each toolbar panel's coordinate space, reported by
 // onGeometryChange — used for hover mapping, menu anchors and CGEvent driving
 enum ToolbarBtnFrames {
+    nonisolated(unsafe) static var recRects: [Int: [String: CGRect]] = [:] // label -> panel frame
     nonisolated(unsafe) static var rects: [Int: [Tool: CGRect]] = [:]
     nonisolated(unsafe) static var blobRect: [Int: CGRect] = [:] // menu droplet per display
 }
@@ -2546,11 +2547,16 @@ struct ToolbarView: View {
         }
         .buttonStyle(.plain)
         .accessibilityLabel(label)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
+            ToolbarBtnFrames.recRects[displayIndex, default: [:]][label] = $0
+        }
         .onContinuousHover(coordinateSpace: .named("panel")) { phase in
             switch phase {
-            case .active(let p):
-                let rect = CGRect(x: p.x - 24, y: p.y - 24, width: 48, height: 48)
-                TipPanel.hover(label, anchor: ctrl.panelScreenRect(rect, on: displayIndex) ?? .zero)
+            case .active:
+                // the button's own frame, not a box around the pointer
+                if let r = ToolbarBtnFrames.recRects[displayIndex]?[label] {
+                    TipPanel.hover(label, anchor: ctrl.panelScreenRect(r, on: displayIndex) ?? .zero)
+                }
             case .ended:
                 TipPanel.hide()
             }
