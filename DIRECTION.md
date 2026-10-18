@@ -34,7 +34,7 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - Use built-in Steps in v1. Custom command and script Steps are deferred.
 - After-capture Steps are Save file, Copy image, Copy file, Open in an app, Show toast, and Pin to screen.
 - Show toast is an iOS-style thumbnail in the top-right; clicking it opens the file until the Editor exists, then the Screenshot's Canvas in the Editor.
-- Pin to screen opens a Screenshot in a borderless, always-on-top window you can drag, pan, zoom, and resize.
+- Pin to screen opens a Screenshot in a borderless, always-on-top window you can drag, pan, zoom, and resize. Once Markup ships, it places the Screenshot's Canvas on screen as an image Annotation instead.
 - After-upload Steps retain that catalogue and add Copy link, Copy image + link in one clipboard item, and Open link.
 - Order Copy image before Copy link for the image-then-link sequence.
 - Copy image is unavailable for Recordings; use Copy file instead.
