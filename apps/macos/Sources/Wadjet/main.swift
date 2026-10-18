@@ -413,6 +413,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "audio": s.sysAudio = val == "on"
             case "mic": s.mic = val == "on"
             case "cursor": s.cursor = val == "on"
+            case "shotcursor": s.shotCursor = val == "on"
+            case "shotwadjet": s.shotWadjet = val == "on"
             case "clicks": s.clickCircles = val == "on"
             case "island": s.showIslandWhileRecording = val == "on"
             case "colourFormat": s.colourFmt = val
@@ -689,7 +691,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
-        if let v = sc.options.cursor { s.cursor = v }
+        if let v = sc.options.cursor { if tool.kind == .shot { s.shotCursor = v } else { s.cursor = v } }
         if let v = sc.options.clickCircles { s.clickCircles = v }
         s.triggerWorkflow = sc.workflow
         trigger(tool, at: ContinuousClock.now) // Shortcut press -> Freeze Frame latency starts here
@@ -3585,6 +3587,8 @@ struct ToolMenuView: View {
         VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
             case .shot:
+                tileRow(shotTiles)
+                divider()
                 workflowRows()
                 if tool == .capRegion { divider(); confirmRow() }
             case .rec:
@@ -3630,7 +3634,11 @@ struct ToolMenuView: View {
         }
     }
     func tileRow(_ tiles: [MenuTile]) -> some View {
-        HStack(spacing: 0) { ForEach(tiles, id: \.caption) { $0 } }
+        HStack(spacing: 0) {
+            Spacer(minLength: 0)
+            ForEach(tiles, id: \.caption) { $0 }
+            Spacer(minLength: 0)
+        }
     }
     func divider() -> some View {
         Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
@@ -3652,6 +3660,14 @@ struct ToolMenuView: View {
         row("Confirm on Release", icon: "hand.tap", on: s.confirmMode == "release", isToggle: true) {
             s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
         }
+    }
+    /// the Screenshot options — they swap the frozen image live and keep the
+    /// menu open
+    var shotTiles: [MenuTile] {
+        [
+            MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.shotCursor, isToggle: true) { s.shotCursor.toggle() },
+            MenuTile(icon: "eye", caption: "Wadjet", on: s.shotWadjet, isToggle: true) { s.shotWadjet.toggle() },
+        ]
     }
     /// the recording options as tiles, like the reference's top icon row —
     /// they keep the menu open
