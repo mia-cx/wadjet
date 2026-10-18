@@ -267,47 +267,44 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
 }
 
 @MainActor struct WorkflowsPane: View {
-    @State private var sel: Int? = 0
+    @State private var sel = 0
     var body: some View {
         let cfg = AppState.shared.config.value
-        HSplitView {
-            VStack(spacing: 0) {
-                List(selection: $sel) {
+        // config.json can shrink under us — clamp the selection on read
+        let i = cfg.workflows.isEmpty ? 0 : min(sel, cfg.workflows.count - 1)
+        Section {
+            HStack {
+                Picker("Workflow", selection: $sel) {
                     ForEach(Array(cfg.workflows.indices), id: \.self) { i in
                         Text(cfg.workflows[i].name).tag(i)
                     }
                 }
-                HStack {
-                    Menu("+") {
-                        ForEach(CaptureKind.allCases, id: \.self) { k in
-                            Button(k.title) {
-                                edit {
-                                    $0.workflows.append(Workflow(name: uniqueName("New \(k.title) Workflow", in: $0), takes: k, steps: [.showToast]))
-                                }
+                Menu("+") {
+                    ForEach(CaptureKind.allCases, id: \.self) { k in
+                        Button(k.title) {
+                            edit {
+                                $0.workflows.append(Workflow(name: uniqueName("New \(k.title) Workflow", in: $0), takes: k, steps: [.showToast]))
+                                sel = $0.workflows.count - 1
                             }
                         }
                     }
-                    Button("−") {
-                        guard let sel, sel < cfg.workflows.count else { return }
-                        edit {
-                            let name = $0.workflows[sel].name
-                            $0.workflows.remove(at: sel)
-                            for s in $0.shortcuts.indices where $0.shortcuts[s].workflow == name {
-                                $0.shortcuts[s].workflow = nil // don't leave a dangling reference
-                            }
-                        }
-                    }
-                    .disabled(sel.map { isDefault($0) } ?? true)
-                    Spacer()
                 }
-                .padding(6)
+                Button("−") {
+                    guard i < cfg.workflows.count else { return }
+                    edit {
+                        let name = $0.workflows[i].name
+                        $0.workflows.remove(at: i)
+                        for s in $0.shortcuts.indices where $0.shortcuts[s].workflow == name {
+                            $0.shortcuts[s].workflow = nil // don't leave a dangling reference
+                        }
+                    }
+                    sel = max(0, i - 1)
+                }
+                .disabled(isDefault(i))
             }
-            .frame(minWidth: 160, maxWidth: 200)
-            if let sel, sel < cfg.workflows.count {
-                WorkflowDetail(i: sel).id(cfg.workflows[sel].name) // rebuild when the picked Workflow or its name changes
-            } else {
-                Text("Select a Workflow").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+        }
+        if !cfg.workflows.isEmpty {
+            WorkflowDetail(i: i).id(cfg.workflows[i].name) // rebuild when the picked Workflow or its name changes
         }
     }
     func isDefault(_ i: Int) -> Bool {
@@ -325,7 +322,7 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
         let cfg = AppState.shared.config.value
         guard i < cfg.workflows.count else { return AnyView(EmptyView()) }
         let wf = cfg.workflows[i]
-        return AnyView(Form {
+        return AnyView(Group {
             Section {
                 TextField("Name", text: $name)
                     .onSubmit {
@@ -333,17 +330,32 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                         edit { $0.renameWorkflow(from: wf.name, to: uniqueName(name, in: $0, skipping: i)) }
                     }
                     .onAppear { name = wf.name }
-                Text(wf.takes.title).foregroundStyle(.secondary)
+                LabeledContent("Takes", value: wf.takes.title)
             }
+            // .onMove/.onDelete don't work in a macOS grouped Form — explicit
+            // up/down/remove buttons instead
             Section("Steps") {
-                List {
-                    ForEach(Array(wf.steps.indices), id: \.self) { s in
+                ForEach(Array(wf.steps.indices), id: \.self) { s in
+                    HStack {
                         StepRow(wf: i, step: s)
+                        Spacer()
+                        Button { edit { guard s > 0, i < $0.workflows.count else { return }
+                            $0.workflows[i].steps.swapAt(s, s - 1) } }
+                            label: { Image(systemName: "arrow.up") }
+                            .accessibilityLabel("Move Up")
+                            .disabled(s == 0)
+                        Button { edit { guard i < $0.workflows.count, s + 1 < $0.workflows[i].steps.count else { return }
+                            $0.workflows[i].steps.swapAt(s, s + 1) } }
+                            label: { Image(systemName: "arrow.down") }
+                            .accessibilityLabel("Move Down")
+                            .disabled(s == wf.steps.count - 1)
+                        Button { edit { guard i < $0.workflows.count, s < $0.workflows[i].steps.count else { return }
+                            $0.workflows[i].steps.remove(at: s) } }
+                            label: { Image(systemName: "minus.circle") }
+                            .accessibilityLabel("Remove Step")
                     }
-                    .onMove { from, to in edit { $0.workflows[i].steps.move(fromOffsets: from, toOffset: to) } }
-                    .onDelete { at in edit { $0.workflows[i].steps.remove(atOffsets: at) } }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
-                .frame(minHeight: 140)
                 Menu("Add Step") {
                     ForEach(Array(Step.allowed(for: wf.takes).indices), id: \.self) { s in
                         Button(Step.allowed(for: wf.takes)[s].title) {
@@ -352,10 +364,12 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                     }
                 }
             }
-            if wf.takes == .screenshot {
-                defaultPicker("Default Screenshot Workflow", \.defaultWorkflows.screenshot)
-            } else {
-                defaultPicker("Default Recording Workflow", \.defaultWorkflows.recording)
+            Section {
+                if wf.takes == .screenshot {
+                    defaultPicker("Default Screenshot Workflow", \.defaultWorkflows.screenshot)
+                } else {
+                    defaultPicker("Default Recording Workflow", \.defaultWorkflows.recording)
+                }
             }
         })
     }
