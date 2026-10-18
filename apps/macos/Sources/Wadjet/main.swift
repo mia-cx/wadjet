@@ -1363,13 +1363,15 @@ final class OverlayController {
         let di = AppState.shared.expandedDisplay ?? mouseDisplay()
         guard let tp = toolbarPanels[di], t.hasMenu else { return }
         hideMenu()
-        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self))
+        // 40 pt of headroom above the menu so its scale-in never clips
+        let headroom: CGFloat = 40
+        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom))
         h.frame.size = h.fittingSize
         var f = NSRect(origin: .zero, size: h.fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
         let anchor = buttonScreenRect(t, on: di) ?? toolbarShapeScreenRect(on: di) ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
-                           y: max(scr.minY + 8, anchor.minY - f.height - 6))
+                           y: max(scr.minY + 8, anchor.minY - 8 - (f.height - headroom))) // menu top 8 pt under the cell
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
@@ -1377,18 +1379,11 @@ final class OverlayController {
         p.contentView = h; p.orderFront(nil)
         menuPanel = p
         AppLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
-        // diag: is it actually on screen a second later, or closed/hidden?
-        Task { @MainActor [weak self, weak p] in
-            try? await Task.sleep(for: .seconds(1))
-            guard let self else { return }
-            guard let mp = self.menuPanel else { AppLog.line("menu diag: closed before 1 s"); return }
-            let ours = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]])?
-                .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
-            AppLog.line("menu diag: visible=\(mp.isVisible) alpha=\(mp.alphaValue) level=\(mp.level.rawValue) occl=\(mp.occlusionState.rawValue) frame=\(mp.frame) screenWins=\(ours?.count ?? -1) thisWin=\(ours?.contains { $0[kCGWindowNumber as String] as? Int == Int(p?.windowNumber ?? -1) } ?? false)")
-        }
         menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
             guard let self, let mp = self.menuPanel else { return e }
-            if !mp.frame.contains(NSEvent.mouseLocation) {
+            // the panel's top 40 pt is scale-in headroom — clicks there count as outside
+            let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
+            if !body.contains(NSEvent.mouseLocation) {
                 AppState.shared.openMenu = nil; self.syncMenu()
                 AppLog.line("menu closed (outside click)")
             }
@@ -1397,9 +1392,12 @@ final class OverlayController {
     }
     func hideMenu() {
         markOverlaysDirty()
-        if menuPanel != nil { AppLog.line("hideMenu <- \(Thread.callStackSymbols.prefix(6).map { $0.components(separatedBy: " ").dropFirst(3).first ?? "?" }.joined(separator: " | ")))") }
-        menuPanel?.close(); menuPanel = nil
+        guard let p = menuPanel else { return }
+        menuPanel = nil
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
+        // the menu fades out, then the panel closes
+        NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; p.animator().alphaValue = 0 },
+                                           completionHandler: { Task { @MainActor in p.close() } })
     }
 
     var freezeLatencies: [Double] = [] // hotkey-to-Freeze-Frame ms, one per open
@@ -1674,7 +1672,7 @@ final class OverlayController {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
-        ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]; ToolbarBtnFrames.blobRect = [:]
+        ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]
         // every teardown — Recording start, Esc, failures — hands activation
         // back unless the user switched apps meanwhile
         if let prev = prevFrontmost {
@@ -2307,7 +2305,6 @@ enum ToolbarHit {
 enum ToolbarBtnFrames {
     nonisolated(unsafe) static var recRects: [Int: [String: CGRect]] = [:] // label -> panel frame
     nonisolated(unsafe) static var rects: [Int: [Tool: CGRect]] = [:]
-    nonisolated(unsafe) static var blobRect: [Int: CGRect] = [:] // menu droplet per display
 }
 
 struct ToolbarView: View {
@@ -2850,6 +2847,14 @@ struct ToolbarView: View {
                 }
             Text(collapsed ? t.kind.groupTitle : t.shortTitle)
                 .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+                // the menu chevron rides beside the selected Tool's label —
+                // trailing overlay so the label itself stays centred
+                .overlay(alignment: .trailing) {
+                    if !collapsed && s.tool == t && t.hasMenu && !lensActive {
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                            .offset(x: 11)
+                    }
+                }
         }
         .frame(width: toolD, height: selH)
     }
@@ -2987,6 +2992,14 @@ struct ToolbarView: View {
                 }
             Text(collapsed ? t.kind.groupTitle : t.shortTitle)
                 .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+                // the menu chevron rides beside the selected Tool's label —
+                // trailing overlay so the label itself stays centred
+                .overlay(alignment: .trailing) {
+                    if !collapsed && s.tool == t && t.hasMenu && !lensActive {
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                            .offset(x: 11)
+                    }
+                }
         }
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
             .frame(width: toolD, height: selH)
@@ -3007,23 +3020,6 @@ struct ToolbarView: View {
                         .offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
                 }
                 .compositingGroup()
-            }
-            .overlay(alignment: .topTrailing) {
-                // the menu droplet budding off the rest capsule's top corner —
-                // hidden while pressing/dragging; high-priority tap so the
-                // row's drag can't take it
-                if t.hasMenu && selected && !collapsed && !lensActive {
-                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 26, height: 26)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                        .glassEffectID("menu-\(t)", in: ns)
-                        .contentShape(Circle())
-                        .highPriorityGesture(TapGesture().onEnded { openToolMenu(t) })
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect[displayIndex] = $0 }
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        .offset(x: 6, y: 8) // ~4 pt inside the capsule's corner
-                }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
@@ -3130,7 +3126,7 @@ struct ToolbarView: View {
             case .active(let p):
                 NSCursor.arrow.set()
                 ctrl.markOverlaysDirty() // loupe off while over the bar
-                if dragging || (ToolbarBtnFrames.blobRect[displayIndex] ?? .zero).contains(p) { TipPanel.hide() }
+                if dragging { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
                     openTheGroup(t.kind) // groups open under the pointer
                 } else { TipPanel.hide() }
@@ -3255,18 +3251,21 @@ struct ToolMenuView: View {
     let tool: Tool
     let ctrl: OverlayController
     @ObservedObject var s = AppState.shared
+    @State var shown = false // spring in from the cell it hangs under
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
             case .shot:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
-                if tool == .capRegion { confirmRow() }
+                if tool == .capRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", stays: false) {
+                        s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
             case .rec:
-                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
-                if tool == .recRegion { confirmRow() }
-                Text("Options").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-                    .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
-                section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
+                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil }
+                if tool == .recRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", stays: false) {
+                        s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
+                divider()
+                section("Options", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
+                divider()
                 toggles()
             case .util where tool == .pickColour:
                 section("Copy as", picks: ColourFormat.allCases.map(\.rawValue), current: s.colourFmt) { s.colourFmt = $0 }
@@ -3276,62 +3275,67 @@ struct ToolMenuView: View {
             }
         }
         .padding(6)
+        .frame(minWidth: 228, alignment: .leading)
         .fixedSize()
-        .background(Color.black.opacity(0.9), in: .rect(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.12), lineWidth: 0.5))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
+        .scaleEffect(shown ? 1 : 0.85, anchor: .top)
+        .opacity(shown ? 1 : 0)
+        .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
+    }
+
+    /// a native-looking menu row: 20 pt checkmark column + title, hover
+    /// highlight behind it. `stays`: toggles leave the menu open, picks close it
+    func row(_ title: String, on: Bool, stays: Bool = false, action: @escaping () -> Void) -> some View {
+        MenuRow(title: title, on: on) {
+            action()
+            if !stays { s.openMenu = nil; ctrl.syncMenu() }
+        }
+    }
+    func divider() -> some View {
+        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
+            .padding(.horizontal, 10).padding(.vertical, 4)
     }
     @ViewBuilder func section(_ title: String, picks: [String], current: String?, pick: @escaping (String) -> Void) -> some View {
         if !title.isEmpty {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+                .padding(.leading, 28).padding(.vertical, 4)
         }
         ForEach(picks, id: \.self) { w in
-            Button {
-                pick(w); s.openMenu = nil; ctrl.syncMenu()
-            } label: {
-                HStack {
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
-                        .opacity(w == current ? 1 : 0)
-                    Text(w).font(.system(size: 13)).foregroundStyle(.white)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-                .padding(.horizontal, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            row(w, on: w == current) { pick(w) }
         }
     }
-    @ViewBuilder func confirmRow() -> some View {
-        Button {
-            s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
-            s.openMenu = nil; ctrl.syncMenu()
-        } label: {
-            HStack {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
-                    .opacity(s.confirmMode == "release" ? 1 : 0)
-                Text("Confirm on Release").font(.system(size: 13)).foregroundStyle(.white)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     @ViewBuilder func toggles() -> some View {
         let rows: [(String, Binding<Bool>)] = [
             ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),
             ("Click circles", $s.clickCircles), ("Show island while recording", $s.showIslandWhileRecording)]
         ForEach(rows, id: \.0) { label, on in
-            Toggle(isOn: on) {
-                Text(label).font(.system(size: 13)).foregroundStyle(.white)
-            }
-            .toggleStyle(.checkbox)
-            .frame(minHeight: 26)
-            .padding(.horizontal, 10)
+            MenuRow(title: label, on: on.wrappedValue) { on.wrappedValue.toggle() } // toggles keep the menu open
         }
+    }
+}
+
+// a menu row with its own hover state — the highlight sits behind the row
+// like a native menu's selection
+struct MenuRow: View {
+    let title: String
+    let on: Bool
+    let action: () -> Void
+    @State var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold))
+                    .opacity(on ? 1 : 0).frame(width: 20, alignment: .center)
+                Text(title).font(.system(size: 14)).foregroundStyle(.white)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .padding(.horizontal, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(hovering ? 0.12 : 0)))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+        }
+        .buttonStyle(.plain)
     }
 }
 
