@@ -3042,6 +3042,9 @@ struct ToolbarView: View {
     let toolD: CGFloat = 72
     let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
+    // the capsule overhangs its cell by (selW − toolD)/2 on each side; the
+    // dividers pad past that so they never touch the highlight
+    let sepMargin: CGFloat = 6
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
     let lensOverhang: CGFloat = 7
@@ -3238,9 +3241,10 @@ struct ToolbarView: View {
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
         HStack(spacing: cellGap) {
             ForEach(Tool.Kind.allCases, id: \.self) { k in
-                if k != .shot { // thin divider between groups
+                if k != .shot { // thin divider between groups, clear of the highlight capsule
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
+                        .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
                 }
                 // every group always renders all three Tools (stable identity,
                 // no inserts/removals): closed groups give EVERY slot zero
