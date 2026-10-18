@@ -1365,9 +1365,7 @@ final class OverlayController {
         hideMenu()
         // 40 pt of headroom above the menu so its scale-in never clips
         let headroom: CGFloat = 40
-        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom))
-        h.frame.size = h.fittingSize
-        var f = NSRect(origin: .zero, size: h.fittingSize)
+        var f = NSRect(origin: .zero, size: NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom)).fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
         let bar = toolbarShapeScreenRect(on: di)
         let anchor = buttonScreenRect(t, on: di) ?? bar ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
@@ -1375,6 +1373,17 @@ final class OverlayController {
         let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
                            y: max(scr.minY + 8, top - (f.height - headroom)))
+        // the menu's own frost: the Freeze Frame under its body, blurred and
+        // darkened, under .regular glass for the rim — nil without a Freeze
+        var backdrop: CGImage? = nil
+        #if CLEAR_GLASS_PATCH
+        if di < Freeze.shared.displays.count {
+            backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: f.minY - scr.minY,
+                                                     width: f.width, height: f.height - headroom), on: di)
+        }
+        #endif
+        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self, backdrop: backdrop).padding(.top, headroom))
+        h.frame.size = f.size
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
@@ -3262,74 +3271,118 @@ enum TipPanel {
 struct ToolMenuView: View {
     let tool: Tool
     let ctrl: OverlayController
+    var backdrop: CGImage? = nil // Freeze Frame crop under the menu body
     @ObservedObject var s = AppState.shared
     @State var shown = false // spring in from the cell it hangs under
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
             case .shot:
-                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
-                if tool == .capRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", toggle: true) {
-                        s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
+                workflowRows()
+                if tool == .capRegion { divider(); confirmRow() }
             case .rec:
-                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil }
-                if tool == .recRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", toggle: true) {
-                        s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
+                tileRow(recTiles)
                 divider()
-                section("Options", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
+                workflowRows()
+                if tool == .recRegion { confirmRow() }
                 divider()
-                toggles()
+                countdownRows()
             case .util where tool == .pickColour:
-                section("Copy as", picks: ColourFormat.allCases.map(\.rawValue), current: s.colourFmt) { s.colourFmt = $0 }
+                ForEach(ColourFormat.allCases.map(\.rawValue), id: \.self) { f in
+                    row(f, icon: f == "Hex" ? "number" : f == "SwiftUI" ? "swift" : "function", on: f == s.colourFmt) { s.colourFmt = f }
+                }
             case .util where tool == .measure:
-                section("", picks: ["Bounds", "Spacing", "Horizontal", "Vertical"], current: s.measureMode) { s.measureMode = $0 }
+                tileRow(measureTiles)
             default: EmptyView()
             }
         }
-        .padding(6)
-        .frame(minWidth: 228, alignment: .leading)
-        .fixedSize()
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
+        .padding(.horizontal, 6).padding(.vertical, 8)
+        .frame(width: 280)
+        // heavy frost like the reference menu: the frozen world behind, hard
+        // blurred and darkened, under the glass's rim and highlight
+        .background {
+            if let backdrop {
+                ZStack {
+                    Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280).resizable()
+                        .blur(radius: 24, opaque: true)
+                    Color.black.opacity(0.28)
+                }
+                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+            }
+        }
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .scaleEffect(shown ? 1 : 0.85, anchor: .top)
         .opacity(shown ? 1 : 0)
         .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
     }
 
-    /// a native-looking menu row: 20 pt checkmark column + title, hover
-    /// highlight behind it. `stays`: toggles leave the menu open, picks close it
-    func row(_ title: String, on: Bool, stays: Bool = false, toggle: Bool = false, action: @escaping () -> Void) -> some View {
-        MenuRow(title: title, on: on, isToggle: toggle) {
+    func row(_ title: String, subtitle: String? = nil, icon: String, on: Bool, isToggle: Bool = false, action: @escaping () -> Void) -> some View {
+        MenuRow(title: title, subtitle: subtitle, icon: icon, on: on, isToggle: isToggle) {
             action()
-            if !stays { s.openMenu = nil; ctrl.syncMenu() }
+            s.openMenu = nil; ctrl.syncMenu()
         }
+    }
+    func tileRow(_ tiles: [MenuTile]) -> some View {
+        HStack(spacing: 0) { ForEach(tiles, id: \.caption) { $0 } }
     }
     func divider() -> some View {
-        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
-            .padding(.horizontal, 10).padding(.vertical, 4)
+        Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
+            .padding(.horizontal, 20).padding(.vertical, 3)
     }
-    @ViewBuilder func section(_ title: String, picks: [String], current: String?, pick: @escaping (String) -> Void) -> some View {
-        if !title.isEmpty {
-            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-                .padding(.leading, 28).padding(.vertical, 4)
-        }
-        ForEach(picks, id: \.self) { w in
-            row(w, on: w == current) { pick(w) }
+    /// Workflow radio rows, subtitled with each Workflow's Steps
+    @ViewBuilder func workflowRows() -> some View {
+        ForEach(s.workflows(for: tool), id: \.self) { w in
+            let wf = s.config.value.workflows.first { $0.name == w }
+            row(w, subtitle: wf?.steps.map(\.title).joined(separator: " · "),
+                icon: wf?.takes == .screenshot ? "photo" : wf?.takes == .mp4 ? "film" : "photo.stack",
+                on: w == s.workflowFor(tool)) {
+                s.workflowByTool[tool] = w; s.triggerWorkflow = nil // a menu pick wins over the Shortcut's
+            }
         }
     }
-    @ViewBuilder func toggles() -> some View {
-        let rows: [(String, Binding<Bool>)] = [
-            ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),
-            ("Click circles", $s.clickCircles), ("Show island while recording", $s.showIslandWhileRecording)]
-        ForEach(rows, id: \.0) { label, on in
-            MenuRow(title: label, on: on.wrappedValue, isToggle: true) { on.wrappedValue.toggle() } // toggles keep the menu open
+    func confirmRow() -> some View {
+        // a two-state pick, so it closes the menu like the other rows
+        row("Confirm on Release", icon: "hand.tap", on: s.confirmMode == "release", isToggle: true) {
+            s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
+        }
+    }
+    /// the recording options as tiles, like the reference's top icon row —
+    /// they keep the menu open
+    var recTiles: [MenuTile] {
+        [
+            MenuTile(icon: "speaker.wave.2", filledIcon: "speaker.wave.2.fill", caption: "Audio", on: s.sysAudio, isToggle: true) { s.sysAudio.toggle() },
+            MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
+            MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.cursor, isToggle: true) { s.cursor.toggle() },
+            MenuTile(icon: "cursorarrow.click.2", caption: "Clicks", on: s.clickCircles, isToggle: true) { s.clickCircles.toggle() },
+            MenuTile(icon: "capsule", caption: "Island", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
+        ]
+    }
+    /// Measure's four modes as pick tiles — they close the menu
+    var measureTiles: [MenuTile] {
+        func tile(_ mode: String, _ icon: String) -> MenuTile {
+            MenuTile(icon: icon, caption: mode, on: s.measureMode == mode) {
+                s.measureMode = mode; s.openMenu = nil; ctrl.syncMenu()
+            }
+        }
+        return [tile("Bounds", "square.dashed"), tile("Spacing", "arrow.left.and.right.square"),
+                tile("Horizontal", "arrow.left.and.right"), tile("Vertical", "arrow.up.and.down")]
+    }
+    @ViewBuilder func countdownRows() -> some View {
+        ForEach(["Off", "3 s", "5 s", "10 s"], id: \.self) { v in
+            let current = s.countdown == "Off" ? "Off" : s.countdown + " s"
+            row(v == "Off" ? "No Countdown" : "\(v) Countdown", icon: v == "Off" ? "bolt" : "timer", on: v == current) {
+                s.countdown = v.replacingOccurrences(of: " s", with: "")
+            }
         }
     }
 }
 
-// a menu row with its own hover state — the highlight sits behind the row
-// like a native menu's selection
+// a menu row: 22 pt leading column (checkmark when on, an icon otherwise, or
+// blank), title + optional subtitle, hover highlight like a native menu's
 struct MenuRow: View {
     let title: String
+    var subtitle: String? = nil
+    let icon: String // leading column — every row gets one
     let on: Bool
     /// an on/off option rather than one pick of several — VoiceOver reads it as a toggle
     var isToggle = false
@@ -3337,15 +3390,53 @@ struct MenuRow: View {
     @State var hovering = false
     var body: some View {
         Button(action: action) {
-            HStack(spacing: 8) {
-                Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold))
-                    .opacity(on ? 1 : 0).frame(width: 20, alignment: .center)
-                Text(title).font(.system(size: 14)).foregroundStyle(.white)
+            HStack(spacing: 12) {
+                Image(systemName: icon).font(.system(size: 15))
+                    .foregroundStyle(.white).frame(width: 22)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(title).font(.system(size: 15)).foregroundStyle(.white)
+                    if let subtitle { Text(subtitle).font(.system(size: 12)).foregroundStyle(.white.opacity(0.5))
+                        .lineLimit(1).truncationMode(.tail) }
+                }
                 Spacer()
+                Color.clear.frame(width: 22, height: 22) // fixed trailing slot
+                    .overlay {
+                        if on { Image(systemName: "checkmark").font(.system(size: 15, weight: .semibold))
+                            .foregroundStyle(.white) }
+                    }
             }
-            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
-            .padding(.horizontal, 8)
-            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(hovering ? 0.12 : 0)))
+            .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
+            .padding(.horizontal, 14)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(hovering ? 0.1 : 0)))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isToggle ? .isToggle : (on ? .isSelected : []))
+        .accessibilityValue(isToggle ? (on ? "On" : "Off") : "")
+    }
+}
+
+// a menu tile — icon over caption, like the reference menu's top row. On is
+// accent; toggles report On/Off to VoiceOver, picks report selected
+struct MenuTile: View {
+    let icon: String
+    var filledIcon: String? = nil // used when on, if a filled variant exists
+    let caption: String
+    let on: Bool
+    /// toggles report On/Off; pick tiles report selected
+    var isToggle = false
+    let action: () -> Void
+    @State var hovering = false
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: on ? (filledIcon ?? icon) : icon).font(.system(size: 20))
+                Text(caption).font(.system(size: 12, weight: .medium))
+            }
+            .foregroundStyle(on ? Color.wadjetAccent : .white)
+            .frame(maxWidth: .infinity).frame(height: 64)
+            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(hovering ? 0.1 : 0)))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
