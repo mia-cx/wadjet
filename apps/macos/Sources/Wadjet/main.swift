@@ -2860,10 +2860,10 @@ struct ToolbarView: View {
     func lens(_ glass: Glass) -> some View {
         Capsule().fill(.clear)
             .frame(width: lensSize.width, height: lensSize.height)
-            .scaleEffect(x: stretchX, y: stretchY)
             .glassEffect(lensActive ? glass : .identity, in: .capsule)
             .glassEffectTransition(.materialize)
-            .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
+            .scaleEffect(x: stretchX, y: stretchY) // stretches the glass output too
+            .position(x: blobX, y: blobY)
             .allowsHitTesting(false)
     }
 
