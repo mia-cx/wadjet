@@ -64,5 +64,8 @@ test('changelogSection returns one version body', () => {
   const md = `# Changelog\n\n## 0.0.1-alpha.2\n\n- new thing\n- another\n\n## 0.0.1-alpha.1\n\n- first alpha\n`
   assert.equal(changelogSection(md, '0.0.1-alpha.2'), '- new thing\n- another')
   assert.equal(changelogSection(md, '0.0.1-alpha.1'), '- first alpha')
+  // `## x-alpha.1` must not match inside `## x-alpha.10`
+  const md10 = `## 0.0.1-alpha.10\n\n- ten\n\n## 0.0.1-alpha.1\n\n- one\n`
+  assert.equal(changelogSection(md10, '0.0.1-alpha.1'), '- one')
   assert.throws(() => changelogSection(md, '9.9.9'), /no "## 9\.9\.9" section/)
 })

@@ -10,8 +10,9 @@ on:
 permissions:
   contents: read
 
+# per-commit so a release merge is never replaced by a later push
 concurrency:
-  group: release
+  group: release-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
@@ -19,8 +20,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read # commits/<sha>/pulls reads PR refs
     outputs:
       release: ${{ steps.plan.outputs.release }}
       version: ${{ steps.version.outputs.version }}
@@ -46,6 +47,30 @@ jobs:
       - name: App version
         id: version
         run: node -e "console.log('version=' + require('./apps/macos/package.json').version)" >> "$GITHUB_OUTPUT"
+
+  # the version-PR job: queued runs here are safe to replace — the latest one
+  # collects every pending changeset anyway, so one shared group suffices
+  release-pr:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-pr
+      cancel-in-progress: false
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main # not the pushed sha — a superseded run still versions the newest changesets
+          fetch-depth: 0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
       - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
         with:
           version-script: pnpm release:version
@@ -72,7 +97,7 @@ jobs:
         run: |
           # CI has no signing identity, so run.sh falls back to ad-hoc —
           # expected for alpha builds; testers install via "Open Anyway".
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" \
+          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion ${GITHUB_RUN_NUMBER}' \
             apps/macos/Resources/Info.plist
           apps/macos/tools/dmg.sh
           mv "apps/macos/build/Wadjet-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' apps/macos/build/Wadjet.app/Contents/Info.plist).dmg" \
@@ -82,7 +107,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          # gh release create tags $GITHUB_SHA itself
+          set -e
+          git tag "v$VERSION" && git push origin "v$VERSION"
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             # idempotent re-run: replace the asset but leave the release alone
             gh release upload "v$VERSION" "Wadjet-$VERSION.dmg" --clobber

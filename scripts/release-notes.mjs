@@ -2,11 +2,15 @@ import { readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
-/** The `## <version>` section body from a changesets-generated CHANGELOG. */
+/** The `## <version>` section body from a changesets-generated CHANGELOG.
+ *  Matches the whole heading line — `indexOf` would hit `## x-alpha.10`
+ *  when looking for `## x-alpha.1`. */
 export const changelogSection = (changelog, version) => {
-  const start = changelog.indexOf(`## ${version}`)
-  if (start === -1) throw new Error(`no "## ${version}" section in the changelog`)
-  const bodyStart = changelog.indexOf('\n', start) + 1
+  const esc = version.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const heading = new RegExp(`^## ${esc}$`, 'm')
+  const m = heading.exec(changelog)
+  if (!m) throw new Error(`no "## ${version}" section in the changelog`)
+  const bodyStart = m.index + m[0].length + 1
   const next = changelog.indexOf('\n## ', bodyStart)
   return changelog.slice(bodyStart, next === -1 ? undefined : next + 1).trim()
 }
