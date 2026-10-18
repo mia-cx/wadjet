@@ -1555,12 +1555,16 @@ final class OverlayController {
     }
     var bitmapStore: [[UInt8]] = []
 
+    /// the app that was active before we stole activation for the overlay —
+    /// handed back on close unless the user switched away meanwhile
+    var prevFrontmost: NSRunningApplication?
+
     func showPanels(tool: Tool) {
         let s = AppState.shared
         s.phase = .frozen; s.tool = tool
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
-            let p = NSPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver; p.hasShadow = false
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.ignoresMouseEvents = false; p.acceptsMouseMovedEvents = true
@@ -1580,6 +1584,18 @@ final class OverlayController {
             p.orderFront(nil)
             p.makeFirstResponder(ov)
             panels.append(p)
+        }
+        // Only the ACTIVE app's cursor changes reach the screen — the overlay
+        // is non-activating, so while a Freeze Frame is up we take activation
+        // and make the pointer's panel key so cursorUpdate fires for it.
+        // Window lists were read at freeze time, before this.
+        prevFrontmost = NSWorkspace.shared.frontmostApplication
+        if prevFrontmost?.processIdentifier != getpid() {
+            NSApp.activate(ignoringOtherApps: true)
+            AppLog.line("active for overlay (was \(prevFrontmost?.localizedName ?? "?"))")
+        }
+        if let md = panels.firstIndex(where: { $0.screen != nil && NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) {
+            panels[md].makeKey()
         }
         // borderless nonactivating panels can't be key windows, so keyDown on
         // the view never fires — route keys through a local monitor instead
@@ -1648,6 +1664,13 @@ final class OverlayController {
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
+        if let prev = prevFrontmost {
+            prevFrontmost = nil
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
+                prev.activate(options: [])
+                AppLog.line("activation back to \(prev.localizedName ?? "?")")
+            }
+        }
         AppDelegate.shared?.updateEscHotkey()
     }
 }
@@ -1687,6 +1710,12 @@ enum WadjetCursors {
         // eyedropper points down-leading; the lens/tip is its hotspot
         return NSCursor(image: img, hotSpot: centre ? NSPoint(x: S / 2, y: S / 2) : NSPoint(x: 4, y: S - 4))
     }
+}
+
+/// the Freeze Frame panel: non-activating, but keyable so it can own the
+/// pointer's cursor while the app is activated for the overlay
+final class OverlayPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
 
 // MARK: - Overlay NSView (per display)
@@ -1977,8 +2006,8 @@ final class OverlayNSView: NSView {
     func updateCursor() {
         if ctrl?.pointerOverUI ?? false { NSCursor.arrow.set() }
         else { WadjetCursors.cursor(for: tool).set() }
-        let cur = NSCursor.current
-        AppLog.line("cursor -> \(cur.image.size) hot=\(cur.hotSpot) tool=\(tool.rawValue) overUI=\(ctrl?.pointerOverUI ?? false)")
+        let cur = NSCursor.currentSystem ?? NSCursor.current
+        AppLog.line("cursor -> sys=\(cur.image.size) hot=\(cur.hotSpot) tool=\(tool.rawValue) overUI=\(ctrl?.pointerOverUI ?? false)")
     }
     // a non-activating panel still gets cursorUpdate for its tracking area —
     // that's the reliable hook, mouseMoved alone loses to the system
