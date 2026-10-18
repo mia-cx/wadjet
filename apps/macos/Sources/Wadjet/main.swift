@@ -1568,10 +1568,13 @@ final class OverlayController {
         let m = NSEvent.mouseLocation
         return Freeze.shared.displays.firstIndex { NSMouseInRect(m, $0.screen.frame, false) } ?? 0
     }
-    // the *visible* toolbar shape in screen coords — the click-through panel is
-    // much bigger, so hit-testing must use this, not the panel frame
-    func toolbarShapeScreenRect(on di: Int) -> CGRect? {
-        guard let p = toolbarPanels[di], let cv = p.contentView, let r = ToolbarHit.rects[di] else { return nil }
+    // the toolbar's rect in screen coords — `visible: true` gives the bar
+    // shape; the default is the hover rect (expanded on a non-notch display
+    // also covers the collapsed-island ghost and the bridge strip, which is
+    // right for hit-testing but wrong for "click outside the toolbar")
+    func toolbarShapeScreenRect(on di: Int, visible: Bool = false) -> CGRect? {
+        let map = visible ? ToolbarHit.shapes : ToolbarHit.rects
+        guard let p = toolbarPanels[di], let cv = p.contentView, let r = map[di] else { return nil }
         return p.convertToScreen(cv.convert(r, to: nil))
     }
     var pointerOverUI: Bool {
@@ -1654,7 +1657,7 @@ final class OverlayController {
             guard let self, let mp = self.menuPanel else { return e }
             // clicks inside the toolbar are the toolbar's own business —
             // the tap lands in its gesture and toggles the menu from there
-            if toolbarShapeScreenRect(on: di)?.contains(NSEvent.mouseLocation) == true { return e }
+            if toolbarShapeScreenRect(on: di, visible: true)?.contains(NSEvent.mouseLocation) == true { return e }
             // the panel's top 40 pt is scale-in headroom — clicks there count as outside
             let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
             if !body.contains(NSEvent.mouseLocation) {
@@ -2764,7 +2767,8 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 }
 
 enum ToolbarHit {
-    nonisolated(unsafe) static var rects: [Int: CGRect] = [:] // per display index
+    nonisolated(unsafe) static var rects: [Int: CGRect] = [:] // hover rect, per display index
+    nonisolated(unsafe) static var shapes: [Int: CGRect] = [:] // the visible bar, per display index
     nonisolated(unsafe) static var lastHit: [Int: Bool] = [:]
 }
 // measured button frames in each toolbar panel's coordinate space, reported by
@@ -2874,6 +2878,7 @@ struct ToolbarView: View {
 
     func syncHit() {
         ToolbarHit.rects[displayIndex] = hoverRect
+        ToolbarHit.shapes[displayIndex] = shapeRectInView
         ctrl.layoutBubble(on: displayIndex)
         if expanded {
             let xs = visibleTools.sorted { $0.rawValue < $1.rawValue }
