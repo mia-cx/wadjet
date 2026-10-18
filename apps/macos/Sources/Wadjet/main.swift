@@ -650,7 +650,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
         // switching Tools while frozen keeps the same Freeze Frame
-        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("tool switched to \(tool.title)") }; return }
+        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)") }; return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
@@ -1320,6 +1320,10 @@ final class OverlayController {
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
     }
+    /// re-apply each overlay's cursor when the Tool changes under a still pointer
+    func refreshCursors() {
+        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.updateCursor() } }
+    }
     // a Tool button's frame in screen coords (from measured panel-space frames)
     func buttonScreenRect(_ t: Tool, on di: Int) -> CGRect? {
         guard let fr = ToolbarBtnFrames.rects[di]?[t], let p = toolbarPanels[di], let cv = p.contentView else { return nil }
@@ -1633,7 +1637,45 @@ final class OverlayController {
         AppState.shared.phase = .desktop
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
+        NSCursor.arrow.set()
         AppDelegate.shared?.updateEscHotkey()
+    }
+}
+
+/// Per-tool pointer over the Freeze Frame; built once and cached.
+/// Over a toolbar the plain arrow wins (set from the toolbar's own hover).
+@MainActor
+enum WadjetCursors {
+    static var cache: [Tool: NSCursor] = [:]
+    static func cursor(for t: Tool) -> NSCursor {
+        if let c = cache[t] { return c }
+        let c = make(t); cache[t] = c; return c
+    }
+    static func make(_ t: Tool) -> NSCursor {
+        switch t {
+        case .capRegion, .recRegion, .copyText, .measure: return .crosshair
+        case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
+        case .recWindow, .recScreen: return symbol("video.fill", centre: true)
+        case .pickColour: return symbol("eyedropper", centre: false)
+        }
+    }
+    /// white glyph with a dark halo so it reads on any backdrop
+    static func symbol(_ name: String, centre: Bool) -> NSCursor {
+        let S: CGFloat = 20
+        let img = NSImage(size: CGSize(width: S, height: S), flipped: false) { r in
+            guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+                .withSymbolConfiguration(.init(pointSize: 15, weight: .medium)) else { return false }
+            sym.isTemplate = true
+            for dx in [-1.0, 0.0, 1.0] { for dy in [-1.0, 0.0, 1.0] where dx != 0 || dy != 0 {
+                NSColor.black.withAlphaComponent(0.9).set()
+                sym.draw(in: r.offsetBy(dx: dx, dy: dy))
+            } }
+            NSColor.white.set()
+            sym.draw(in: r)
+            return true
+        }
+        // eyedropper points down-leading; the lens/tip is its hotspot
+        return NSCursor(image: img, hotSpot: centre ? NSPoint(x: S / 2, y: S / 2) : NSPoint(x: 4, y: S - 4))
     }
 }
 
@@ -1917,13 +1959,14 @@ final class OverlayNSView: NSView {
         } else {
             hoverWin = nil
         }
-        if tool == .measure {
-            NSCursor.crosshair.set()
-            if measureMode != "Bounds" { scanRuler(at: pt) }
-        } else {
-            NSCursor.arrow.set()
-        }
+        if tool == .measure, measureMode != "Bounds" { scanRuler(at: pt) }
+        updateCursor()
         needsDisplay = true
+    }
+    /// the arrow over a toolbar/menu, the Tool's own cursor over the frame
+    func updateCursor() {
+        if ctrl?.pointerOverUI ?? false { NSCursor.arrow.set() }
+        else { WadjetCursors.cursor(for: tool).set() }
     }
     // one scroll tick per wheel notch; trackpads accumulate 24 pt per tick and
     // momentum is ignored. Returns +1 for down (next) / -1 for up (previous)
@@ -2899,6 +2942,7 @@ struct ToolbarView: View {
         .onContinuousHover(coordinateSpace: .named("panel")) { phase in
             switch phase {
             case .active(let p):
+                NSCursor.arrow.set()
                 if dragging { TipPanel.hide() }
                 else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
