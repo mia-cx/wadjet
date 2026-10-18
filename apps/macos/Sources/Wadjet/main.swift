@@ -1324,6 +1324,11 @@ final class OverlayController {
     func refreshCursors() {
         panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.updateCursor() } }
     }
+    /// overlays draw based on pointerOverUI (loupe on/off): repaint when the
+    /// pointer crosses between a toolbar/menu and the Freeze Frame
+    func markOverlaysDirty() {
+        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.needsDisplay = true } }
+    }
     // a Tool button's frame in screen coords (from measured panel-space frames)
     func buttonScreenRect(_ t: Tool, on di: Int) -> CGRect? {
         guard let fr = ToolbarBtnFrames.rects[di]?[t], let p = toolbarPanels[di], let cv = p.contentView else { return nil }
@@ -1378,6 +1383,7 @@ final class OverlayController {
         }
     }
     func hideMenu() {
+        markOverlaysDirty()
         if menuPanel != nil { AppLog.line("hideMenu <- \(Thread.callStackSymbols.prefix(6).map { $0.components(separatedBy: " ").dropFirst(3).first ?? "?" }.joined(separator: " | ")))") }
         menuPanel?.close(); menuPanel = nil
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
@@ -2992,6 +2998,7 @@ struct ToolbarView: View {
             switch phase {
             case .active(let p):
                 NSCursor.arrow.set()
+                ctrl.markOverlaysDirty() // loupe off while over the bar
                 if dragging { TipPanel.hide() }
                 else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
@@ -2999,7 +3006,9 @@ struct ToolbarView: View {
                     TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
                     openTheGroup(t.kind, anchor: lensActive ? t : nil) // groups open under the pointer
                 } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
-            case .ended: TipPanel.hide()
+            case .ended:
+                TipPanel.hide()
+                ctrl.markOverlaysDirty() // loupe back on the Freeze Frame
             }
         }
         .onChange(of: s.tool) {
