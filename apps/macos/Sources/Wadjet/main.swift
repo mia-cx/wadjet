@@ -1330,6 +1330,8 @@ final class OverlayController {
     weak var app: AppDelegate?
     var panels: [NSPanel] = []
     var toolbarPanels: [Int: NSPanel] = [:] // one per Freeze display index
+    var recBubblePanels: [Int: NSPanel] = [:] // the detached recording bubble, one per display
+    var bubbleSizes: [Int: CGSize] = [:]
     var scWindows: [CGWindowID: SCWindow] = [:] // windowID -> SCWindow, from freeze time
     var cornerRadii: [CGWindowID: CGFloat] = [:] // windowID -> measured corner radius, points
     var menuPanel: NSPanel?
@@ -1687,6 +1689,45 @@ final class OverlayController {
             toolbarPanels[idx] = p
             AppLog.line("toolbar panel d\(idx) \(p.frame.debugDescription) shape=\(tv.shapeRectInView.debugDescription)")
         }
+        syncBubbles()
+    }
+
+    /// the recording bubble exists only while a Freeze Frame is open mid-
+    /// Recording with the island shown — one per display, 8 pt right of the
+    /// island/toolbar shape
+    func syncBubbles() {
+        let want = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
+            && AppState.shared.phase == .frozen
+        for (di, _) in Freeze.shared.displays.enumerated() {
+            if want, recBubblePanels[di] == nil {
+                let h = NSHostingView(rootView: RecBubbleView(displayIndex: di, ctrl: self))
+                let p = NSPanel(contentRect: NSRect(origin: .zero, size: h.fittingSize),
+                                styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+                p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
+                p.hasShadow = false
+                p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
+                p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
+                p.contentView = h; p.orderFront(nil)
+                recBubblePanels[di] = p
+            } else if !want, let p = recBubblePanels[di] {
+                p.close(); recBubblePanels[di] = nil; bubbleSizes[di] = nil
+            }
+        }
+        for (di, _) in recBubblePanels { layoutBubble(on: di) }
+    }
+
+    /// anchor the bubble's leading edge 8 pt off the shape's right edge,
+    /// centred on it — called on every shape/layout change via syncHit
+    func layoutBubble(on di: Int, size: CGSize? = nil) {
+        if let size { bubbleSizes[di] = size }
+        guard let p = recBubblePanels[di], let shape = toolbarShapeScreenRect(on: di) else { return }
+        let sz = bubbleSizes[di] ?? p.frame.size
+        p.setFrame(NSRect(x: shape.maxX + 8, y: shape.midY - sz.height / 2,
+                          width: sz.width, height: sz.height), display: true)
+    }
+    func bubbleScreenRect(_ r: CGRect, on di: Int) -> CGRect? {
+        guard let p = recBubblePanels[di], let cv = p.contentView else { return nil }
+        return p.convertToScreen(cv.convert(r, to: nil))
     }
     // the expanded row's true size lands after the panel is created; resize to
     // fit it, staying centred on the display
@@ -1711,6 +1752,7 @@ final class OverlayController {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
+        recBubblePanels.values.forEach { $0.close() }; recBubblePanels = [:]; bubbleSizes = [:]
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]
         // every teardown — Recording start, Esc, failures — hands activation
         // back unless the user switched apps meanwhile
@@ -1729,6 +1771,8 @@ final class OverlayController {
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
         closeAllPanelsOnly()
+        // mid-Recording, the recording island returns once the overlay is gone
+        if AppState.shared.recActive { refreshToolbars() }
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
@@ -2446,6 +2490,7 @@ struct ToolbarView: View {
 
     func syncHit() {
         ToolbarHit.rects[displayIndex] = hoverRect
+        ctrl.layoutBubble(on: displayIndex)
         if expanded {
             let xs = visibleTools.sorted { $0.rawValue < $1.rawValue }
                 .compactMap { t -> String? in
@@ -2604,51 +2649,10 @@ struct ToolbarView: View {
     @State var recRowSize = CGSize(width: 220, height: 64)
     @State var islandTimeW: CGFloat = 20 // measured "mm:ss" glyph width
     var recControls: some View {
-        // leading: the same red dot + time as the island; trailing: pause and
-        // stop as glass circles, all centred in the selH-tall row
-        HStack(spacing: 16) {
-            HStack(spacing: 8) {
-                Circle().fill(.red).frame(width: 8, height: 8)
-                Text(fmtT(s.recordingElapsed)).font(.system(size: 14)).monospacedDigit().fixedSize()
-            }
-            Spacer(minLength: 0)
-            recButton(s.recordingPaused ? "play.fill" : "pause.fill",
-                      label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
-            recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
-        }
-        .foregroundStyle(.white)
-        // the outer circles' edges sit so their centres meet the corner
-        // centres (radius selH/2 + d) — concentric, like the tool capsule
-        .padding(.horizontal, selH / 2 + d - 24)
-        .frame(height: selH)
-        .padding(.top, contentTop)
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
-    }
-
-    // one recording control: a glass circle, TipPanel tooltip on hover
-    func recButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            Image(systemName: symbol).font(.system(size: 18))
-                .frame(width: 48, height: 48)
-                .glassEffect(.regular.interactive(), in: .circle)
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(label)
-        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
-            ToolbarBtnFrames.recRects[displayIndex, default: [:]][label] = $0
-        }
-        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
-            switch phase {
-            case .active:
-                // the button's own frame, not a box around the pointer
-                if let r = ToolbarBtnFrames.recRects[displayIndex]?[label] {
-                    TipPanel.hover(label, anchor: ctrl.panelScreenRect(r, on: displayIndex) ?? .zero)
-                }
-            case .ended:
-                TipPanel.hide()
-            }
-        }
+        RecControlsView(displayIndex: displayIndex, ctrl: ctrl,
+                        screenRect: { ctrl.panelScreenRect($0, on: displayIndex) })
+            .padding(.top, contentTop)
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
     }
 
     let toolD: CGFloat = 72
@@ -3249,6 +3253,103 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
     }
 }
 #endif
+
+/// the recording controls row — shared by the recording island's expansion
+/// and the detached recording bubble: dot + time, Pause, Stop
+struct RecControlsView: View {
+    let displayIndex: Int
+    let ctrl: OverlayController
+    /// the button's frame in its panel, converted to screen coords
+    let screenRect: (CGRect) -> CGRect?
+    @ObservedObject var s = AppState.shared
+    var body: some View {
+        // leading: the same red dot + time as the island; trailing: pause and
+        // stop as glass circles, all centred in the selH-tall row
+        HStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text(fmtT(s.recordingElapsed)).font(.system(size: 14)).monospacedDigit().fixedSize()
+            }
+            Spacer(minLength: 0)
+            recButton(s.recordingPaused ? "play.fill" : "pause.fill",
+                      label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
+            recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
+        }
+        .foregroundStyle(.white)
+        // the outer circles' edges sit so their centres meet the corner
+        // centres (radius 32 + 10) — concentric, like the tool capsule
+        .padding(.horizontal, 18)
+        .frame(height: 64)
+    }
+
+    // one recording control: a glass circle, TipPanel tooltip on hover
+    func recButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 18))
+                .frame(width: 48, height: 48)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
+            ToolbarBtnFrames.recRects[displayIndex, default: [:]][label] = $0
+        }
+        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
+            switch phase {
+            case .active:
+                // the button's own frame, not a box around the pointer
+                if let r = ToolbarBtnFrames.recRects[displayIndex]?[label] {
+                    TipPanel.hover(label, anchor: screenRect(r) ?? .zero)
+                }
+            case .ended:
+                TipPanel.hide()
+            }
+        }
+    }
+}
+
+/// the detached recording bubble: a black capsule with the dot + time that
+/// springs out of the island's right edge when a Freeze Frame opens mid-
+/// Recording. Its own small panel sits 8 pt right of the island/toolbar
+/// shape, so it slides outward as the bar expands. Hover expands it into the
+/// full recording controls — unless this display's bar is already expanded.
+struct RecBubbleView: View {
+    let displayIndex: Int
+    let ctrl: OverlayController
+    @ObservedObject var s = AppState.shared
+    @State var hovering = false
+    @State var emerged = false
+    var expanded: Bool { hovering && s.expandedDisplay != displayIndex }
+    var body: some View {
+        ZStack(alignment: .leading) {
+            if expanded {
+                RecControlsView(displayIndex: displayIndex, ctrl: ctrl,
+                                screenRect: { ctrl.bubbleScreenRect($0, on: displayIndex) })
+            } else {
+                HStack(spacing: 7) {
+                    Circle().fill(.red).frame(width: 8, height: 8)
+                    Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
+                }
+                .padding(.horizontal, 12).frame(height: 28)
+            }
+        }
+        .foregroundStyle(.white).fixedSize()
+        .background(Capsule().fill(.black))
+        .contentShape(Capsule())
+        .scaleEffect(emerged ? 1 : 0.6, anchor: .leading) // buds off the island's edge
+        .opacity(emerged ? 1 : 0)
+        .onAppear { withAnimation(.spring(duration: 0.35, bounce: 0.15)) { emerged = true } }
+        .onContinuousHover { phase in
+            switch phase {
+            case .active: hovering = true
+            case .ended: hovering = false
+            }
+        }
+        .animation(.spring(duration: 0.3), value: expanded)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { ctrl.layoutBubble(on: displayIndex, size: $0) }
+    }
+}
 
 // catches right-clicks without blocking left ones — the view only claims the
 // hit while a rightMouseDown is being dispatched
