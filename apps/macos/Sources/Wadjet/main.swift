@@ -95,6 +95,7 @@ final class AppState: ObservableObject {
     @Published var showIslandWhileRecording = true
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
     @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
+    @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -395,6 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
         case "group" where parts.count > 1: // debug: animated group switch on the expanded toolbar
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
+        case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
+            s.debugTap = Tool(rawValue: String(parts[1]))
         case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
@@ -2460,7 +2463,11 @@ struct ToolbarView: View {
                             .sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.title):\(Int($0.value.midX))" }.joined(separator: " ")) }
                 }
             }
-            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
+            .onChange(of: s.debugTap) { // cmd.sh tap — same path as a tap release
+                if let t = s.debugTap, expanded, t != s.tool { s.debugTap = nil; travelTap(t) }
+                else if s.debugTap != nil { s.debugTap = nil }
+            }
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -2621,6 +2628,8 @@ struct ToolbarView: View {
     @State var blobY: CGFloat = 0
     @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
+    @State var travelling = false // a tap's spring trip to the new Tool, press-free
+    @State var travelStart = Date()
     /// one group open at a time; the rest collapse to their last-used Tool
     @State var openGroup: Tool.Kind = .shot
     @State var lastUsed: [Tool.Kind: Tool] = [:]
@@ -2639,7 +2648,7 @@ struct ToolbarView: View {
     @State var menuByHold = false
     @State var holdTask: Task<Void, Never>?
     @State var hoverInside = false
-    var lensActive: Bool { pressing || dragging }
+    var lensActive: Bool { pressing || dragging || travelling }
     /// with the clear-glass patch the Metal lens layer owns the pressed look —
     /// the in-row accent/cut-out lens pieces must not draw under it
     var shaderLensActive: Bool {
@@ -2734,7 +2743,19 @@ struct ToolbarView: View {
         stretchY = 1 - 0.5 * (stretchX - 1)
         lensMoving = abs(v.x) + abs(v.y) > 4
             || abs(lensTarget.x - p.x) + abs(lensTarget.y - p.y) > 0.5
-        if !lensMoving { stretchX = 1; stretchY = 1; lensVel = .zero }
+        if !lensMoving { stretchX = 1; stretchY = 1; lensVel = .zero
+            // a tap's travel ends when the spring lands
+            if travelling { AppLog.line("travel settled \(Int(Date().timeIntervalSince(travelStart) * 1000)) ms"); travelling = false } }
+    }
+
+    /// a tap's Tool switch: the lens stays up and the spring carries it to the
+    /// new cell (the "set transition"); it fades to the rest highlight on land
+    func travelTap(_ t: Tool) {
+        travelling = true; travelStart = .now
+        AppLog.line("travel -> \(t.title)")
+        AppDelegate.shared?.trigger(t)
+        if let c = cellCentres[t] { setLensTarget(x: c.x) }
+        if reduceMotion { travelling = false } // the jump already landed
     }
 
     func openToolMenu(_ t: Tool) {
@@ -3052,10 +3073,14 @@ struct ToolbarView: View {
             .onChanged { v in
                 if !pressActive { // first event of the press: lens in at once
                     pressActive = true; pressing = true
+                    // a press takes the lens over from a tap's travel: keep the
+                    // lens where it is mid-flight, don't snap back to selected
+                    let wasTravelling = travelling; travelling = false
                     pressX = v.startLocation.x
                     pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
-                    // start the sim exactly where the rest highlight was
-                    if let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
+                    // start the sim exactly where the rest highlight was —
+                    // unless it's still travelling from the last tap
+                    if !wasTravelling, let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
                     // the spring carries the lens to the pressed cell
                     if let t = pressTool, let c = cellCentres[t], c.x != blobX {
                         setLensTarget(x: c.x)
@@ -3094,8 +3119,7 @@ struct ToolbarView: View {
                     }
                 } else if !menuByHold, let t = nearestTool(to: v.location.x) {
                     if t != s.tool {
-                        AppDelegate.shared?.trigger(t)
-                        if let c = cellCentres[t] { setLensTarget(x: c.x) }
+                        travelTap(t) // the lens travels all the way there
                     } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
                 }
                 pressTool = nil; pressActive = false; menuByHold = false
@@ -3119,7 +3143,7 @@ struct ToolbarView: View {
             if let t = s.tool { lastUsed[t.kind] = t }
             // only an active lens interaction goes through the spring;
             // a passive switch snaps
-            if dragging { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
+            if dragging || travelling { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
             else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
             // the selected Tool's group is the default open one; a collapsed
             // group's click opens it
