@@ -5,8 +5,7 @@ using namespace metal;
 // The selection lens, iOS-tab-bar style. Inside the capsule the content is
 // magnified (kCentre < 1); only a thin band at the rim compresses hard
 // (k climbs past 1, pulling in what lies beyond the lens, so the bar's edges
-// fold inside it), with per-channel dispersion in that band — the fold is
-// dimmed by `foldDim` — and a faint
+// fold inside it), with per-channel dispersion in that band and a faint
 // top-lit hairline. Samples are clamped to the source. `px` is one device
 // pixel in points (1 / backingScaleFactor): the rim blends the last half-
 // pixel instead of a hard 1-sample step. Gotchas: stitchable
@@ -17,7 +16,6 @@ using namespace metal;
 #define kRim 2.1       // how far the rim reaches outward
 #define band 9.0       // rim band width in points
 #define disp 0.07      // dispersion at the very edge
-#define foldDim 0.25   // how much the rim band darkens what it folds in
 
 
 [[ stitchable ]] half4 lens(float2 position, SwiftUI::Layer layer,
@@ -63,9 +61,6 @@ using namespace metal;
         o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
         o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
     }
-    // the folded-in content (mostly the bar's bright rim) reads as a highlight —
-    // darken it toward the edge instead
-    o.rgb *= half(1.0 - foldDim * e);
     // faint hairline lit from the pointer, plus a small hotspot near it;
     // a light far above reproduces the old top-lit look
     float hair = smoothstep(-1.4, -0.5, s) * (1.0 - smoothstep(-0.5, 0.0, s));
