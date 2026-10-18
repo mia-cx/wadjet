@@ -17,4 +17,38 @@ export const r2BlobStore = (bucket: R2Bucket): BlobStore => ({
   async delete(key) {
     await bucket.delete(key)
   },
+  // R2 enforces its 5 MiB non-final-part minimum at `complete`.
+  async startMultipart(key, contentType) {
+    const upload = await bucket.createMultipartUpload(key, {
+      httpMetadata: { contentType },
+    })
+    return upload.uploadId
+  },
+  async putPart(key, uploadId, n, body, length) {
+    const part = await bucket
+      .resumeMultipartUpload(key, uploadId)
+      .uploadPart(n, new Uint8Array(await new Response(body).arrayBuffer()))
+    void length
+    return part.etag
+  },
+  async completeMultipart(key, uploadId, parts) {
+    try {
+      await bucket
+        .resumeMultipartUpload(key, uploadId)
+        .complete(parts.map((p) => ({ partNumber: p.number, etag: p.etag })))
+    } catch (error) {
+      // A retried complete after the first succeeded finds the upload gone and
+      // the object present — that's a done upload, not a failure.
+      if ((await bucket.head(key)) !== null) return
+      throw error
+    }
+  },
+  async abortMultipart(key, uploadId) {
+    // Spec: aborting a finished or never-started upload is not an error.
+    try {
+      await bucket.resumeMultipartUpload(key, uploadId).abort()
+    } catch {
+      // gone already
+    }
+  },
 })

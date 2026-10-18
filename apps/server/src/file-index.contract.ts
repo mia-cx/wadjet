@@ -20,6 +20,10 @@ const row = (
   deleteTokenHash: 'x'.repeat(64),
   idempotencyKey: null,
   deletedAt: null,
+  thumbnailVersion: 0,
+  thumbnailBlobKey: null,
+  thumbnailContentType: null,
+  thumbnailSize: null,
   ...extra,
 })
 
@@ -114,5 +118,34 @@ export const fileIndexContract = (name: string, index: () => FileIndex | Promise
       const retry = row('bbbb02', T3, 'mia', { idempotencyKey: 'key-1' })
       expect(await files.insert(retry)).toEqual(retry)
       await expect(files.insert(row('aaaa01', T3))).rejects.toThrow()
+    })
+
+    it('setThumbnail claims only the version it expected', async () => {
+      const files = await index()
+      await files.insert(row('aaaa01', T1))
+      expect(
+        await files.setThumbnail('aaaa01', 0, {
+          version: 1,
+          blobKey: 'thumbnails/aaaa01-v1',
+          contentType: 'image/webp',
+          size: 122,
+        }),
+      ).toBe(true)
+      expect(await files.get('aaaa01')).toMatchObject({
+        thumbnailVersion: 1,
+        thumbnailBlobKey: 'thumbnails/aaaa01-v1',
+        thumbnailContentType: 'image/webp',
+        thumbnailSize: 122,
+      })
+      // A claim based on a stale read loses; the row is untouched.
+      expect(
+        await files.setThumbnail('aaaa01', 0, {
+          version: 1,
+          blobKey: 'thumbnails/aaaa01-stale',
+          contentType: 'image/png',
+          size: 1,
+        }),
+      ).toBe(false)
+      expect((await files.get('aaaa01'))?.thumbnailVersion).toBe(1)
     })
   })

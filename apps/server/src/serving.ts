@@ -99,3 +99,42 @@ export const serveFile = async (
   if (!body) throw new Error(`Blob ${row.blobKey} is missing`)
   return { status, headers, body }
 }
+
+/**
+ * Resolve `GET`/`HEAD /t/{id}?v={n}` to a thumbnail body, a `301` to the
+ * current version (`no-store`: the current version moves), or a 404.
+ */
+export const serveThumbnail = async (
+  deps: { files: FileIndex; blobs: BlobStore; baseUrl: string },
+  id: string,
+  v: string | undefined,
+  method: string,
+  rangeHeader: string | undefined,
+): Promise<ServedFile> => {
+  const row = await deps.files.get(id)
+  if (!row || row.deletedAt) throw notFound(`No file ${id}.`)
+  const current = `${deps.baseUrl}/t/${row.id}?v=${row.thumbnailVersion}`
+  if (v !== String(row.thumbnailVersion) || row.thumbnailVersion === 0) {
+    if (row.thumbnailVersion === 0) throw notFound(`No thumbnail for ${id}.`)
+    return { status: 301, headers: { Location: current, 'Cache-Control': 'no-store' }, body: null }
+  }
+  const size = row.thumbnailSize!
+  const headers: Record<string, string> = {
+    'Content-Type': row.thumbnailContentType!,
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': FILE_CACHE_CONTROL,
+    ETag: `"${row.id}-t${row.thumbnailVersion}"`,
+  }
+  const range = parseRange(rangeHeader, size)
+  const slice: ByteRange = range ?? { offset: 0, length: size }
+  const status = range ? 206 : 200
+  headers['Content-Length'] = String(slice.length)
+  if (range)
+    headers['Content-Range'] = `bytes ${slice.offset}-${slice.offset + slice.length - 1}/${size}`
+  if (method === 'HEAD') return { status, headers, body: null }
+  const body = await deps.blobs.get(row.thumbnailBlobKey!, range ?? undefined)
+  // A claim-then-put write can leave the row ahead of its blob briefly; the
+  // version isn't here (yet), which is a 404 — and 404s aren't edge-cached.
+  if (!body) throw notFound(`No thumbnail v${row.thumbnailVersion} for ${id}.`)
+  return { status, headers, body }
+}

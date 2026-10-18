@@ -70,6 +70,18 @@ export const postgresFileIndex = async (pool: pg.Pool): Promise<FileIndex> => {
         .orderBy(desc(files.createdAt), desc(files.id))
         .limit(limit)
     },
+    async setThumbnail(id, expectedVersion, thumbnail) {
+      const changed = await db
+        .update(files)
+        .set({
+          thumbnailVersion: thumbnail.version,
+          thumbnailBlobKey: thumbnail.blobKey,
+          thumbnailContentType: thumbnail.contentType,
+          thumbnailSize: thumbnail.size,
+        })
+        .where(and(eq(files.id, id), eq(files.thumbnailVersion, expectedVersion)))
+      return (changed.rowCount ?? 0) > 0
+    },
     async markDeleted(id, at) {
       await db.update(files).set({ deletedAt: at, idempotencyKey: null }).where(eq(files.id, id))
     },

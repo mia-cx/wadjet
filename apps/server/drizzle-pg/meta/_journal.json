@@ -15,6 +15,20 @@
       "when": 1792268000384,
       "tag": "0001_shocking_lady_bullseye",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1792269049592,
+      "tag": "0002_lean_karen_page",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1792272622009,
+      "tag": "0003_rich_blur",
+      "breakpoints": true
     }
   ]
 }

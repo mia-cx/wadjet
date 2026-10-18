@@ -11,6 +11,8 @@ import { sqliteFileIndex } from './file-index-sqlite.ts'
 import { noopPurger } from './ports.ts'
 import { replayContract } from './replay.contract.ts'
 import { loadFixtures, REPLAY_ENV } from './test-helpers.ts'
+import { memoryUploadIndex } from './upload-index.ts'
+import { sqliteUploadIndex } from './upload-index-sqlite.ts'
 
 const fixtures = loadFixtures()
 
@@ -19,6 +21,7 @@ replayContract('memory', fixtures, (seams) =>
     config: loadConfig(REPLAY_ENV),
     blobs: memoryBlobStore(),
     files: memoryFileIndex(),
+    uploads: memoryUploadIndex(),
     purger: noopPurger,
     ...seams,
   }),
@@ -31,6 +34,7 @@ replayContract('filesystem + sqlite', fixtures, (seams) =>
     config: loadConfig(REPLAY_ENV),
     blobs: filesystemBlobStore(join(dir, 'blobs')),
     files: sqliteFileIndex(join(dir, 'wadjet.db')),
+    uploads: sqliteUploadIndex(join(dir, 'wadjet.db')),
     purger: noopPurger,
     ...seams,
   }),
