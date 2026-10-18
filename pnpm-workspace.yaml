@@ -1,7 +1,6 @@
 packages:
   - packages/*
   - apps/*
-  - '!apps/macos'
 minimumReleaseAge: 10080
 allowBuilds:
   better-sqlite3: true
