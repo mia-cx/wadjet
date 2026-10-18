@@ -52,6 +52,9 @@ using namespace metal;
 // applied to must contain backdrop beyond the bar's edge to bend.
 #define barEdge 14.0
 #define barPull 12.0
+#define barTone 0.17     // grey the bar's tone leans toward
+#define barToneMix 0.32  // how far it leans
+#define barGlow 5.0      // inner edge glow width (pt)
 
 static float rrSdf(float2 c, float2 half_, float r) {
     float2 b = float2(max(half_.x - r, 0.0), max(half_.y - r, 0.0));
@@ -80,8 +83,14 @@ static float rrSdf(float2 c, float2 half_, float r) {
     float dk = 0.14 * u;
     o.r = layer.sample(clamp(position - n * pull * (1.0 - dk), lo, hi)).r;
     o.b = layer.sample(clamp(position - n * pull * (1.0 + dk), lo, hi)).b;
-    // faint top-lit edge highlight
-    float lit = u * u * 0.08 * clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
-    o.rgb += half(lit * o.a);
+    // tone: pull everything toward a mid-dark grey, so the bar reads as a
+    // surface over dark *and* bright backgrounds (a black tint vanishes on dark)
+    o.rgb = mix(o.rgb, half3(barTone), half(barToneMix));
+    // inner edge glow + a crisp top-lit rim hairline — what makes the
+    // outline visible where the background is flat
+    float topLit = clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
+    float glow = pow(smoothstep(-barGlow, 0.0, sdf), 2.0) * 0.07;
+    float rim = (1.0 - smoothstep(0.0, 1.3, -sdf)) * mix(0.10, 0.30, topLit);
+    o.rgb += half(glow + rim);
     return o;
 }

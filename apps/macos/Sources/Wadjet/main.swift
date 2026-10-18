@@ -2500,9 +2500,11 @@ struct ToolbarView: View {
     var barSurface: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
+                // frost first, so the glass shader's edge, fringe and rim stay crisp
                 Image(decorative: img, scale: CGFloat(img.width) / panelW)
                     .resizable()
                     .frame(width: panelW, height: panelH)
+                    .blur(radius: 5)
             }
         }
         .layerEffect(
@@ -2510,13 +2512,8 @@ struct ToolbarView: View {
                                    .float2(shapeW, shapeH), .float(selH / 2 + d),
                                    .float2(panelW, panelH)),
             maxSampleOffset: CGSize(width: 32, height: 32))
-        .blur(radius: 5)
         .mask(alignment: .top) {
             shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
-        }
-        .overlay(alignment: .top) {
-            shape.fill(Color.black.opacity(0.35))
-                .frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
