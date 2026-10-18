@@ -1667,9 +1667,11 @@ final class OverlayController {
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]; ToolbarBtnFrames.blobRect = [:]
     }
     func closeAll() {
-        closeAllPanelsOnly()
+        // phase first: cursorUpdate on the dying panels must not re-assert
+        // a tool cursor after we're gone
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
+        closeAllPanelsOnly()
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
@@ -1679,6 +1681,7 @@ final class OverlayController {
                 prev.activate(options: [])
                 AppLog.line("activation back to \(prev.localizedName ?? "?")")
             }
+            NSCursor.arrow.set() // once activation leaves, our cursor can't change
         }
         AppDelegate.shared?.updateEscHotkey()
     }
@@ -2024,8 +2027,10 @@ final class OverlayNSView: NSView {
         updateCursor()
         needsDisplay = true
     }
-    /// the arrow over a toolbar/menu, the Tool's own cursor over the frame
+    /// the arrow over a toolbar/menu, the Tool's own cursor over the frame —
+    /// only while frozen; a late cursorUpdate after close must not re-assert
     func updateCursor() {
+        guard AppState.shared.phase == .frozen else { return }
         if ctrl?.pointerOverUI ?? false { NSCursor.arrow.set() }
         else { WadjetCursors.cursor(for: tool).set() }
         let cur = NSCursor.currentSystem ?? NSCursor.current
