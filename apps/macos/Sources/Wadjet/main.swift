@@ -94,6 +94,7 @@ final class AppState: ObservableObject {
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
+    @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -392,6 +393,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             default: AppLog.line("cmd option: unknown key \(key)")
             }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
+        case "group" where parts.count > 1: // debug: animated group switch on the expanded toolbar
+            s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
         case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
@@ -2449,6 +2452,9 @@ struct ToolbarView: View {
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
+            .onChange(of: s.debugGroup) { // cmd.sh group — the expanded bar animates it
+                if let k = s.debugGroup, expanded { s.debugGroup = nil; openTheGroup(k) }
+            }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
     }
 
@@ -2750,7 +2756,16 @@ struct ToolbarView: View {
     func openTheGroup(_ k: Tool.Kind) {
         guard k != openGroup else { return }
         AppLog.line("openTheGroup \(k)")
-        withAnimation(.spring(duration: 0.35)) { openGroup = k }
+        withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
+    }
+    /// insert/remove transition for a non-representative Tool: it starts (or
+    /// ends) stacked on its group's collapsed cell — the bundle unbundles
+    func flyTransition(_ t: Tool, in k: Tool.Kind) -> AnyTransition {
+        if reduceMotion { return .opacity }
+        let g = groupTools(k)
+        guard let i = g.firstIndex(of: t), let rep = g.firstIndex(of: lastUsedTool(k)) else { return .opacity }
+        return .offset(x: CGFloat(rep - i) * (toolD + 8)) // 8 = rowContent spacing
+            .combined(with: .scale(scale: 0.5)).combined(with: .opacity)
     }
     func nearestTool(to x: CGFloat) -> Tool? {
         cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
@@ -2768,7 +2783,16 @@ struct ToolbarView: View {
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                 }
-                ForEach(slots(in: k), id: \.tool) { make($0.tool, $0.collapsed) }
+                ForEach(slots(in: k), id: \.tool) { slot in
+                    make(slot.tool, slot.collapsed)
+                        // non-representative Tools fly out of / back into the
+                        // group's cell: offset to the rep's slot + scale + fade.
+                        // In rowContent so every copy of the row (cells, accent
+                        // strip, lens strips) animates identically
+                        .transition(flyTransition(slot.tool, in: k))
+                        // the rep draws above so the others emerge from under it
+                        .zIndex(slot.tool == lastUsedTool(k) ? 1 : 0)
+                }
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
@@ -2780,6 +2804,7 @@ struct ToolbarView: View {
         VStack(spacing: 3) {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
+                .contentTransition(.symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
                         Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
@@ -2913,6 +2938,7 @@ struct ToolbarView: View {
         return VStack(spacing: 3) {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
+                .contentTransition(.symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
                 // it travels into the bar (and back) as the shape morphs
                 .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
@@ -2966,7 +2992,6 @@ struct ToolbarView: View {
                 }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
-            .transition(.scale(scale: 0.6).combined(with: .opacity))
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
