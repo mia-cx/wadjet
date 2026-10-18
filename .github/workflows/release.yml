@@ -72,7 +72,7 @@ jobs:
         run: |
           # CI has no signing identity, so run.sh falls back to ad-hoc —
           # expected for alpha builds; testers install via "Open Anyway".
-          /usr/libexec/PlistBuddy -c 'Set :CFBundleVersion ${GITHUB_RUN_NUMBER}' \
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" \
             apps/macos/Resources/Info.plist
           apps/macos/tools/dmg.sh
           mv "apps/macos/build/Wadjet-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' apps/macos/build/Wadjet.app/Contents/Info.plist).dmg" \
@@ -82,8 +82,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          set -e
-          git tag "v$VERSION" && git push origin "v$VERSION"
+          # gh release create tags $GITHUB_SHA itself
           if gh release view "v$VERSION" >/dev/null 2>&1; then
             # idempotent re-run: replace the asset but leave the release alone
             gh release upload "v$VERSION" "Wadjet-$VERSION.dmg" --clobber
