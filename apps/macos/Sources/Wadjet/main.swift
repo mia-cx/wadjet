@@ -40,7 +40,11 @@ enum Tool: String, CaseIterable {
             AppState.shared.config.value.shortcuts.first { $0.tool.rawValue == rawValue }.map { String(describing: $0.keys) }
         }
     }
-    enum Kind { case shot, rec, util }
+    enum Kind: CaseIterable { case shot, rec, util
+        var badge: String {
+            switch self { case .shot: "camera.fill"; case .rec: "video.fill"; case .util: "wrench.and.screwdriver.fill" }
+        }
+    }
     var toolID: ToolID { ToolID(rawValue: rawValue)! }
     var hasMenu: Bool { self != .copyText }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
@@ -74,6 +78,10 @@ final class AppState: ObservableObject {
     var measureMode: String { // Bounds, Spacing, Horizontal, Vertical
         get { config.value.tools.measure.mode.rawValue }
         set { if let m = MeasureMode(rawValue: newValue) { config.update { $0.tools.measure.mode = m } } }
+    }
+    var confirmMode: String { // release, manual
+        get { config.value.tools.region.confirm.rawValue }
+        set { if let c = WadjetConfig.RegionConfirm(rawValue: newValue) { config.update { $0.tools.region.confirm = c } } }
     }
     @Published var countdown = "Off" // Off 3 5 10
     @Published var sysAudio = false
@@ -373,6 +381,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "island": s.showIslandWhileRecording = val == "on"
             case "colourFormat": s.colourFmt = val
             case "measureMode": s.measureMode = val
+            case "confirm": s.confirmMode = val
             default: AppLog.line("cmd option: unknown key \(key)")
             }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
@@ -1644,6 +1653,68 @@ final class OverlayNSView: NSView {
     var flash: (text: String, until: Date)? // transient badge near the pointer
     var scrollAcc: CGFloat = 0
     var boundsBoxes: [CGRect] = [] // Bounds boxes kept on screen via Shift
+    // manual region confirm: after mouse-up the selection stays editable —
+    // 8 handles resize, a drag inside moves, the button / Return confirms
+    var confirming = false
+    var confirmHost: NSView?
+    enum SelHandle: CaseIterable { case n, s, e, w, ne, nw, se, sw
+        func point(in r: CGRect) -> CGPoint {
+            CGPoint(x: contains(.w) ? r.minX : contains(.e) ? r.maxX : r.midX,
+                    y: contains(.n) ? r.maxY : contains(.s) ? r.minY : r.midY)
+        }
+        func contains(_ o: SelHandle) -> Bool { self == o || (self == .ne && o == .n) || (self == .nw && o == .n) || (self == .se && o == .s) || (self == .sw && o == .s) || (self == .ne && o == .e) || (self == .se && o == .e) || (self == .nw && o == .w) || (self == .sw && o == .w) }
+    }
+    enum SelOp { case move(start: CGPoint, sel: CGRect), resize(SelHandle, CGRect) }
+    var selOp: SelOp?
+    var manualConfirm: Bool { (tool == .capRegion || tool == .recRegion) && AppState.shared.confirmMode == "manual" }
+    func hitHandle(at pt: CGPoint) -> SelHandle? {
+        guard let s = sel else { return nil }
+        return SelHandle.allCases.first { abs($0.point(in: s).x - pt.x) < 9 && abs($0.point(in: s).y - pt.y) < 9 }
+    }
+    func resizeSel(from orig: CGRect, handle h: SelHandle, to pt: CGPoint) -> CGRect {
+        var r = orig
+        if h.contains(.e) { r.size.width = max(8, pt.x - r.minX) }
+        if h.contains(.w) { let m = r.maxX; r.origin.x = min(pt.x, m - 8); r.size.width = m - r.minX }
+        if h.contains(.n) { r.size.height = max(8, pt.y - r.minY) }
+        if h.contains(.s) { let m = r.maxY; r.origin.y = min(pt.y, m - 8); r.size.height = m - r.minY }
+        return r
+    }
+    func showConfirmHost() {
+        confirmHost?.removeFromSuperview()
+        let label = tool == .capRegion ? "Capture" : "Record"
+        let sym = tool == .capRegion ? "camera.fill" : "record.circle"
+        let v = Button { [weak self] in self?.confirmSel() } label: {
+            Image(systemName: sym).font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white).frame(width: 30, height: 30)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .buttonStyle(.plain)
+        .onContinuousHover { ph in
+            if case .active = ph {
+                TipPanel.hover(label, anchor: self.confirmScreenRect())
+            } else { TipPanel.hide() }
+        }
+        let h = NSHostingView(rootView: v); h.frame.size = h.fittingSize
+        addSubview(h); confirmHost = h; positionConfirmHost()
+    }
+    func confirmScreenRect() -> CGRect {
+        guard let h = confirmHost, let w = window else { return .zero }
+        return w.convertToScreen(h.convert(h.bounds, to: nil))
+    }
+    /// the confirm circle sits just outside the selection's bottom-trailing
+    /// corner, clamped into the overlay
+    func positionConfirmHost() {
+        guard let h = confirmHost, let s = sel else { return }
+        h.frame.origin = CGPoint(
+            x: min(bounds.width - 38, s.maxX + 8),
+            y: max(8, s.minY - 38))
+    }
+    func confirmSel() {
+        guard confirming, let s = sel else { return }
+        confirming = false; selOp = nil
+        confirmHost?.removeFromSuperview(); confirmHost = nil
+        app?.didSelect(s, on: di) // the exact release path
+    }
     init(frame f: NSRect, displayIndex: Int, controller: OverlayController) {
         di = displayIndex; ctrl = controller
         super.init(frame: f)
@@ -1688,6 +1759,13 @@ final class OverlayNSView: NSView {
         if let s = sel, t == .capRegion || t == .recRegion || t == .copyText {
             NSColor.white.withAlphaComponent(0.8).setStroke()
             let p = NSBezierPath(rect: s); p.lineWidth = 0.5; p.stroke()
+            if confirming {
+                NSColor.white.setFill()
+                for h in SelHandle.allCases {
+                    let c = h.point(in: s)
+                    NSBezierPath(rect: CGRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)).fill()
+                }
+            }
         }
         if t == .measure { drawMeasure() }
         if !overToolbar && t != .measure { drawLoupe(ctx) }
@@ -1914,11 +1992,33 @@ final class OverlayNSView: NSView {
         case .measure where measureMode != "Bounds":
             if let v = rulerLabel() { copyMeasureAndClose(v) }
         default:
-            dragStart = pt; sel = CGRect(origin: pt, size: .zero)
+            if confirming { // manual mode: move / resize / start over
+                if let h = hitHandle(at: pt) { selOp = .resize(h, sel!) }
+                else if let s = sel, s.contains(pt) { selOp = .move(start: pt, sel: s) }
+                else {
+                    confirming = false; selOp = nil
+                    confirmHost?.removeFromSuperview(); confirmHost = nil
+                    dragStart = pt; sel = CGRect(origin: pt, size: .zero)
+                }
+            } else { dragStart = pt; sel = CGRect(origin: pt, size: .zero) }
         }
         needsDisplay = true
     }
     override func mouseDragged(with e: NSEvent) {
+        let pt0 = convert(e.locationInWindow, from: nil)
+        if let op = selOp {
+            switch op {
+            case .move(let st, let orig):
+                var r = orig.offsetBy(dx: pt0.x - st.x, dy: pt0.y - st.y)
+                r.origin.x = min(max(0, r.origin.x), bounds.width - r.width)
+                r.origin.y = min(max(0, r.origin.y), bounds.height - r.height)
+                sel = r
+            case .resize(let h, let orig):
+                sel = resizeSel(from: orig, handle: h, to: pt0)
+            }
+            positionConfirmHost()
+            needsDisplay = true; return
+        }
         guard let st = dragStart else { return }
         let pt = convert(e.locationInWindow, from: nil)
         // Bounds ignores Option/Shift: Shift means "keep this box" at mouseUp
@@ -1937,6 +2037,7 @@ final class OverlayNSView: NSView {
     override func mouseUp(with e: NSEvent) {
         defer { needsDisplay = true }
         AppLog.line("mouseUp \(tool.title) sel=\(sel.debugDescription)")
+        if selOp != nil { selOp = nil; return }
         if tool == .measure, measureMode == "Bounds", let s = sel, dragStart != nil, s.width > 4 && s.height > 4 {
             dragStart = nil
             copyMeasure(fmtDim(s.width) + " × " + fmtDim(s.height))
@@ -1947,12 +2048,16 @@ final class OverlayNSView: NSView {
         guard let s = sel, dragStart != nil else { return }
         dragStart = nil
         if tool == .copyText { copyText(in: s); ctrl?.closeAll(); return }
-        if (tool == .capRegion || tool == .recRegion) && s.width > 4 && s.height > 4 { app?.didSelect(s, on: di); return }
+        if (tool == .capRegion || tool == .recRegion) && s.width > 4 && s.height > 4 {
+            if manualConfirm { confirming = true; showConfirmHost(); return }
+            app?.didSelect(s, on: di); return
+        }
         sel = nil
     }
     // called from the local key monitor (nonactivating panels don't get keyDown)
     @discardableResult
     func handleKey(_ e: NSEvent) -> Bool {
+        if e.keyCode == 36, confirming { confirmSel(); return true } // Return
         if e.keyCode == 53 { ctrl?.closeAll(); return true }
         if e.keyCode == 49 { app?.toggleRegionWindow(); return true } // Space
         // Ctrl+1..4 switch Measure modes while the overlay is open
@@ -2109,9 +2214,10 @@ struct ToolbarView: View {
     var expH: CGFloat { contentTop + selH + d }
     var shapeW: CGFloat { expanded ? expW : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
-    // slack beyond expW so a fully stretched lens (lensW × 1.3 at the last
-    // cell) still fits inside the panel — hoverRect is shape-based, unaffected
-    var panelW: CGFloat { min(limit, expW) + 80 }
+    // slack beyond expW: a fully stretched lens (lensW × 1.3 at the last
+    // cell) plus a full anchored group reflow (~2 cells + divider per side)
+    // — hoverRect is shape-based, unaffected
+    var panelW: CGFloat { min(limit, expW) + 260 }
     // menus and tooltips are their own panels
     var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
@@ -2158,6 +2264,7 @@ struct ToolbarView: View {
 
     var body: some View {
         morph
+            .offset(x: barOffsetX) // pressed reflows anchor on the pointer
             .frame(width: panelW, height: panelH, alignment: .top)
             #if CLEAR_GLASS_PATCH
             // the lens is its own glass-free layer drawn over the bar —
@@ -2185,6 +2292,10 @@ struct ToolbarView: View {
             .onChange(of: rowSize) { syncHit(); syncLensBg() }
             .onChange(of: expanded) {
                 if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
+                else {
+                    var tx = Transaction(); tx.disablesAnimations = true
+                    withTransaction(tx) { openGroup = s.tool?.kind ?? .shot; barOffsetX = 0 }
+                }
                 syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
@@ -2341,6 +2452,14 @@ struct ToolbarView: View {
     @State var blobY: CGFloat = 0
     @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
+    /// one group open at a time; the rest collapse to their last-used Tool
+    @State var openGroup: Tool.Kind = .shot
+    @State var lastUsed: [Tool.Kind: Tool] = [:]
+    /// horizontal offset of the whole bar inside the panel — nonzero only
+    /// while a pressed reflow anchors the cell under the pointer
+    @State var barOffsetX: CGFloat = 0
+    /// the cell whose panel x must not move through a pressed reflow
+    @State var pendingAnchor: (tool: Tool, x: CGFloat)?
     /// One spring sim owns the lens: position chases lensTarget, velocity
     /// drives the stretch — no gesture-event velocity, no debounce.
     @State var lensVel = CGPoint.zero
@@ -2364,6 +2483,15 @@ struct ToolbarView: View {
         return lensActive
         #else
         return false
+        #endif
+    }
+    /// the pre-patch in-row lens: glass + accent mask + cut-outs, only while
+    /// pressing. With the shader patch nothing in-row draws for the lens
+    var usesInRowLens: Bool {
+        #if CLEAR_GLASS_PATCH
+        return false
+        #else
+        return lensActive
         #endif
     }
     /// frozen + expanded: our barSurface draws the bar; system glass off
@@ -2450,15 +2578,54 @@ struct ToolbarView: View {
         s.openMenu = s.openMenu == t ? nil : t
         ctrl.syncMenu()
     }
-    func nearestTool(to x: CGFloat) -> Tool? { cellCentres.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key }
+    struct RowSlot { let tool: Tool; let collapsed: Bool }
+    func groupTools(_ k: Tool.Kind) -> [Tool] { Tool.allCases.filter { $0.kind == k } }
+    /// a collapsed group's representative: its last-used Tool — the selected
+    /// Tool's group always shows the selection
+    func lastUsedTool(_ k: Tool.Kind) -> Tool {
+        if let t = s.tool, t.kind == k { return t }
+        return lastUsed[k] ?? groupTools(k)[0]
+    }
+    func slots(in k: Tool.Kind) -> [RowSlot] {
+        k == openGroup ? groupTools(k).map { RowSlot(tool: $0, collapsed: false) }
+                       : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
+    }
+    var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
+    /// open a group; while pressed the reflow is anchored on `anchor` — the
+    /// cell under the pointer keeps its panel x, the bar shifts under it
+    func openTheGroup(_ k: Tool.Kind, anchor t: Tool? = nil) {
+        guard k != openGroup else { return }
+        if let t, let r = ToolbarBtnFrames.rects[displayIndex]?[t] { pendingAnchor = (t, r.midX) }
+        withAnimation(.spring(duration: 0.35)) { openGroup = k }
+    }
+    func nearestTool(to x: CGFloat) -> Tool? {
+        cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
+    }
     var rowEnds: (CGFloat, CGFloat) {
-        let xs = cellCentres.values.map(\.x)
+        let xs = cellCentres.filter { visibleTools.contains($0.key) }.values.map(\.x)
         return (xs.min() ?? 0, xs.max() ?? 0)
     }
+    /// the row laid out once, shared by the real cells, the accent copy and
+    /// the lens's icon strip — every copy keeps the same geometry
+    func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
+        HStack(spacing: 8) {
+            ForEach(Tool.Kind.allCases, id: \.self) { k in
+                if k != .shot { // thin divider between groups
+                    Rectangle().fill(.white.opacity(0.14))
+                        .frame(width: 1, height: selH * 0.6)
+                }
+                ForEach(slots(in: k), id: \.tool) { make($0.tool, $0.collapsed) }
+            }
+        }
+        .padding(.horizontal, d + (selW - toolD) / 2)
+    }
     // the icon strip once, for the accent-tint mask — same layout as the row
-    func iconCell(_ t: Tool) -> some View {
+    func iconCell(_ t: Tool, collapsed: Bool) -> some View {
         Image(systemName: t.symbol).font(.system(size: 22))
             .frame(width: toolD, height: selH)
+            .overlay(alignment: .bottomTrailing) {
+                if collapsed { Image(systemName: t.kind.badge).font(.system(size: 8)).offset(x: 6, y: -5) }
+            }
     }
 
     /// pixel-res Freeze Frame crop under the whole toolbar panel — the
@@ -2476,22 +2643,14 @@ struct ToolbarView: View {
     #if CLEAR_GLASS_PATCH
     /// the lens capsule's centre in panel coords
     var lensCentre: CGPoint {
-        CGPoint(x: (panelW - rowSize.width) / 2 + blobX, y: shapeTop + contentTop + blobY)
+        CGPoint(x: (panelW - rowSize.width) / 2 + blobX + barOffsetX, y: shapeTop + contentTop + blobY)
     }
     /// the lens capsule's centre in row space (for the accent mask)
     var lensCentreInRow: CGPoint {
         CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
     }
     func iconStrip(_ color: Color) -> some View {
-        HStack(spacing: 8) {
-            ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: iconCell)
-            Spacer().frame(width: 8)
-            ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: iconCell)
-            Spacer().frame(width: 8)
-            ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
-        }
-        .padding(.horizontal, d + (selW - toolD) / 2)
-        .foregroundStyle(color)
+        rowContent(iconCell).foregroundStyle(color)
     }
     /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
@@ -2532,16 +2691,19 @@ struct ToolbarView: View {
                     .resizable()
                     .frame(width: panelW, height: panelH)
             }
-            barSurface
-            ZStack {
-                iconStrip(.white)
-                iconStrip(Color.wadjetAccent)
-                    .mask(Capsule().frame(width: lensW, height: lensH)
-                          .scaleEffect(x: stretchX, y: stretchY)
-                          .position(lensCentreInRow))
+            ZStack(alignment: .top) {
+                barSurface
+                ZStack {
+                    iconStrip(.white)
+                    iconStrip(Color.wadjetAccent)
+                        .mask(Capsule().frame(width: lensW, height: lensH)
+                              .scaleEffect(x: stretchX, y: stretchY)
+                              .position(lensCentreInRow))
+                }
+                .frame(width: shapeW, height: shapeH, alignment: .top)
+                .padding(.top, shapeTop + contentTop)
             }
-            .frame(width: shapeW, height: shapeH, alignment: .top)
-            .padding(.top, shapeTop + contentTop)
+            .offset(x: barOffsetX)
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -2575,9 +2737,9 @@ struct ToolbarView: View {
             .allowsHitTesting(false)
     }
 
-    // one cell of the tab bar: plain white icon, cut out wherever the
-    // capsule/lens covers it — the accent overlay row draws that part
-    func cell(_ t: Tool) -> some View {
+    // one cell of the tab bar: plain white icon (accent on the selected cell
+    // at rest); a collapsed cell carries its group's badge
+    func cell(_ t: Tool, collapsed: Bool) -> some View {
         let selected = s.tool == t
         let c = cellCentres[t] ?? .zero
         return Image(systemName: t.symbol).resizable().scaledToFit()
@@ -2585,23 +2747,37 @@ struct ToolbarView: View {
             // the selected cell's icon and the island's icon are one element:
             // it travels into the bar (and back) as the shape morphs
             .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
-            .foregroundStyle(.white)
+            .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
             .frame(width: toolD, height: selH)
+            // the rest highlight rides the selected cell, so group reflows
+            // carry it with layout instead of chasing it in row space
+            .background {
+                if selected, !lensActive {
+                    Capsule().fill(.white.opacity(0.10))
+                        .frame(width: selW, height: selH)
+                }
+            }
             .contentShape(Rectangle()) // whole cell, not just the glyph
             .mask {
                 ZStack {
                     Rectangle()
-                    selShape.opacity(shaderLensActive ? 0 : 1)
+                    selShape.opacity(usesInRowLens ? 1 : 0)
                         .transaction { $0.animation = nil }
                         .offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
                 }
                 .compositingGroup()
             }
             .overlay(alignment: .bottomTrailing) {
+                if collapsed { // the group's badge on its last-used cell
+                    Image(systemName: t.kind.badge).font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(.black.opacity(0.85)))
+                        .offset(x: 4, y: -5)
                 // the menu droplet budding off the rest capsule's corner —
                 // hidden while pressing/dragging; high-priority tap so the
                 // row's drag can't take it
-                if t.hasMenu && selected && !lensActive {
+                } else if t.hasMenu && selected && !lensActive {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
@@ -2615,13 +2791,20 @@ struct ToolbarView: View {
                 }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
+            .transition(.scale(scale: 0.6).combined(with: .opacity))
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
                 if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
             }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
-                ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = $0
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
+                ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
+                // a pressed reflow keeps this cell where the pointer left it
+                if let a = pendingAnchor, a.tool == t {
+                    pendingAnchor = nil
+                    var tx = Transaction(); tx.disablesAnimations = true
+                    withTransaction(tx) { barOffsetX += a.x - f.midX }
+                }
             }
     }
 
@@ -2629,42 +2812,19 @@ struct ToolbarView: View {
         // rest highlight sits below the icons in .background; the glass lens
         // goes on top with the clear-glass patch (it must refract the icons)
         // and behind them without it
-        HStack(spacing: 8) {
-            ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: cell)
-            Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
-            ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: cell)
-            Spacer().frame(width: 8)
-            ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: cell)
-        }
-        // horizontal inset d + the capsule's overhang, so the rest capsule's
-        // end caps sit exactly d inside the shape's rounded ends
-        .padding(.horizontal, d + (selW - toolD) / 2)
+        rowContent(cell)
         .coordinateSpace(name: "row")
-        .background {
-            // rest: subtle translucent highlight (no glass)
-            Capsule().fill(.white.opacity(lensActive ? 0 : 0.10))
-                .frame(width: lensSize.width, height: lensSize.height)
-                .position(x: blobX, y: blobY)
-                .transaction { $0.animation = nil }
-        }
         // the accent tint follows the lens, clipped to its shape — the icon row
-        // is drawn a second time in accent, masked to a capsule at blobX
+        // is drawn a second time in accent, masked to a capsule at blobX.
+        // Only while the in-row lens draws: at rest the selected cell's own
+        // icon carries the accent
         .overlay {
-            ZStack {
-                HStack(spacing: 8) {
-                    ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: iconCell)
-                    Spacer().frame(width: 8)
-                    ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: iconCell)
-                    Spacer().frame(width: 8)
-                    ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
-                }
-                .padding(.horizontal, d + (selW - toolD) / 2)
-            }
-            .mask(selShape.opacity(shaderLensActive ? 0 : 1)
-                .position(x: blobX, y: blobY)
-                .transaction { $0.animation = nil })
-            .foregroundStyle(Color.wadjetAccent)
-            .allowsHitTesting(false)
+            rowContent(iconCell)
+                .mask(selShape.opacity(usesInRowLens ? 1 : 0)
+                    .position(x: blobX, y: blobY)
+                    .transaction { $0.animation = nil })
+                .foregroundStyle(Color.wadjetAccent)
+                .allowsHitTesting(false)
         }
         // the glass lens: identity glass at rest, glass while pressing —
         // animating the effect, never inserted. With the clear-glass patch it
@@ -2687,6 +2847,8 @@ struct ToolbarView: View {
                     pressActive = true; pressing = true
                     pressX = v.startLocation.x
                     pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
+                    // start the sim exactly where the rest highlight was
+                    if let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
                     // the spring carries the lens to the pressed cell
                     if let t = pressTool, let c = cellCentres[t], c.x != blobX {
                         setLensTarget(x: c.x)
@@ -2735,15 +2897,20 @@ struct ToolbarView: View {
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { $0.value.contains(p) })?.key {
                     if TipPanel.tool != t { AppLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
                     TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
+                    openTheGroup(t.kind, anchor: lensActive ? t : nil) // groups open under the pointer
                 } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
             case .ended: TipPanel.hide()
             }
         }
         .onChange(of: s.tool) {
+            if let t = s.tool { lastUsed[t.kind] = t }
             // only an active lens interaction goes through the spring;
             // a passive switch snaps
             if dragging { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
             else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
+            // the selected Tool's group is the default open one; a collapsed
+            // group's click opens it
+            if !lensActive { openTheGroup(s.tool?.kind ?? .shot) }
         }
         .padding(.top, contentTop)
 
@@ -2868,8 +3035,10 @@ struct ToolMenuView: View {
             switch tool.kind {
             case .shot:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
+                if tool == .capRegion { confirmRow() }
             case .rec:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
+                if tool == .recRegion { confirmRow() }
                 Text("Options").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
                     .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
                 section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
@@ -2908,6 +3077,24 @@ struct ToolMenuView: View {
             .buttonStyle(.plain)
         }
     }
+    @ViewBuilder func confirmRow() -> some View {
+        Button {
+            s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
+            s.openMenu = nil; ctrl.syncMenu()
+        } label: {
+            HStack {
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                    .opacity(s.confirmMode == "release" ? 1 : 0)
+                Text("Confirm on Release").font(.system(size: 13)).foregroundStyle(.white)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder func toggles() -> some View {
         let rows: [(String, Binding<Bool>)] = [
             ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),
