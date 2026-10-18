@@ -36,7 +36,7 @@ It captures nothing itself; Capture and Record Tools capture whatever Annotation
 _Avoid_: Drawing tool, annotation tool
 
 **Annotation**:
-One vector object drawn by a Markup Tool, such as a shape, line, text, or step counter. It stays on screen until erased or cleared, and stays editable inside a Canvas.
+One object drawn or pasted with Markup, such as a shape, line, text, step counter, or pasted image. Annotations stack as layers; each stays on screen until erased or cleared, and stays editable inside a Canvas.
 _Avoid_: A markup, drawing, mark
 
 **Canvas**:
