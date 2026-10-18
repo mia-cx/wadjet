@@ -1114,13 +1114,24 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stream = recStream, writer = recWriter
         recStream = nil; recWriter = nil; recOutput = nil
         recordingPanel?.close(); recordingPanel = nil
-        s.recActive = false; s.phase = .desktop; recStart = nil
-        overlayCtrl.chromeScreens = []
+        s.recActive = false; recStart = nil
+        // stopping ends only the Recording — a Freeze Frame that's up is an
+        // unrelated Screenshot in progress and stays up (its Shortcut one-shot
+        // Workflow survives too). Without one, the recording chrome goes.
+        if s.phase != .frozen {
+            s.phase = .desktop
+            overlayCtrl.chromeScreens = []
+            overlayCtrl.closeAllPanelsOnly()
+        } else {
+            // the bubble dies without the merge (there's no recording island to
+            // merge into) and the island returns to the plain toolbar
+            overlayCtrl.syncBubbles()
+            overlayCtrl.refreshToolbars()
+        }
         updateEscHotkey()
         AppLog.line("recording stopped (\(String(format: "%.1f", dur))s) \(label)")
         if let ri = recStatusItem { NSStatusBar.system.removeStatusItem(ri); recStatusItem = nil }
         rebuildMenu()
-        overlayCtrl.closeAllPanelsOnly()
         // The Workflow is decided now — a Shortcut fired while this finishes
         // must not reach back and change it.
         let workflow = recContext?.workflow ?? s.config.value.defaultWorkflows.recording
@@ -1856,6 +1867,7 @@ final class OverlayController {
         // the Freeze Frame is about to be freed, so the islands ride the live
         // screens from here on
         if AppState.shared.recActive { chromeScreens = NSScreen.screens; refreshToolbars() }
+        else { chromeScreens = [] }
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
