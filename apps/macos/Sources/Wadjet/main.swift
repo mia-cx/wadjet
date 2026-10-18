@@ -1359,6 +1359,15 @@ final class OverlayController {
         p.contentView = h; p.orderFront(nil)
         menuPanel = p
         AppLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
+        // diag: is it actually on screen a second later, or closed/hidden?
+        Task { @MainActor [weak self, weak p] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            guard let mp = self.menuPanel else { AppLog.line("menu diag: closed before 1 s"); return }
+            let ours = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]])?
+                .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
+            AppLog.line("menu diag: visible=\(mp.isVisible) alpha=\(mp.alphaValue) level=\(mp.level.rawValue) occl=\(mp.occlusionState.rawValue) frame=\(mp.frame) screenWins=\(ours?.count ?? -1) thisWin=\(ours?.contains { $0[kCGWindowNumber as String] as? Int == Int(p?.windowNumber ?? -1) } ?? false)")
+        }
         menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
             guard let self, let mp = self.menuPanel else { return e }
             if !mp.frame.contains(NSEvent.mouseLocation) {
@@ -1369,6 +1378,7 @@ final class OverlayController {
         }
     }
     func hideMenu() {
+        if menuPanel != nil { AppLog.line("hideMenu <- \(Thread.callStackSymbols.prefix(6).map { $0.components(separatedBy: " ").dropFirst(3).first ?? "?" }.joined(separator: " | ")))") }
         menuPanel?.close(); menuPanel = nil
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
     }
@@ -2292,7 +2302,10 @@ struct ToolbarView: View {
         return hoverRect.contains(q)
     }
     func syncExpanded() {
-        let h = hoverInside || s.openMenu != nil || lensActive
+        // an open menu holds its own display expanded — it must NOT make the
+        // other displays claim expandedDisplay, which collapses this one and
+        // kills the menu
+        let h = hoverInside || lensActive || (s.openMenu != nil && s.expandedDisplay == displayIndex)
         if h != expanded { AppLog.line("hover d\(displayIndex) -> \(h)") }
         if h { s.expandedDisplay = displayIndex }
         else if s.expandedDisplay == displayIndex { s.expandedDisplay = nil }
