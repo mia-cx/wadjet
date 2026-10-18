@@ -48,8 +48,9 @@ jobs:
         id: version
         run: node -e "console.log('version=' + require('./apps/macos/package.json').version)" >> "$GITHUB_OUTPUT"
 
-  # the version-PR job: queued runs here are safe to replace — the latest one
-  # collects every pending changeset anyway, so one shared group suffices
+  # the version-PR job: runs one at a time, and only for the commit main
+  # points at — changesets/action versions and force-pushes from github.sha,
+  # so an older run finishing late would otherwise overwrite a newer plan
   release-pr:
     needs: version
     runs-on: ubuntu-latest
@@ -63,15 +64,24 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: main # not the pushed sha — a superseded run still versions the newest changesets
           fetch-depth: 0
-      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+      - name: Is this still main's head?
+        id: head
+        run: |
+          main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$main" = "$GITHUB_SHA" ]; then echo "current=true" >> "$GITHUB_OUTPUT"
+          else echo "current=false" >> "$GITHUB_OUTPUT"; echo "main moved to $main; its own run updates the version PR"; fi
+      - if: steps.head.outputs.current == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.head.outputs.current == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.20.0
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
+      - if: steps.head.outputs.current == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.head.outputs.current == 'true'
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
         with:
           version-script: pnpm release:version
           commit-message: "chore(release): version app"
