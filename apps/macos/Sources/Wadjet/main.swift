@@ -2657,6 +2657,7 @@ struct ToolbarView: View {
     func openTheGroup(_ k: Tool.Kind, anchor t: Tool? = nil) {
         guard k != openGroup else { return }
         if let t, let r = ToolbarBtnFrames.rects[displayIndex]?[t] { pendingAnchor = (t, r.midX) }
+        AppLog.line("openTheGroup \(k) anchor=\(t?.title ?? "-") off=\(Int(barOffsetX))")
         withAnimation(.spring(duration: 0.35)) { openGroup = k }
     }
     func nearestTool(to x: CGFloat) -> Tool? {
@@ -2866,6 +2867,7 @@ struct ToolbarView: View {
                 if let a = pendingAnchor, a.tool == t {
                     var tx = Transaction(); tx.disablesAnimations = true
                     withTransaction(tx) { barOffsetX += a.x - f.midX }
+                    AppLog.line("anchor \(t.title) off -> \(Int(barOffsetX))")
                     if !lensActive { pendingAnchor = nil }
                 }
             }
