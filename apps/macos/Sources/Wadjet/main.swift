@@ -1677,7 +1677,7 @@ final class OverlayController {
             ownWindow(w) && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
         }
         // bare images only feed the frozen display swap — skip them when the
-        /// Freeze Frame isn't shown (the live shot at confirm decides then)
+        // Freeze Frame isn't shown (the live shot at confirm decides then)
         let needBare = AppState.shared.config.value.capture.freeze && !ownWindows.isEmpty
         if !ownWindows.isEmpty {
             AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\($0.frame)" })")

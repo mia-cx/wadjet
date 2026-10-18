@@ -142,7 +142,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(capture, forKey: .capture)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, freeze, cursor
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
