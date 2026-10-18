@@ -3689,29 +3689,31 @@ struct ToolMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
+            // what goes in → how it starts → what happens after
             case .shot:
                 tileRow(shotTiles)
-                divider()
-                workflowRows()
-                if tool == .capRegion { divider(); confirmRow() }
+                if tool == .capRegion { section("Start") { confirmRow() } }
+                section("Workflow") { workflowRows() }
             case .rec:
                 tileRow(recTiles)
-                divider()
-                workflowRows()
-                if tool == .recRegion { confirmRow() }
-                divider()
-                countdownRows()
-            case .util where tool == .pickColour:
-                ForEach(ColourFormat.allCases.map(\.rawValue), id: \.self) { f in
-                    row(f, icon: f == "Hex" ? "number" : f == "SwiftUI" ? "swift" : "function", on: f == s.colourFmt) { s.colourFmt = f }
+                section("Start") {
+                    if tool == .recRegion { confirmRow() }
+                    countdownRows()
                 }
+                section("Workflow") { workflowRows() }
+            case .util where tool == .pickColour:
+                colourRows([.hex, .rgb, .hsl, .oklch, .lab])
+                section("Code") { colourRows([.swiftUI]) }
             case .util where tool == .measure:
                 tileRow(measureTiles)
             default: EmptyView()
             }
         }
-        .padding(.horizontal, 6).padding(.vertical, 8)
+        .padding(Self.inset)
         .frame(width: 280)
+        // row and tile highlights take ConcentricRectangle from this, so
+        // their corners nest inside the menu's
+        .containerShape(Self.shape)
         // heavy frost like the reference menu: the frozen world behind, hard
         // blurred and darkened, under the glass's rim and highlight
         .background {
@@ -3721,11 +3723,11 @@ struct ToolMenuView: View {
                         .blur(radius: 24, opaque: true)
                     Color.black.opacity(0.28)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .clipShape(Self.shape)
             }
         }
         .overlay { MenuRimLight(ctrl: ctrl) }
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .glassEffect(.regular, in: Self.shape)
         .scaleEffect(shown ? 1 : 0.85, anchor: .top)
         .opacity(shown ? 1 : 0)
         .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
@@ -3737,16 +3739,36 @@ struct ToolMenuView: View {
             s.openMenu = nil; ctrl.syncMenu()
         }
     }
-    func tileRow(_ tiles: [MenuTile]) -> some View {
+    static let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+    /// one inset on every side, so the concentric corners stay even
+    static let inset: CGFloat = 6
+    /// tiles in groups, a hairline between groups
+    func tileRow(_ groups: [[MenuTile]]) -> some View {
         HStack(spacing: 0) {
-            Spacer(minLength: 0)
-            ForEach(tiles, id: \.caption) { $0 }
-            Spacer(minLength: 0)
+            ForEach(groups.indices, id: \.self) { i in
+                if i > 0 { Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5, height: 36) }
+                ForEach(groups[i], id: \.caption) { $0 }
+            }
         }
     }
     func divider() -> some View {
         Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
             .padding(.horizontal, 20).padding(.vertical, 3)
+    }
+    /// a titled group of rows under a divider, like a native menu section
+    func section(_ title: String, @ViewBuilder _ rows: () -> some View) -> some View {
+        Group {
+            divider()
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+                .padding(.horizontal, 14).padding(.top, 4).padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
+            rows()
+        }
+    }
+    func colourRows(_ formats: [ColourFormat]) -> some View {
+        ForEach(formats, id: \.self) { f in
+            row(f.rawValue, icon: f == .hex ? "number" : f == .swiftUI ? "swift" : "function", on: f.rawValue == s.colourFmt) { s.colourFmt = f.rawValue }
+        }
     }
     /// Workflow radio rows, subtitled with each Workflow's Steps
     @ViewBuilder func workflowRows() -> some View {
@@ -3767,32 +3789,33 @@ struct ToolMenuView: View {
     }
     /// the Screenshot options — they swap the frozen image live and keep the
     /// menu open
-    var shotTiles: [MenuTile] {
-        [
+    var shotTiles: [[MenuTile]] {
+        [[
             MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.shotCursor, isToggle: true) { s.shotCursor.toggle() },
             MenuTile(icon: "eye", caption: "Wadjet", on: s.shotWadjet, isToggle: true) { s.shotWadjet.toggle() },
-        ]
+        ]]
     }
     /// the recording options as tiles, like the reference's top icon row —
-    /// they keep the menu open
-    var recTiles: [MenuTile] {
-        [
-            MenuTile(icon: "speaker.wave.2", filledIcon: "speaker.wave.2.fill", caption: "Audio", on: s.sysAudio, isToggle: true) { s.sysAudio.toggle() },
-            MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
+    /// picture, then sound. They keep the menu open
+    var recTiles: [[MenuTile]] {
+        [[
             MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.cursor, isToggle: true) { s.cursor.toggle() },
             MenuTile(icon: "cursorarrow.click.2", caption: "Clicks", on: s.clickCircles, isToggle: true) { s.clickCircles.toggle() },
-            MenuTile(icon: "capsule", caption: "Island", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
-        ]
+            MenuTile(icon: "eye", caption: "Wadjet", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
+        ], [
+            MenuTile(icon: "speaker.wave.2", filledIcon: "speaker.wave.2.fill", caption: "Audio", on: s.sysAudio, isToggle: true) { s.sysAudio.toggle() },
+            MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
+        ]]
     }
-    /// Measure's four modes as pick tiles — they close the menu
-    var measureTiles: [MenuTile] {
+    /// Measure's four modes as pick tiles, areas then lines — they close the menu
+    var measureTiles: [[MenuTile]] {
         func tile(_ mode: String, _ icon: String) -> MenuTile {
             MenuTile(icon: icon, caption: mode, on: s.measureMode == mode) {
                 s.measureMode = mode; s.openMenu = nil; ctrl.syncMenu()
             }
         }
-        return [tile("Bounds", "square.dashed"), tile("Spacing", "arrow.left.and.right.square"),
-                tile("Horizontal", "arrow.left.and.right"), tile("Vertical", "arrow.up.and.down")]
+        return [[tile("Bounds", "square.dashed"), tile("Spacing", "arrow.left.and.right.square")],
+                [tile("Horizontal", "arrow.left.and.right"), tile("Vertical", "arrow.up.and.down")]]
     }
     @ViewBuilder func countdownRows() -> some View {
         ForEach(["Off", "3 s", "5 s", "10 s"], id: \.self) { v in
@@ -3802,6 +3825,13 @@ struct ToolMenuView: View {
             }
         }
     }
+}
+
+/// a menu row's or tile's hover fill: concentric with the menu where it
+/// meets the menu's corners, 14 pt elsewhere
+func menuHighlight(_ on: Bool) -> some View {
+    ConcentricRectangle(corners: .concentric(minimum: .fixed(14)), isUniform: false)
+        .fill(.white.opacity(on ? 0.1 : 0))
 }
 
 // a menu row: 22 pt leading column (checkmark when on, an icon otherwise, or
@@ -3834,7 +3864,7 @@ struct MenuRow: View {
             }
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(hovering ? 0.1 : 0)))
+            .background(menuHighlight(hovering))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
@@ -3863,7 +3893,7 @@ struct MenuTile: View {
             }
             .foregroundStyle(on ? Color.wadjetAccent : .white)
             .frame(maxWidth: .infinity).frame(height: 64)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(hovering ? 0.1 : 0)))
+            .background(menuHighlight(hovering))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
