@@ -978,14 +978,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // Recording is always stoppable from the status item AND the island; the
     // "Show Island While Recording" option only toggles the island part.
+    // the Recording's own menu bar item beside the Wadjet eye — the main
+    // item keeps its icon and normal menu throughout
+    var recStatusItem: NSStatusItem?
     func updateRecChrome() {
         let s = AppState.shared
-        statusItem.button?.title = "● " + fmtT(s.recordingElapsed)
-        statusItem.button?.image = nil
+        if recStatusItem == nil { recStatusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength) }
+        recStatusItem?.button?.title = (s.recordingPaused ? "❚❚ " : "● ") + fmtT(s.recordingElapsed)
         let m = NSMenu()
         m.addItem(mi(s.recordingPaused ? "Resume" : "Pause", #selector(recPause), on: false))
         m.addItem(mi("Stop Recording", #selector(recStop), on: false))
-        statusItem.menu = m
+        recStatusItem?.menu = m
+        AppLog.line("menu bar: wadjet=\(statusItem.button?.image == nil ? "?" : "eye") rec=\(recStatusItem?.button?.title ?? "-")")
         overlayCtrl.refreshToolbars()
     }
     @objc func recPause() { togglePause() }
@@ -1094,10 +1098,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let stream = recStream, writer = recWriter
         recStream = nil; recWriter = nil; recOutput = nil
         recordingPanel?.close(); recordingPanel = nil
-        s.phase = .desktop; recStart = nil
+        s.recActive = false; s.phase = .desktop; recStart = nil
         updateEscHotkey()
-        AppLog.line("phase=desktop (recording stopped, \(String(format: "%.1f", dur))s)")
-        statusItem.button?.title = ""; statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
+        AppLog.line("recording stopped (\(String(format: "%.1f", dur))s)")
+        if let ri = recStatusItem { NSStatusBar.system.removeStatusItem(ri); recStatusItem = nil }
         rebuildMenu()
         overlayCtrl.closeAllPanelsOnly()
         // The Workflow is decided now — a Shortcut fired while this finishes
