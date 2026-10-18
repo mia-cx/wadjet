@@ -1668,6 +1668,16 @@ final class OverlayController {
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]; ToolbarBtnFrames.blobRect = [:]
+        // every teardown — Recording start, Esc, failures — hands activation
+        // back unless the user switched apps meanwhile
+        if let prev = prevFrontmost {
+            prevFrontmost = nil
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
+                prev.activate(options: [])
+                AppLog.line("activation back to \(prev.localizedName ?? "?")")
+            }
+            NSCursor.arrow.set() // once activation leaves, our cursor can't change
+        }
     }
     func closeAll() {
         // phase first: cursorUpdate on the dying panels must not re-assert
@@ -1678,14 +1688,6 @@ final class OverlayController {
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
-        if let prev = prevFrontmost {
-            prevFrontmost = nil
-            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
-                prev.activate(options: [])
-                AppLog.line("activation back to \(prev.localizedName ?? "?")")
-            }
-            NSCursor.arrow.set() // once activation leaves, our cursor can't change
-        }
         AppDelegate.shared?.updateEscHotkey()
     }
 }
