@@ -2882,9 +2882,11 @@ struct ToolbarView: View {
                         // the spring carries it home — overshoot is the wobble
                         if let c = cellCentres[n] { setLensTarget(x: c.x) }
                     }
-                } else if !menuByHold, let t = nearestTool(to: v.location.x), t != s.tool {
-                    AppDelegate.shared?.trigger(t)
-                    if let c = cellCentres[t] { setLensTarget(x: c.x) }
+                } else if !menuByHold, let t = nearestTool(to: v.location.x) {
+                    if t != s.tool {
+                        AppDelegate.shared?.trigger(t)
+                        if let c = cellCentres[t] { setLensTarget(x: c.x) }
+                    } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
                 }
                 pressTool = nil; pressActive = false; menuByHold = false
             })
