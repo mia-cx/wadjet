@@ -2480,11 +2480,13 @@ struct ToolbarView: View {
             }
             Spacer(minLength: 0)
             if recording {
-                // the time must never touch the cap: measure it and inset its
-                // edge exactly like the leading dot's edge
+                // the time must never touch the cap or the notch: measure it
+                // and inset its edge like the leading dot's, shrinking the
+                // inset only as far as the glyph itself needs
                 Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
                     .fixedSize()
-                    .padding(.trailing, (islandSlot - 8) / 2) // = the dot's leading edge inset
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { islandTimeW = $0 }
+                    .padding(.trailing, max(4, min((islandSlot - 8) / 2, islandSlot - islandTimeW - 4)))
                     .frame(height: pillH)
             }
         }
@@ -2515,6 +2517,7 @@ struct ToolbarView: View {
     }
 
     @State var recRowSize = CGSize(width: 220, height: 64)
+    @State var islandTimeW: CGFloat = 20 // measured "mm:ss" glyph width
     var recControls: some View {
         // leading: the same red dot + time as the island; trailing: pause and
         // stop as glass circles, all centred in the selH-tall row
