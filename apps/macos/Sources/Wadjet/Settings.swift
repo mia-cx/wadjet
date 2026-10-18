@@ -339,6 +339,7 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                     HStack {
                         StepRow(wf: i, step: s)
                         Spacer()
+                        Group {
                         Button { edit { guard s > 0, i < $0.workflows.count else { return }
                             $0.workflows[i].steps.swapAt(s, s - 1) } }
                             label: { Image(systemName: "arrow.up") }
@@ -353,8 +354,9 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                             $0.workflows[i].steps.remove(at: s) } }
                             label: { Image(systemName: "minus.circle") }
                             .accessibilityLabel("Remove Step")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
                     }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
                 }
                 Menu("Add Step") {
                     ForEach(Array(Step.allowed(for: wf.takes).indices), id: \.self) { s in
