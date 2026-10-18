@@ -94,7 +94,7 @@ static float rrSdf(float2 c, float2 half_, float r) {
 
 [[ stitchable ]] half4 barGlass(float2 position, SwiftUI::Layer layer,
                                 float2 rectOrigin, float2 rectSize,
-                                float radius, float2 bounds, float2 light, float px) {
+                                float radius, float2 bounds, float2 light, float rimGain, float px) {
     float2 mid = rectOrigin + rectSize / 2.0;
     float2 c = position - mid;
     float2 half_ = rectSize / 2.0;
@@ -124,6 +124,6 @@ static float rrSdf(float2 c, float2 half_, float r) {
     float spec = exp(-length(light - position) / 140.0) * 0.18;
     float glow = pow(smoothstep(-barGlow, 0.0, s), 2.0) * (0.07 + spec);
     float rim = (1.0 - smoothstep(0.0, 1.3, -s)) * (mix(0.07, 0.21, facing) + spec * 0.7);
-    o.rgb += half(glow + rim);
+    o.rgb += half((glow + rim) * rimGain);
     return o;
 }
