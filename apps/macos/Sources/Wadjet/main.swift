@@ -1384,6 +1384,9 @@ final class OverlayController {
         AppLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
         menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
             guard let self, let mp = self.menuPanel else { return e }
+            // clicks inside the toolbar are the toolbar's own business —
+            // the tap lands in its gesture and toggles the menu from there
+            if toolbarPanels[di]?.frame.contains(NSEvent.mouseLocation) == true { return e }
             // the panel's top 40 pt is scale-in headroom — clicks there count as outside
             let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
             if !body.contains(NSEvent.mouseLocation) {
@@ -3073,12 +3076,16 @@ struct ToolbarView: View {
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
             .onChanged { v in
                 if !pressActive { // first event of the press: lens in at once
-                    pressActive = true; pressing = true
+                    pressActive = true
                     // a press takes the lens over from a tap's travel: keep the
                     // lens where it is mid-flight, don't snap back to selected
                     let wasTravelling = travelling; travelling = false
                     pressX = v.startLocation.x
                     pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
+                    // the lens only pops for an actual switch — a press on the
+                    // selected Tool (its menu tap) shows none; a travel in
+                    // flight keeps it up so it can't vanish mid-flight
+                    pressing = wasTravelling || pressTool != s.tool
                     // start the sim exactly where the rest highlight was —
                     // unless it's still travelling from the last tap
                     if !wasTravelling, let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
