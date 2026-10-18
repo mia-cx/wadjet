@@ -2384,10 +2384,17 @@ struct ToolbarView: View {
     var lensSource: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
+                // crisp everywhere — only the bar itself frosts what's behind it
+                Image(decorative: img, scale: CGFloat(img.width) / panelW)
+                    .resizable()
+                    .frame(width: panelW, height: panelH)
                 Image(decorative: img, scale: CGFloat(img.width) / panelW)
                     .resizable()
                     .frame(width: panelW, height: panelH)
                     .blur(radius: 6)
+                    .mask(alignment: .top) {
+                        shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
+                    }
             }
             // measured: inside-lens bar read ~13,13,13 vs the real glass
             // ~31,33,33 — a faint white lift matches them
@@ -2413,7 +2420,7 @@ struct ToolbarView: View {
     /// their own — the mask would run ahead of them during the springs)
     var lensLayer: some View {
         lensSource
-            .modifier(LensEffect(centre: lensCentre, size: lensSize,
+            .modifier(LensEffect(bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
                                  stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
@@ -2636,6 +2643,7 @@ struct ToolbarView: View {
 /// The pressed-lens effect as one animatable unit: shader, capsule mask and
 /// glass body/rim all read the same interpolated centre/size/stretch.
 struct LensEffect: ViewModifier, @preconcurrency Animatable {
+    var bounds: CGSize = .zero // the source layer's size; samples clamp to it
     var centre: CGPoint
     var size: CGSize
     var stretch: CGSize
@@ -2655,19 +2663,11 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
             .layerEffect(
                 ShaderLibrary.lens(.float2(centre.x, centre.y),
                                    .float2(size.width, size.height),
-                                   .float2(stretch.width, stretch.height), .float(1.0)),
+                                   .float2(stretch.width, stretch.height),
+                                   .float2(bounds.width, bounds.height)),
                 maxSampleOffset: CGSize(width: 64, height: 64))
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
-                    .scaleEffect(x: stretch.width, y: stretch.height)
-                    .position(centre)
-            }
-            // the lens's own body and fresnel rim, independent of what it
-            // samples — so it reads as glass even where it overhangs the bar
-            .overlay {
-                Capsule()
-                    .fill(.white.opacity(0.03)) // a faint body; the shader draws the hairline rim
-                    .frame(width: size.width, height: size.height)
                     .scaleEffect(x: stretch.width, y: stretch.height)
                     .position(centre)
             }
