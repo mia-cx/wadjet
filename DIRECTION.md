@@ -15,6 +15,7 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 
 - Capture the cursor and select regions on a Freeze Frame of every screen. It looks like macOS's own screenshot UI.
 - The toolbar shows on every display at once: as the notch on the built-in display, or a black fake Dynamic Island on other displays, showing the current Tool. It expands on hover into Liquid Glass with touch-size Tool buttons; on displays without a notch it drops below the menu bar instead of covering it. Only the hovered toolbar expands, and only the pointer's display shows the loupe.
+- The expanded toolbar groups its Tools: still (Region, Window, Screen) | video (Region, Window, Screen) | utilities (Pick colour, Copy text, Measure), split by thin dividers. Markup joins as a group once it exists. One group is open at a time and shows all its Tools; the others collapse to their last-used Tool. Hovering a group opens it; while the mouse is down the layout freezes, so the lens never chases a reflow.
 - Clicking the selected Tool opens its menu: its Workflow, Recording options, copy format, or Measure mode. Each Tool keeps its own Workflow.
 - Tooltips appear next to the pointer. The loupe flips to stay on screen.
 - Scroll cycles the selected Tool's variants: Region, Window, Screen (within Capture or within Record), Measure modes, or copy formats. Option+scroll changes the Tool's value, such as Measure's tolerance. Space toggles Region and Window, as in macOS.
