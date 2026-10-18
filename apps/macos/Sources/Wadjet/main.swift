@@ -2358,7 +2358,12 @@ struct ToolbarView: View {
     var shapeH: CGFloat { expanded ? expH : pillH }
     // slack beyond expW so a fully stretched lens (lensW × 1.3 at the last
     // cell) still fits inside the panel — hoverRect is shape-based, unaffected
-    var panelW: CGFloat { min(limit, expW) + 80 }
+    /// room past the bar's ends for the lens: its stretched half-width beyond
+    /// the end cell (~30 pt) plus the spring's overshoot (capped at
+    /// lensOvershootCap below), with a few points spare
+    let lensSlack: CGFloat = 96
+    let lensOvershootCap: CGFloat = 40
+    var panelW: CGFloat { min(limit, expW) + 2 * lensSlack }
     // menus and tooltips are their own panels
     var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
@@ -2702,6 +2707,11 @@ struct ToolbarView: View {
             v.y += (k * (lensTarget.y - p.y) - c * v.y) * h
             p.x += v.x * h; p.y += v.y * h
             dt -= h
+        }
+        // a hard flick could overshoot past the panel; cap it at the ends
+        let (lo, hi) = rowEnds
+        if hi > lo, p.x < lo - lensOvershootCap || p.x > hi + lensOvershootCap {
+            p.x = min(max(p.x, lo - lensOvershootCap), hi + lensOvershootCap); v.x = 0
         }
         blobX = p.x; blobY = p.y; lensVel = v
         if lensActive, let t = nearestTool(to: p.x) {
