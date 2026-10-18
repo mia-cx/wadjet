@@ -172,6 +172,20 @@ struct WinEntry {
     let id: CGWindowID
     let frame: CGRect
 }
+/// the pointer in global screen coords while an overlay is up — glass
+/// shaders read it as their light position. Only views that apply the
+/// effects observe it; nothing heavy re-renders on mouse move.
+@MainActor
+final class PointerLight: ObservableObject {
+    static let shared = PointerLight()
+    @Published var screen: CGPoint?
+    var debugHoldUntil = Date.distantPast
+    func feed(_ p: CGPoint) {
+        if Date() < debugHoldUntil { return }
+        screen = p
+    }
+}
+
 @MainActor
 final class Freeze {
     static let shared = Freeze()
@@ -444,6 +458,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
+        case "light" where parts.count > 2: // debug: pin the glass light for 5 s
+            if let x = Double(parts[1]), let y = Double(parts[2]) {
+                PointerLight.shared.screen = CGPoint(x: x, y: y)
+                PointerLight.shared.debugHoldUntil = Date().addingTimeInterval(5)
+            }
         case "capture": // debug: a full-display shot on the pointer's display
             if s.phase == .frozen, s.tool?.kind == .shot {
                 AppLog.line("capture: pointer at \(Int(NSEvent.mouseLocation.x)),\(Int(NSEvent.mouseLocation.y))")
@@ -1418,6 +1437,7 @@ final class OverlayController {
     var menuPanel: NSPanel?
     var menuMonitor: Any?
     var keyMonitor: Any?
+    var lightMonitor: Any?
     init(app: AppDelegate) { self.app = app }
 
     // the Freeze display under the mouse, fallback 0
@@ -1440,6 +1460,14 @@ final class OverlayController {
         if let mp = menuPanel, mp.frame.contains(m) { return true }
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
+    }
+    /// the pointer in a panel layer's top-down coords; when it isn't tracked
+    /// the light sits far above the shape, which reproduces the top-lit look
+    func lightPoint(in panel: NSPanel?, height: CGFloat, above mid: CGPoint) -> CGPoint {
+        guard let sc = PointerLight.shared.screen, let p = panel,
+              let cv = p.contentView else { return CGPoint(x: mid.x, y: mid.y - 10000) }
+        let v = p.convertPoint(fromScreen: sc)
+        return CGPoint(x: v.x, y: cv.frame.height - v.y)
     }
     /// re-apply each overlay's cursor when the Tool changes under a still pointer
     func refreshCursors() {
@@ -1601,18 +1629,21 @@ final class OverlayController {
                            width: screen.frame.width, height: screen.frame.height)
         // status item windows are SCK-visible but never render into a
         // screenshot and would keep `needBare` permanently true
-        let statusItemIDs = Set([
-            AppDelegate.shared?.statusItem.button?.window?.windowNumber,
-            AppDelegate.shared?.recStatusItem?.button?.window?.windowNumber,
-        ].compactMap { $0 }.map(CGWindowID.init))
+        // our status item windows are SCK-visible but never render into a
+        // screenshot and would keep `needBare` permanently true — CGWindowList
+        // knows them as our PID at the menu-bar window layer (3)
+        let statusish: Set<CGWindowID> = Set((CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? [])
+            .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == ProcessInfo.processInfo.processIdentifier
+                && ($0[kCGWindowLayer as String] as? Int) == 3 }
+            .compactMap { $0[kCGWindowNumber as String] as? Int }.map(CGWindowID.init))
+        let ownWindow = { (w: SCWindow) in w.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+            && !statusish.contains(w.windowID) }
         let ownWindows = content.windows.filter { w in
-            w.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
-                && w.isOnScreen && !chromeIDs.contains(w.windowID) && !statusItemIDs.contains(w.windowID)
-                && w.frame.intersects(scrTL)
+            ownWindow(w) && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
         }
         let needBare = !ownWindows.isEmpty
         if !ownWindows.isEmpty {
-            AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))x\(Int($0.frame.height))" })")
+            AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\($0.frame)" })")
         }
         // MainActor-inheriting tasks created on the actor itself: the SCK
         // calls suspend off-actor so the captures overlap, while `disp`
@@ -1788,6 +1819,10 @@ final class OverlayController {
         }
         // borderless nonactivating panels can't be key windows, so keyDown on
         // the view never fires — route keys through a local monitor instead
+        lightMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { e in
+            PointerLight.shared.feed(NSEvent.mouseLocation)
+            return e
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
             for p in self.panels {
@@ -1919,6 +1954,8 @@ final class OverlayController {
         hideMenu()
         if AppState.shared.openMenu != nil { AppState.shared.openMenu = nil }
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        if let m = lightMonitor { NSEvent.removeMonitor(m); lightMonitor = nil }
+        PointerLight.shared.screen = nil
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
         let merge = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
@@ -3126,14 +3163,13 @@ struct ToolbarView: View {
                     .blur(radius: 5)
             }
         }
-        .layerEffect(
-            // under a notch the bar hangs from the screen's top edge: extend the
-            // glass rect above the panel so the top has no rounded corners,
-            // rim or edge bend — only the sides and bottom are glass edges
-            ShaderLibrary.barGlass(.float2((panelW - shapeW) / 2, shapeTop - (hasNotch ? notchOverscan : 0)),
-                                   .float2(shapeW, shapeH + (hasNotch ? notchOverscan : 0)),
-                                   .float(selH / 2 + d), .float2(panelW, panelH)),
-            maxSampleOffset: CGSize(width: 32, height: 32))
+        // under a notch the bar hangs from the screen's top edge: extend the
+        // glass rect above the panel so the top has no rounded corners,
+        // rim or edge bend — only the sides and bottom are glass edges
+        .modifier(BarGlassEffect(ctrl: ctrl, di: displayIndex,
+                                 rect: CGRect(x: (panelW - shapeW) / 2, y: shapeTop - (hasNotch ? notchOverscan : 0),
+                                              width: shapeW, height: shapeH + (hasNotch ? notchOverscan : 0)),
+                                 radius: selH / 2 + d, bounds: CGSize(width: panelW, height: panelH)))
         .mask(alignment: .top) {
             shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
         }
@@ -3171,7 +3207,7 @@ struct ToolbarView: View {
     /// their own — the mask would run ahead of them during the springs)
     var lensLayer: some View {
         lensSource
-            .modifier(LensEffect(bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
+            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
                                  stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
@@ -3394,7 +3430,30 @@ struct ToolbarView: View {
 #if CLEAR_GLASS_PATCH
 /// The pressed-lens effect as one animatable unit: shader, capsule mask and
 /// glass body/rim all read the same interpolated centre/size/stretch.
+/// barGlass with the pointer as its light — observing PointerLight here (a
+/// tiny modifier) keeps ToolbarView's body from re-rendering per mouse move
+struct BarGlassEffect: ViewModifier {
+    let ctrl: OverlayController
+    let di: Int
+    var rect: CGRect
+    var radius: CGFloat
+    var bounds: CGSize
+    @ObservedObject var light = PointerLight.shared
+    func body(content: Content) -> some View {
+        let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height,
+                                 above: CGPoint(x: rect.midX, y: rect.midY))
+        content.layerEffect(
+            ShaderLibrary.barGlass(.float2(rect.minX, rect.minY), .float2(rect.width, rect.height),
+                                   .float(radius), .float2(bounds.width, bounds.height),
+                                   .float2(Float(lp.x), Float(lp.y))),
+            maxSampleOffset: CGSize(width: 32, height: 32))
+    }
+}
+
 struct LensEffect: ViewModifier, @preconcurrency Animatable {
+    let ctrl: OverlayController
+    let di: Int
+    @ObservedObject var light = PointerLight.shared
     var bounds: CGSize = .zero // the source layer's size; samples clamp to it
     var centre: CGPoint
     var size: CGSize
@@ -3416,7 +3475,11 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
                 ShaderLibrary.lens(.float2(centre.x, centre.y),
                                    .float2(size.width, size.height),
                                    .float2(stretch.width, stretch.height),
-                                   .float2(bounds.width, bounds.height)),
+                                   .float2(bounds.width, bounds.height),
+                                   {
+                                       let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height, above: centre)
+                                       return .float2(Float(lp.x), Float(lp.y))
+                                   }()),
                 maxSampleOffset: CGSize(width: 64, height: 64))
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
@@ -3592,6 +3655,29 @@ enum TipPanel {
     static func hide() { task?.cancel(); task = nil; current = nil; panel?.close(); panel = nil }
 }
 
+/// the menu's pointer-lit rim — system glass can't move its highlight, so a
+/// radial stroke follows the pointer instead. The only PointerLight observer
+/// in the menu.
+struct MenuRimLight: View {
+    let ctrl: OverlayController
+    @ObservedObject var light = PointerLight.shared
+    var body: some View {
+        GeometryReader { g in
+            if let sc = light.screen, let mp = ctrl.menuPanel, let cv = mp.contentView {
+                let v = mp.convertPoint(fromScreen: sc)
+                let gf = g.frame(in: .global)
+                let local = CGPoint(x: v.x - gf.minX, y: cv.frame.height - v.y - gf.minY)
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .strokeBorder(RadialGradient(colors: [.white.opacity(0.45), .clear],
+                        center: UnitPoint(x: local.x / max(g.size.width, 1),
+                                          y: local.y / max(g.size.height, 1)),
+                        startRadius: 0, endRadius: 180), lineWidth: 1)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // a Tool's dropdown menu: its own dark panel under the button. Radio rows
 // close it; toggles leave it open.
 struct ToolMenuView: View {
@@ -3638,6 +3724,7 @@ struct ToolMenuView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
             }
         }
+        .overlay { MenuRimLight(ctrl: ctrl) }
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
         .scaleEffect(shown ? 1 : 0.85, anchor: .top)
         .opacity(shown ? 1 : 0)
