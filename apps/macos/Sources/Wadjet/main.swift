@@ -881,8 +881,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("record: shareable content failed: \(error.localizedDescription)")
             return nil
         }
-        // wadjet's own panels (border, island, toasts) never appear in the video
-        let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
         if s.tool == .recWindow {
             // Resolve against fresh content: overlayCtrl's map is from Freeze
             // time, and a Record Window that can't find its window must never
@@ -902,7 +900,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("record: no shareable display for index \(display)")
             return nil
         }
-        let filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        // the Recording shows whatever is on screen — Wadjet's own Freeze
+        // Frame, toolbar and markup included; only the red region border is out
+        let border = content.windows.filter { $0.windowID == CGWindowID(recordingPanel?.windowNumber ?? -1) }
+        let filter = SCContentFilter(display: disp, excludingWindows: border)
         // sourceRect is display-local points with a top-left origin; the
         // overlay's rect is view coords (bottom-left).
         var sourceRect = CGRect.null
@@ -931,6 +932,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func startRecording(rect: CGRect, display: Int) {
         let s = AppState.shared
         overlayCtrl.closeAllPanelsOnly() // live screen returns
+        // the region border goes up now — recordSource needs the panel to
+        // exist so it can exclude it from the video
+        showRecBorder(rect: rect, display: display)
         recordingRect = rect; recordingDisplay = display
         pauseAcc = 0; s.recordingElapsed = 0; s.recordingPaused = false
         // .countdown holds until beginStream lands .recording or .desktop —
@@ -1076,6 +1080,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         guard s.phase == .countdown else { return }
         CountdownHUD.hide()
         s.phase = .desktop; recStart = nil
+        recordingPanel?.close(); recordingPanel = nil
         overlayCtrl.closeAllPanelsOnly()
         AppLog.line("esc: cancelled countdown")
         rebuildMenu(); updateEscHotkey()
