@@ -1761,7 +1761,7 @@ final class OverlayNSView: NSView {
         di = displayIndex; ctrl = controller
         super.init(frame: f)
         wantsLayer = true
-        let ta = NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        let ta = NSTrackingArea(rect: bounds, options: [.mouseMoved, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(ta)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1967,7 +1967,12 @@ final class OverlayNSView: NSView {
     func updateCursor() {
         if ctrl?.pointerOverUI ?? false { NSCursor.arrow.set() }
         else { WadjetCursors.cursor(for: tool).set() }
+        let cur = NSCursor.current
+        AppLog.line("cursor -> \(cur.image.size) hot=\(cur.hotSpot) tool=\(tool.rawValue) overUI=\(ctrl?.pointerOverUI ?? false)")
     }
+    // a non-activating panel still gets cursorUpdate for its tracking area —
+    // that's the reliable hook, mouseMoved alone loses to the system
+    override func cursorUpdate(with e: NSEvent) { updateCursor() }
     // one scroll tick per wheel notch; trackpads accumulate 24 pt per tick and
     // momentum is ignored. Returns +1 for down (next) / -1 for up (previous)
     func scrollStep(_ e: NSEvent) -> Int {
