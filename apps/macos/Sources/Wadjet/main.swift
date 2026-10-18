@@ -54,7 +54,7 @@ enum Tool: String, CaseIterable {
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
 }
 
-enum Phase { case desktop, frozen, countdown, recording }
+enum Phase { case desktop, frozen, countdown } // the overlay's phase only — a Recording lives in recActive
 
 extension Color {
     // Wadjet means "the green one": a malachite green, used instead of the system accent
@@ -69,6 +69,7 @@ let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used
 final class AppState: ObservableObject {
     static let shared = AppState()
     @Published var phase: Phase = .desktop
+    @Published var recActive = false // a Recording is running (independent of the overlay)
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
     /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
@@ -398,12 +399,25 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
         case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
             s.debugTap = Tool(rawValue: String(parts[1]))
+        case "record" where parts.count > 1 && parts[1] == "screen": // debug: a Record Screen pick on the pointer's display
+            if s.phase == .desktop && !s.recActive {
+                let di = overlayCtrl.mouseDisplay()
+                trigger(.recScreen) // the normal Freeze path; the start follows
+                Task { @MainActor in
+                    for _ in 0..<60 {
+                        if s.phase == .frozen { break }
+                        try? await Task.sleep(for: .milliseconds(50))
+                    }
+                    guard s.phase == .frozen, Freeze.shared.displays.count > di else { return }
+                    startRecording(rect: CGRect(origin: .zero, size: Freeze.shared.displays[di].screen.frame.size), display: di)
+                }
+            }
         case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
-        case "stop": if s.phase == .recording { stopRecording() }
-        case "pause": if s.phase == .recording { togglePause() }
+        case "stop": if s.recActive { stopRecording() }
+        case "pause": if s.recActive { togglePause() }
         case "settings": openSettings()
         case "esc": handleEsc()
         default: AppLog.line("cmd: unhandled \(cmd)")
@@ -642,13 +656,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // is ignored, and a Record shortcut during a recording just stops it.
     func fireShortcut(_ sc: Shortcut, tool: Tool) {
         let s = AppState.shared
-        switch s.phase {
-        case .countdown: return
-        case .recording:
-            if tool.kind == .rec { trigger(tool) }
-            return
-        default: break
-        }
+        if s.phase == .countdown { return }
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
@@ -661,9 +669,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: trigger
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now) {
         let s = AppState.shared
-        if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
-        // switching Tools while frozen keeps the same Freeze Frame
-        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)") }; return }
+        // switching Tools while frozen keeps the same Freeze Frame — Record
+        // Tools are disabled while a Recording runs
+        if s.phase == .frozen {
+            if s.tool != tool {
+                guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
+                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)")
+            }
+            return
+        }
+        // a Record Shortcut while recording stops it
+        if s.phase == .desktop && s.recActive && tool.kind == .rec { stopRecording(); return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
@@ -995,7 +1011,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
               let file = try? captureFiles.newFile(ext: "mp4") else {
             guard live() else { return } // cancelled: nothing to report
             AppLog.line("record: could not resolve the source or name the file")
-            s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            s.recActive = false; s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
             errorToast("Couldn't record", "No capture source — Screen Recording permission may be off.")
             return
         }
@@ -1022,15 +1038,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 return
             }
             recStream = stream; recWriter = writer; recOutput = output
-            s.phase = .recording; self.recStart = Date()
-            AppLog.line("phase=recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
+            s.recActive = true; s.phase = .desktop; self.recStart = Date()
+            AppLog.line("recording \(Int(size.width))x\(Int(size.height)) @\(cfg.recording.fps)")
             self.updateEscHotkey()
-            self.showRecBorder(rect: recordingRect, display: recordingDisplay)
             self.updateRecChrome()
         } catch {
             AppLog.line("record: stream failed to start: \(error.localizedDescription)")
             guard live() else { return } // a cancelled attempt must not reset a newer one
-            s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
+            s.recActive = false; s.phase = .desktop; rebuildMenu(); overlayCtrl.closeAllPanelsOnly()
             errorToast("Couldn't record", error.localizedDescription)
         }
     }
@@ -1051,9 +1066,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func recTick() {
         let s = AppState.shared
-        guard s.phase == .recording, !s.recordingPaused, let st = recStart else { return }
+        guard s.recActive, !s.recordingPaused, let st = recStart else { return }
         s.recordingElapsed = Date().timeIntervalSince(st) - pauseAcc
-        statusItem.button?.title = "● " + fmtT(s.recordingElapsed)
+        recStatusItem?.button?.title = "● " + fmtT(s.recordingElapsed)
     }
     // Esc during countdown cancels before the Recording starts.
     func cancelCountdown() {
@@ -1103,7 +1118,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// earlier stream does nothing.
     func streamStopped(_ id: ObjectIdentifier, reason: String) {
         guard let stream = recStream, ObjectIdentifier(stream) == id,
-              AppState.shared.phase == .recording else { return }
+              AppState.shared.recActive else { return }
         AppLog.line("record: stream stopped: \(reason)")
         errorToast("Recording stopped", reason)
         stopRecording()
@@ -1677,7 +1692,7 @@ final class OverlayController {
         toolbarPanels.values.forEach { $0.close() }
         toolbarPanels = [:]
         let p = AppState.shared.phase
-        if p == .frozen || (p == .recording && AppState.shared.showIslandWhileRecording) { showToolbars() }
+        if p == .frozen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording) { showToolbars() }
     }
     func closeAllPanelsOnly() {
         panels.forEach { $0.close() }
@@ -2342,7 +2357,9 @@ struct ToolbarView: View {
         let l = sc.auxiliaryTopLeftArea?.width ?? 0, r = sc.auxiliaryTopRightArea?.width ?? 0
         return max(0, sc.frame.width - l - r)
     }
-    var recording: Bool { s.phase == .recording && s.showIslandWhileRecording }
+    // the compact recording island — only while no Freeze Frame is up;
+    // during one the island holds the toolbar and the Recording is the bubble
+    var recording: Bool { s.recActive && s.showIslandWhileRecording && s.phase != .frozen }
 
     // Notched display: black, flush with the top edge, rounded bottom corners,
     // centred on (and slightly wider than) the notch.
@@ -3762,7 +3779,7 @@ struct StateHUDView: View {
             Text("workflow: \(s.workflowFor(s.tool) ?? "-")")
             Text("colour=\(s.colourFmt) measure=\(s.measureMode) countdown=\(s.countdown)")
             Text("audio=\(s.sysAudio ? "on" : "off")/\(s.mic ? "on" : "off") cursor=\(s.cursor ? "on" : "off") island=\(s.showIslandWhileRecording ? "on" : "off")")
-            Text("rec: \(s.phase == .recording ? fmtT(s.recordingElapsed) + (s.recordingPaused ? " (paused)" : "") : "-")")
+            Text("rec: \(s.recActive ? fmtT(s.recordingElapsed) + (s.recordingPaused ? " (paused)" : "") : "-")")
             Text("clip: \(String(s.lastClipboard.prefix(80)))").lineLimit(2)
             Text("freeze latency: \(s.latencyText)").foregroundStyle(.secondary)
         }
