@@ -2453,7 +2453,10 @@ struct ToolbarView: View {
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
             .onChange(of: s.debugGroup) { // cmd.sh group — the expanded bar animates it
-                if let k = s.debugGroup, expanded { s.debugGroup = nil; openTheGroup(k) }
+                if let k = s.debugGroup, expanded {
+                    s.debugGroup = nil; openTheGroup(k)
+                    Task { try? await Task.sleep(for: .milliseconds(600)); syncHit() } // log the settled cell rects
+                }
             }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
     }
@@ -2602,6 +2605,7 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
+    let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
@@ -2756,16 +2760,12 @@ struct ToolbarView: View {
     func openTheGroup(_ k: Tool.Kind) {
         guard k != openGroup else { return }
         AppLog.line("openTheGroup \(k)")
-        withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
-    }
-    /// insert/remove transition for a non-representative Tool: it starts (or
-    /// ends) stacked on its group's collapsed cell — the bundle unbundles
-    func flyTransition(_ t: Tool, in k: Tool.Kind) -> AnyTransition {
-        if reduceMotion { return .opacity }
-        let g = groupTools(k)
-        guard let i = g.firstIndex(of: t), let rep = g.firstIndex(of: lastUsedTool(k)) else { return .opacity }
-        return .offset(x: CGFloat(rep - i) * (toolD + 8)) // 8 = rowContent spacing
-            .combined(with: .scale(scale: 0.5)).combined(with: .opacity)
+        if reduceMotion { // no bouncy layout spring under Reduce Motion
+            var t = Transaction(); t.disablesAnimations = true
+            withTransaction(t) { openGroup = k }
+        } else {
+            withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
+        }
     }
     func nearestTool(to x: CGFloat) -> Tool? {
         cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
@@ -2777,21 +2777,32 @@ struct ToolbarView: View {
     /// the row laid out once, shared by the real cells, the accent copy and
     /// the lens's icon strip — every copy keeps the same geometry
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
-        HStack(spacing: 8) {
+        HStack(spacing: cellGap) {
             ForEach(Tool.Kind.allCases, id: \.self) { k in
                 if k != .shot { // thin divider between groups
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                 }
-                ForEach(slots(in: k), id: \.tool) { slot in
-                    make(slot.tool, slot.collapsed)
-                        // non-representative Tools fly out of / back into the
-                        // group's cell: offset to the rep's slot + scale + fade.
-                        // In rowContent so every copy of the row (cells, accent
-                        // strip, lens strips) animates identically
-                        .transition(flyTransition(slot.tool, in: k))
-                        // the rep draws above so the others emerge from under it
-                        .zIndex(slot.tool == lastUsedTool(k) ? 1 : 0)
+                // every group always renders all three Tools (stable identity,
+                // no inserts/removals): closed groups give the siblings zero
+                // width so they stack on the rep; open groups take a cell + gap
+                // each. The spread is real layout, so the geometry readers
+                // (cellCentres, ToolbarBtnFrames) report true positions
+                let open = k == openGroup, g = groupTools(k)
+                HStack(spacing: 0) {
+                    ForEach(Array(g.enumerated()), id: \.element) { i, t in
+                        let rep = t == lastUsedTool(k), shown = open || rep
+                        make(t, !open && rep)
+                            .scaleEffect(shown ? 1 : 0.5)
+                            .opacity(shown ? 1 : 0)
+                            .allowsHitTesting(shown)
+                            .accessibilityHidden(!shown)
+                            // a closed group's siblings collapse to zero width,
+                            // leading-aligned, so they sit stacked on the rep
+                            .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : (rep ? toolD : 0),
+                                   alignment: .leading)
+                            .zIndex(rep ? 1 : 0)
+                    }
                 }
             }
         }
@@ -2804,7 +2815,7 @@ struct ToolbarView: View {
         VStack(spacing: 3) {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
                         Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
@@ -2938,7 +2949,7 @@ struct ToolbarView: View {
         return VStack(spacing: 3) {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
-                .contentTransition(.symbolEffect(.replace))
+                .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
                 // it travels into the bar (and back) as the shape morphs
                 .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
