@@ -2455,7 +2455,9 @@ struct ToolbarView: View {
             .onChange(of: s.debugGroup) { // cmd.sh group — the expanded bar animates it
                 if let k = s.debugGroup, expanded {
                     s.debugGroup = nil; openTheGroup(k)
-                    Task { try? await Task.sleep(for: .milliseconds(600)); syncHit() } // log the settled cell rects
+                    Task { try? await Task.sleep(for: .milliseconds(600)); syncHit() // log the settled cell rects
+                        AppLog.line("all centres d\(displayIndex) @ " + (ToolbarBtnFrames.rects[displayIndex] ?? [:])
+                            .sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.title):\(Int($0.value.midX))" }.joined(separator: " ")) }
                 }
             }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
@@ -2784,9 +2786,10 @@ struct ToolbarView: View {
                         .frame(width: 1, height: selH * 0.6)
                 }
                 // every group always renders all three Tools (stable identity,
-                // no inserts/removals): closed groups give the siblings zero
-                // width so they stack on the rep; open groups take a cell + gap
-                // each. The spread is real layout, so the geometry readers
+                // no inserts/removals): closed groups give EVERY slot zero
+                // width — leading-aligned — so the siblings stack on the rep
+                // wherever it sits, and open groups take a cell + gap each.
+                // The spread is real layout, so the geometry readers
                 // (cellCentres, ToolbarBtnFrames) report true positions
                 let open = k == openGroup, g = groupTools(k)
                 HStack(spacing: 0) {
@@ -2797,13 +2800,12 @@ struct ToolbarView: View {
                             .opacity(shown ? 1 : 0)
                             .allowsHitTesting(shown)
                             .accessibilityHidden(!shown)
-                            // a closed group's siblings collapse to zero width,
-                            // leading-aligned, so they sit stacked on the rep
-                            .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : (rep ? toolD : 0),
+                            .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : 0,
                                    alignment: .leading)
                             .zIndex(rep ? 1 : 0)
                     }
                 }
+                .frame(width: open ? toolD * 3 + cellGap * 2 : toolD, alignment: .leading)
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
