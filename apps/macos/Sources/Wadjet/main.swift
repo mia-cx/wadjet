@@ -2099,7 +2099,9 @@ struct ToolbarView: View {
     var expH: CGFloat { contentTop + selH + d }
     var shapeW: CGFloat { expanded ? expW : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
-    var panelW: CGFloat { min(limit, expW) + 48 }
+    // slack beyond expW so a fully stretched lens (lensW × 1.3 at the last
+    // cell) still fits inside the panel — hoverRect is shape-based, unaffected
+    var panelW: CGFloat { min(limit, expW) + 80 }
     // menus and tooltips are their own panels
     var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
@@ -2306,11 +2308,14 @@ struct ToolbarView: View {
     @State var blobY: CGFloat = 0
     @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
-    /// Velocity stretch while dragging; relaxes to 1 on a debounce (the
-    /// gesture sends nothing while the pointer is still).
+    /// One spring sim owns the lens: position chases lensTarget, velocity
+    /// drives the stretch — no gesture-event velocity, no debounce.
+    @State var lensVel = CGPoint.zero
+    @State var lensTarget = CGPoint.zero
+    @State var lensTick: Date?
+    @State var lensMoving = false
     @State var stretchX: CGFloat = 1
     @State var stretchY: CGFloat = 1
-    @State var stretchTask: Task<Void, Never>?
     var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     @State var pressX: CGFloat = 0
     @State var pressTool: Tool?
@@ -2327,6 +2332,45 @@ struct ToolbarView: View {
         #else
         return false
         #endif
+    }
+
+    /// row-space centre the lens rests on
+    var rowCentreY: CGFloat { selH / 2 }
+    /// aim the spring: press picks the pressed cell, drag follows the
+    /// pointer (x clamped to the row's ends, y pulled gently toward it)
+    func setLensTarget(x: CGFloat, pointerY: CGFloat? = nil) {
+        var y = rowCentreY
+        if let py = pointerY { y += 6 * tanh((py - rowCentreY) / 30) } // lean toward the cursor, ≤ 6 pt
+        lensTarget = CGPoint(x: x, y: y)
+        if reduceMotion { blobX = x; blobY = y; lensVel = .zero }
+        else { lensMoving = true }
+    }
+
+    /// fixed-substep underdamped spring — k 380 / c 26 — driven by a
+    /// TimelineView that only runs while unsettled
+    func stepLens(now: Date) {
+        guard let last = lensTick else { lensTick = now; return }
+        let dt0 = min(now.timeIntervalSince(last), 0.05); lensTick = now
+        if reduceMotion { blobX = lensTarget.x; blobY = lensTarget.y; lensVel = .zero; lensMoving = false; return }
+        var p = CGPoint(x: blobX, y: blobY), v = lensVel
+        var dt = dt0
+        let k: CGFloat = 380, c: CGFloat = 26
+        while dt > 0 {
+            let h = min(dt, 1.0 / 240)
+            v.x += (k * (lensTarget.x - p.x) - c * v.x) * h
+            v.y += (k * (lensTarget.y - p.y) - c * v.y) * h
+            p.x += v.x * h; p.y += v.y * h
+            dt -= h
+        }
+        blobX = p.x; blobY = p.y; lensVel = v
+        // squash/stretch from the sim's own velocity, low-passed; below
+        // 120 pt/s nothing stretches, overshoot does the settle wobble
+        let raw = 1 + min(max((abs(v.x) - 120) / 1400, 0), 0.3)
+        stretchX += (raw - stretchX) * 0.3
+        stretchY = 1 - 0.5 * (stretchX - 1)
+        lensMoving = abs(v.x) + abs(v.y) > 4
+            || abs(lensTarget.x - p.x) + abs(lensTarget.y - p.y) > 0.5
+        if !lensMoving { stretchX = 1; stretchY = 1; lensVel = .zero }
     }
 
     func openToolMenu(_ t: Tool) {
@@ -2384,24 +2428,34 @@ struct ToolbarView: View {
     var lensSource: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
-                // crisp everywhere — only the bar itself frosts what's behind it
+                // crisp everywhere — only the bar copy frosts what's behind it
                 Image(decorative: img, scale: CGFloat(img.width) / panelW)
                     .resizable()
                     .frame(width: panelW, height: panelH)
-                Image(decorative: img, scale: CGFloat(img.width) / panelW)
-                    .resizable()
-                    .frame(width: panelW, height: panelH)
-                    .blur(radius: 6)
-                    .mask(alignment: .top) {
-                        shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
-                    }
+                // the bar copy: light frost + tint, edge-lensed by barGlass
+                // like the real Liquid Glass bar, then clipped to the shape
+                ZStack {
+                    Image(decorative: img, scale: CGFloat(img.width) / panelW)
+                        .resizable()
+                        .frame(width: panelW, height: panelH)
+                        .blur(radius: 2)
+                    // measured: inside-lens bar read ~13 vs the real glass
+                    // ~31,33,33 — a faint white lift matches them
+                    shape.fill(Color.black.opacity(0.4))
+                        .overlay { shape.fill(Color.white.opacity(0.07)) }
+                        .frame(width: shapeW, height: shapeH)
+                        .padding(.top, shapeTop)
+                }
+                .frame(width: panelW, height: panelH, alignment: .top)
+                .layerEffect(
+                    ShaderLibrary.barGlass(.float2((panelW - shapeW) / 2, shapeTop),
+                                           .float2(shapeW, shapeH), .float(selH / 2 + d),
+                                           .float2(panelW, panelH)),
+                    maxSampleOffset: CGSize(width: 32, height: 32))
+                .mask(alignment: .top) {
+                    shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
+                }
             }
-            // measured: inside-lens bar read ~13,13,13 vs the real glass
-            // ~31,33,33 — a faint white lift matches them
-            shape.fill(Color.black.opacity(0.4))
-                .overlay { shape.fill(Color.white.opacity(0.07)) }
-                .frame(width: shapeW, height: shapeH)
-                .padding(.top, shapeTop)
             ZStack {
                 iconStrip(.white)
                 iconStrip(Color.wadjetAccent)
@@ -2486,7 +2540,10 @@ struct ToolbarView: View {
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
-                if !lensActive, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + selH / 2 }
+                if !lensActive, s.tool == t {
+                    blobX = $0.x + toolD / 2; blobY = $0.y + selH / 2
+                    lensTarget = CGPoint(x: blobX, y: blobY)
+                }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = $0
@@ -2552,9 +2609,9 @@ struct ToolbarView: View {
                     pressActive = true; pressing = true
                     pressX = v.startLocation.x
                     pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
-                    // it slides to the pressed cell with the click spring
+                    // the spring carries the lens to the pressed cell
                     if let t = pressTool, let c = cellCentres[t], c.x != blobX {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x }
+                        setLensTarget(x: c.x)
                     }
                     holdTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(400))
@@ -2569,36 +2626,11 @@ struct ToolbarView: View {
                 }
                 if dragging {
                     let (lo, hi) = rowEnds
-                    if reduceMotion {
-                        blobX = min(hi, max(lo, v.location.x))
-                    } else {
-                        // the lens trails the pointer a touch (momentum)
-                        withAnimation(.interactiveSpring(response: 0.18, dampingFraction: 0.75)) {
-                            blobX = min(hi, max(lo, v.location.x))
-                        }
-                        // stretch with horizontal velocity, ~volume-preserving;
-                        // the pointer going still gets no events, so relax on
-                        // a debounce 60 ms after the last change
-                        let sx = 1 + min(abs(v.velocity.width) / 1800, 0.35)
-                        stretchX = sx; stretchY = 1 - 0.5 * (sx - 1)
-                        stretchTask?.cancel()
-                        stretchTask = Task { @MainActor in
-                            try? await Task.sleep(for: .milliseconds(60))
-                            if !Task.isCancelled {
-                                withAnimation(.spring(response: 0.35, dampingFraction: 0.55)) {
-                                    stretchX = 1; stretchY = 1
-                                }
-                            }
-                        }
-                    }
+                    setLensTarget(x: min(hi, max(lo, v.location.x)), pointerY: v.location.y)
                 }
             }
             .onEnded { v in
-                holdTask?.cancel(); stretchTask?.cancel()
-                withAnimation(reduceMotion ? .easeOut(duration: 0.15)
-                                           : .spring(response: 0.35, dampingFraction: 0.55)) {
-                    stretchX = 1; stretchY = 1
-                }
+                holdTask?.cancel()
                 let wasDragging = dragging
                 pressing = false; dragging = false
                 // hover events may not have arrived during the drag — refresh
@@ -2607,13 +2639,12 @@ struct ToolbarView: View {
                 if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
-                        // snap to the chosen cell with a slight overshoot
-                        withAnimation(reduceMotion ? .easeOut(duration: 0.2)
-                                                   : .spring(response: 0.3, dampingFraction: 0.7)) { blobX = cellCentres[n]?.x ?? blobX }
+                        // the spring carries it home — overshoot is the wobble
+                        if let c = cellCentres[n] { setLensTarget(x: c.x) }
                     }
                 } else if !menuByHold, let t = nearestTool(to: v.location.x), t != s.tool {
                     AppDelegate.shared?.trigger(t)
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = cellCentres[t]?.x ?? blobX }
+                    if let c = cellCentres[t] { setLensTarget(x: c.x) }
                 }
                 pressTool = nil; pressActive = false; menuByHold = false
             })
@@ -2631,11 +2662,14 @@ struct ToolbarView: View {
             }
         }
         .onChange(of: s.tool) {
-            if !dragging, let t = s.tool, let c = cellCentres[t] {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x; blobY = c.y }
-            }
+            if !dragging, let t = s.tool, let c = cellCentres[t] { setLensTarget(x: c.x) }
         }
         .padding(.top, contentTop)
+        .background {
+            TimelineView(.animation(paused: !lensMoving)) { ctx in
+                Color.clear.onChange(of: ctx.date) { stepLens(now: ctx.date) }
+            }
+        }
     }
 }
 

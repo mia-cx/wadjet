@@ -44,3 +44,40 @@ using namespace metal;
     o.rgb += half(hair * topLit * 0.06);
     return o;
 }
+
+// The bar's own edge lensing: within `barEdge` points of the rounded-rect
+// rim the sampled backdrop bends inward — p − n·f(dist) where n is the
+// outward SDF normal and f eases ~6 pt at the edge to 0 — plus a faint
+// top-lit edge highlight. Outside the rect: passthrough. The layer this is
+// applied to must contain backdrop beyond the bar's edge to bend.
+#define barEdge 8.0
+#define barPull 6.0
+
+static float rrSdf(float2 c, float2 half_, float r) {
+    float2 b = float2(max(half_.x - r, 0.0), max(half_.y - r, 0.0));
+    float2 q = abs(c) - b;
+    return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+}
+
+[[ stitchable ]] half4 barGlass(float2 position, SwiftUI::Layer layer,
+                                float2 rectOrigin, float2 rectSize,
+                                float radius, float2 bounds) {
+    float2 mid = rectOrigin + rectSize / 2.0;
+    float2 c = position - mid;
+    float2 half_ = rectSize / 2.0;
+    float sdf = rrSdf(c, half_, radius);
+    if (sdf >= 0.0) return layer.sample(position);
+    // outward normal by finite difference
+    float e = 0.75;
+    float2 n = normalize(float2(
+        rrSdf(c + float2(e, 0), half_, radius) - rrSdf(c - float2(e, 0), half_, radius),
+        rrSdf(c + float2(0, e), half_, radius) - rrSdf(c - float2(0, e), half_, radius)));
+    float u = smoothstep(-barEdge, 0.0, sdf);   // 0 deep in, 1 at the edge
+    float pull = u * u * barPull;
+    float2 lo = float2(0.5), hi = bounds - 0.5;
+    half4 o = layer.sample(clamp(position - n * pull, lo, hi));
+    // faint top-lit edge highlight
+    float lit = u * u * 0.05 * clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
+    o.rgb += half(lit * o.a);
+    return o;
+}
