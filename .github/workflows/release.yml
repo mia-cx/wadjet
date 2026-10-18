@@ -48,12 +48,12 @@ jobs:
         run: node -e "console.log('version=' + require('./apps/macos/package.json').version)" >> "$GITHUB_OUTPUT"
       - uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
         with:
-          version: pnpm release:version
-          commitMessage: "chore(release): version app"
-          title: "chore(release): version app"
-          baseBranch: main
-          createGithubReleases: false
-          publishGitTags: false
+          version-script: pnpm release:version
+          commit-message: "chore(release): version app"
+          pr-title: "chore(release): version app"
+          pr-base-branch: main
+          create-github-releases: false
+          push-git-tags: false
 
   publish:
     needs: version
