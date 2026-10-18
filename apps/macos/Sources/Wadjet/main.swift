@@ -95,6 +95,7 @@ final class AppState: ObservableObject {
     @Published var showIslandWhileRecording = true
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
     @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
+    @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -395,6 +396,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
         case "group" where parts.count > 1: // debug: animated group switch on the expanded toolbar
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
+        case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
+            s.debugTap = Tool(rawValue: String(parts[1]))
         case "collapse": s.expandedDisplay = nil
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
@@ -1360,13 +1363,18 @@ final class OverlayController {
         let di = AppState.shared.expandedDisplay ?? mouseDisplay()
         guard let tp = toolbarPanels[di], t.hasMenu else { return }
         hideMenu()
-        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self))
+        // 40 pt of headroom above the menu so its scale-in never clips
+        let headroom: CGFloat = 40
+        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom))
         h.frame.size = h.fittingSize
         var f = NSRect(origin: .zero, size: h.fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
-        let anchor = buttonScreenRect(t, on: di) ?? toolbarShapeScreenRect(on: di) ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
+        let bar = toolbarShapeScreenRect(on: di)
+        let anchor = buttonScreenRect(t, on: di) ?? bar ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
+        // centred under the Tool, its top 8 pt below the bar's bottom edge
+        let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
-                           y: max(scr.minY + 8, anchor.minY - f.height - 6))
+                           y: max(scr.minY + 8, top - (f.height - headroom)))
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
@@ -1374,18 +1382,11 @@ final class OverlayController {
         p.contentView = h; p.orderFront(nil)
         menuPanel = p
         AppLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
-        // diag: is it actually on screen a second later, or closed/hidden?
-        Task { @MainActor [weak self, weak p] in
-            try? await Task.sleep(for: .seconds(1))
-            guard let self else { return }
-            guard let mp = self.menuPanel else { AppLog.line("menu diag: closed before 1 s"); return }
-            let ours = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]])?
-                .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
-            AppLog.line("menu diag: visible=\(mp.isVisible) alpha=\(mp.alphaValue) level=\(mp.level.rawValue) occl=\(mp.occlusionState.rawValue) frame=\(mp.frame) screenWins=\(ours?.count ?? -1) thisWin=\(ours?.contains { $0[kCGWindowNumber as String] as? Int == Int(p?.windowNumber ?? -1) } ?? false)")
-        }
         menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
             guard let self, let mp = self.menuPanel else { return e }
-            if !mp.frame.contains(NSEvent.mouseLocation) {
+            // the panel's top 40 pt is scale-in headroom — clicks there count as outside
+            let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
+            if !body.contains(NSEvent.mouseLocation) {
                 AppState.shared.openMenu = nil; self.syncMenu()
                 AppLog.line("menu closed (outside click)")
             }
@@ -1394,9 +1395,12 @@ final class OverlayController {
     }
     func hideMenu() {
         markOverlaysDirty()
-        if menuPanel != nil { AppLog.line("hideMenu <- \(Thread.callStackSymbols.prefix(6).map { $0.components(separatedBy: " ").dropFirst(3).first ?? "?" }.joined(separator: " | ")))") }
-        menuPanel?.close(); menuPanel = nil
+        guard let p = menuPanel else { return }
+        menuPanel = nil
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
+        // the menu fades out, then the panel closes
+        NSAnimationContext.runAnimationGroup({ $0.duration = 0.12; p.animator().alphaValue = 0 },
+                                           completionHandler: { Task { @MainActor in p.close() } })
     }
 
     var freezeLatencies: [Double] = [] // hotkey-to-Freeze-Frame ms, one per open
@@ -1671,7 +1675,7 @@ final class OverlayController {
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
-        ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]; ToolbarBtnFrames.blobRect = [:]
+        ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]
         // every teardown — Recording start, Esc, failures — hands activation
         // back unless the user switched apps meanwhile
         if let prev = prevFrontmost {
@@ -2304,7 +2308,6 @@ enum ToolbarHit {
 enum ToolbarBtnFrames {
     nonisolated(unsafe) static var recRects: [Int: [String: CGRect]] = [:] // label -> panel frame
     nonisolated(unsafe) static var rects: [Int: [Tool: CGRect]] = [:]
-    nonisolated(unsafe) static var blobRect: [Int: CGRect] = [:] // menu droplet per display
 }
 
 struct ToolbarView: View {
@@ -2460,7 +2463,11 @@ struct ToolbarView: View {
                             .sorted { $0.key.rawValue < $1.key.rawValue }.map { "\($0.key.title):\(Int($0.value.midX))" }.joined(separator: " ")) }
                 }
             }
-            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); ToolbarBtnFrames.blobRect[displayIndex] = nil; syncHit() }
+            .onChange(of: s.debugTap) { // cmd.sh tap — same path as a tap release
+                if let t = s.debugTap, expanded, t != s.tool { s.debugTap = nil; travelTap(t) }
+                else if s.debugTap != nil { s.debugTap = nil }
+            }
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -2621,6 +2628,8 @@ struct ToolbarView: View {
     @State var blobY: CGFloat = 0
     @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
+    @State var travelling = false // a tap's spring trip to the new Tool, press-free
+    @State var travelStart = Date()
     /// one group open at a time; the rest collapse to their last-used Tool
     @State var openGroup: Tool.Kind = .shot
     @State var lastUsed: [Tool.Kind: Tool] = [:]
@@ -2639,7 +2648,7 @@ struct ToolbarView: View {
     @State var menuByHold = false
     @State var holdTask: Task<Void, Never>?
     @State var hoverInside = false
-    var lensActive: Bool { pressing || dragging }
+    var lensActive: Bool { pressing || dragging || travelling }
     /// with the clear-glass patch the Metal lens layer owns the pressed look —
     /// the in-row accent/cut-out lens pieces must not draw under it
     var shaderLensActive: Bool {
@@ -2734,7 +2743,19 @@ struct ToolbarView: View {
         stretchY = 1 - 0.5 * (stretchX - 1)
         lensMoving = abs(v.x) + abs(v.y) > 4
             || abs(lensTarget.x - p.x) + abs(lensTarget.y - p.y) > 0.5
-        if !lensMoving { stretchX = 1; stretchY = 1; lensVel = .zero }
+        if !lensMoving { stretchX = 1; stretchY = 1; lensVel = .zero
+            // a tap's travel ends when the spring lands
+            if travelling { AppLog.line("travel settled \(Int(Date().timeIntervalSince(travelStart) * 1000)) ms"); travelling = false } }
+    }
+
+    /// a tap's Tool switch: the lens stays up and the spring carries it to the
+    /// new cell (the "set transition"); it fades to the rest highlight on land
+    func travelTap(_ t: Tool) {
+        travelling = true; travelStart = .now
+        AppLog.line("travel -> \(t.title)")
+        AppDelegate.shared?.trigger(t)
+        if let c = cellCentres[t] { setLensTarget(x: c.x) }
+        if reduceMotion { travelling = false } // the jump already landed
     }
 
     func openToolMenu(_ t: Tool) {
@@ -2829,6 +2850,14 @@ struct ToolbarView: View {
                 }
             Text(collapsed ? t.kind.groupTitle : t.shortTitle)
                 .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+                // the menu chevron rides beside the selected Tool's label —
+                // trailing overlay so the label itself stays centred
+                .overlay(alignment: .trailing) {
+                    if !collapsed && s.tool == t && t.hasMenu && !lensActive {
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                            .offset(x: 11)
+                    }
+                }
         }
         .frame(width: toolD, height: selH)
     }
@@ -2966,6 +2995,14 @@ struct ToolbarView: View {
                 }
             Text(collapsed ? t.kind.groupTitle : t.shortTitle)
                 .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+                // the menu chevron rides beside the selected Tool's label —
+                // trailing overlay so the label itself stays centred
+                .overlay(alignment: .trailing) {
+                    if !collapsed && s.tool == t && t.hasMenu && !lensActive {
+                        Image(systemName: "chevron.down").font(.system(size: 8, weight: .semibold))
+                            .offset(x: 11)
+                    }
+                }
         }
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
             .frame(width: toolD, height: selH)
@@ -2987,28 +3024,13 @@ struct ToolbarView: View {
                 }
                 .compositingGroup()
             }
-            .overlay(alignment: .topTrailing) {
-                // the menu droplet budding off the rest capsule's top corner —
-                // hidden while pressing/dragging; high-priority tap so the
-                // row's drag can't take it
-                if t.hasMenu && selected && !collapsed && !lensActive {
-                    Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.white)
-                        .frame(width: 26, height: 26)
-                        .glassEffect(.regular.interactive(), in: .circle)
-                        .glassEffectID("menu-\(t)", in: ns)
-                        .contentShape(Circle())
-                        .highPriorityGesture(TapGesture().onEnded { openToolMenu(t) })
-                        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect[displayIndex] = $0 }
-                        .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        .offset(x: 6, y: 8) // ~4 pt inside the capsule's corner
-                }
-            }
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
                 if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
+                // a tap's travel follows its Tool if a group reflow moves it mid-flight
+                else if travelling, !dragging, !pressing, s.tool == t { setLensTarget(x: $0.x + toolD / 2) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
@@ -3052,10 +3074,14 @@ struct ToolbarView: View {
             .onChanged { v in
                 if !pressActive { // first event of the press: lens in at once
                     pressActive = true; pressing = true
+                    // a press takes the lens over from a tap's travel: keep the
+                    // lens where it is mid-flight, don't snap back to selected
+                    let wasTravelling = travelling; travelling = false
                     pressX = v.startLocation.x
                     pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
-                    // start the sim exactly where the rest highlight was
-                    if let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
+                    // start the sim exactly where the rest highlight was —
+                    // unless it's still travelling from the last tap
+                    if !wasTravelling, let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
                     // the spring carries the lens to the pressed cell
                     if let t = pressTool, let c = cellCentres[t], c.x != blobX {
                         setLensTarget(x: c.x)
@@ -3094,8 +3120,7 @@ struct ToolbarView: View {
                     }
                 } else if !menuByHold, let t = nearestTool(to: v.location.x) {
                     if t != s.tool {
-                        AppDelegate.shared?.trigger(t)
-                        if let c = cellCentres[t] { setLensTarget(x: c.x) }
+                        travelTap(t) // the lens travels all the way there
                     } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
                 }
                 pressTool = nil; pressActive = false; menuByHold = false
@@ -3106,7 +3131,7 @@ struct ToolbarView: View {
             case .active(let p):
                 NSCursor.arrow.set()
                 ctrl.markOverlaysDirty() // loupe off while over the bar
-                if dragging || (ToolbarBtnFrames.blobRect[displayIndex] ?? .zero).contains(p) { TipPanel.hide() }
+                if dragging { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
                     openTheGroup(t.kind) // groups open under the pointer
                 } else { TipPanel.hide() }
@@ -3119,7 +3144,7 @@ struct ToolbarView: View {
             if let t = s.tool { lastUsed[t.kind] = t }
             // only an active lens interaction goes through the spring;
             // a passive switch snaps
-            if dragging { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
+            if dragging || travelling { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
             else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
             // the selected Tool's group is the default open one; a collapsed
             // group's click opens it
@@ -3231,18 +3256,21 @@ struct ToolMenuView: View {
     let tool: Tool
     let ctrl: OverlayController
     @ObservedObject var s = AppState.shared
+    @State var shown = false // spring in from the cell it hangs under
     var body: some View {
-        VStack(alignment: .leading, spacing: 2) {
+        VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
             case .shot:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
-                if tool == .capRegion { confirmRow() }
+                if tool == .capRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", toggle: true) {
+                        s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
             case .rec:
-                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
-                if tool == .recRegion { confirmRow() }
-                Text("Options").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-                    .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
-                section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
+                section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil }
+                if tool == .recRegion { divider(); row("Confirm on Release", on: s.confirmMode == "release", toggle: true) {
+                        s.confirmMode = s.confirmMode == "release" ? "manual" : "release" } }
+                divider()
+                section("Options", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
+                divider()
                 toggles()
             case .util where tool == .pickColour:
                 section("Copy as", picks: ColourFormat.allCases.map(\.rawValue), current: s.colourFmt) { s.colourFmt = $0 }
@@ -3252,62 +3280,71 @@ struct ToolMenuView: View {
             }
         }
         .padding(6)
+        .frame(minWidth: 228, alignment: .leading)
         .fixedSize()
-        .background(Color.black.opacity(0.9), in: .rect(cornerRadius: 10))
-        .overlay(RoundedRectangle(cornerRadius: 10).stroke(.white.opacity(0.12), lineWidth: 0.5))
+        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
+        .scaleEffect(shown ? 1 : 0.85, anchor: .top)
+        .opacity(shown ? 1 : 0)
+        .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
+    }
+
+    /// a native-looking menu row: 20 pt checkmark column + title, hover
+    /// highlight behind it. `stays`: toggles leave the menu open, picks close it
+    func row(_ title: String, on: Bool, stays: Bool = false, toggle: Bool = false, action: @escaping () -> Void) -> some View {
+        MenuRow(title: title, on: on, isToggle: toggle) {
+            action()
+            if !stays { s.openMenu = nil; ctrl.syncMenu() }
+        }
+    }
+    func divider() -> some View {
+        Rectangle().fill(.white.opacity(0.12)).frame(height: 0.5)
+            .padding(.horizontal, 10).padding(.vertical, 4)
     }
     @ViewBuilder func section(_ title: String, picks: [String], current: String?, pick: @escaping (String) -> Void) -> some View {
         if !title.isEmpty {
-            Text(title).font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
-                .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+                .padding(.leading, 28).padding(.vertical, 4)
         }
         ForEach(picks, id: \.self) { w in
-            Button {
-                pick(w); s.openMenu = nil; ctrl.syncMenu()
-            } label: {
-                HStack {
-                    Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
-                        .opacity(w == current ? 1 : 0)
-                    Text(w).font(.system(size: 13)).foregroundStyle(.white)
-                    Spacer()
-                }
-                .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-                .padding(.horizontal, 8)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
+            row(w, on: w == current) { pick(w) }
         }
     }
-    @ViewBuilder func confirmRow() -> some View {
-        Button {
-            s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
-            s.openMenu = nil; ctrl.syncMenu()
-        } label: {
-            HStack {
-                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
-                    .opacity(s.confirmMode == "release" ? 1 : 0)
-                Text("Confirm on Release").font(.system(size: 13)).foregroundStyle(.white)
-                Spacer()
-            }
-            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
-            .padding(.horizontal, 8)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.plain)
-    }
-
     @ViewBuilder func toggles() -> some View {
         let rows: [(String, Binding<Bool>)] = [
             ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),
             ("Click circles", $s.clickCircles), ("Show island while recording", $s.showIslandWhileRecording)]
         ForEach(rows, id: \.0) { label, on in
-            Toggle(isOn: on) {
-                Text(label).font(.system(size: 13)).foregroundStyle(.white)
-            }
-            .toggleStyle(.checkbox)
-            .frame(minHeight: 26)
-            .padding(.horizontal, 10)
+            MenuRow(title: label, on: on.wrappedValue, isToggle: true) { on.wrappedValue.toggle() } // toggles keep the menu open
         }
+    }
+}
+
+// a menu row with its own hover state — the highlight sits behind the row
+// like a native menu's selection
+struct MenuRow: View {
+    let title: String
+    let on: Bool
+    /// an on/off option rather than one pick of several — VoiceOver reads it as a toggle
+    var isToggle = false
+    let action: () -> Void
+    @State var hovering = false
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 8) {
+                Image(systemName: "checkmark").font(.system(size: 13, weight: .semibold))
+                    .opacity(on ? 1 : 0).frame(width: 20, alignment: .center)
+                Text(title).font(.system(size: 14)).foregroundStyle(.white)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, minHeight: 32, alignment: .leading)
+            .padding(.horizontal, 8)
+            .background(RoundedRectangle(cornerRadius: 10).fill(.white.opacity(hovering ? 0.12 : 0)))
+            .contentShape(Rectangle())
+            .onHover { hovering = $0 }
+        }
+        .buttonStyle(.plain)
+        .accessibilityAddTraits(isToggle ? .isToggle : (on ? .isSelected : []))
+        .accessibilityValue(isToggle ? (on ? "On" : "Off") : "")
     }
 }
 
