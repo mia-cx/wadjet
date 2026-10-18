@@ -2184,6 +2184,7 @@ struct ToolbarView: View {
             .onAppear { syncHit(); syncLensBg() }
             .onChange(of: rowSize) { syncHit(); syncLensBg() }
             .onChange(of: expanded) {
+                if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
                 syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
@@ -2218,7 +2219,7 @@ struct ToolbarView: View {
         }
         .frame(width: shapeW, height: shapeH)
         .clipShape(shape) // nothing may draw outside the island/toolbar shape
-        .glassEffect(ownBar ? .identity : .clear.tint(.black.opacity(0.22)).interactive(), in: shape)
+        .glassEffect(ownBar ? .identity : .clear.tint(.black.opacity(0.35)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
         .padding(.top, shapeTop)
@@ -2376,6 +2377,17 @@ struct ToolbarView: View {
 
     /// row-space centre the lens rests on
     var rowCentreY: CGFloat { selH / 2 }
+    /// no spring: put the whole lens model on the cell instantly — used
+    /// on expand and passive tool changes, inside a disabled-animation
+    /// transaction so the morph's own transaction can't animate it either
+    func snapLens(to c: CGPoint) {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            blobX = c.x; blobY = c.y
+            lensTarget = c; lensVel = .zero; lensMoving = false
+            stretchX = 1; stretchY = 1
+        }
+    }
     /// aim the spring: press picks the pressed cell, drag follows the
     /// pointer (x clamped to the row's ends, y pulled gently toward it)
     func setLensTarget(x: CGFloat, pointerY: CGFloat? = nil) {
@@ -2498,12 +2510,12 @@ struct ToolbarView: View {
                                    .float2(shapeW, shapeH), .float(selH / 2 + d),
                                    .float2(panelW, panelH)),
             maxSampleOffset: CGSize(width: 32, height: 32))
-        .blur(radius: 3)
+        .blur(radius: 5)
         .mask(alignment: .top) {
             shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
         }
         .overlay(alignment: .top) {
-            shape.fill(Color.black.opacity(0.22))
+            shape.fill(Color.black.opacity(0.35))
                 .frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
         }
         .frame(width: panelW, height: panelH, alignment: .top)
@@ -2579,6 +2591,7 @@ struct ToolbarView: View {
                 ZStack {
                     Rectangle()
                     selShape.opacity(shaderLensActive ? 0 : 1)
+                        .transaction { $0.animation = nil }
                         .offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
                 }
                 .compositingGroup()
@@ -2604,10 +2617,7 @@ struct ToolbarView: View {
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
                 cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
-                if !lensActive, s.tool == t {
-                    blobX = $0.x + toolD / 2; blobY = $0.y + selH / 2
-                    lensTarget = CGPoint(x: blobX, y: blobY)
-                }
+                if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = $0
@@ -2634,6 +2644,7 @@ struct ToolbarView: View {
             Capsule().fill(.white.opacity(lensActive ? 0 : 0.10))
                 .frame(width: lensSize.width, height: lensSize.height)
                 .position(x: blobX, y: blobY)
+                .transaction { $0.animation = nil }
         }
         // the accent tint follows the lens, clipped to its shape — the icon row
         // is drawn a second time in accent, masked to a capsule at blobX
@@ -2648,7 +2659,9 @@ struct ToolbarView: View {
                 }
                 .padding(.horizontal, d + (selW - toolD) / 2)
             }
-            .mask(selShape.opacity(shaderLensActive ? 0 : 1).position(x: blobX, y: blobY))
+            .mask(selShape.opacity(shaderLensActive ? 0 : 1)
+                .position(x: blobX, y: blobY)
+                .transaction { $0.animation = nil })
             .foregroundStyle(Color.wadjetAccent)
             .allowsHitTesting(false)
         }
@@ -2726,7 +2739,10 @@ struct ToolbarView: View {
             }
         }
         .onChange(of: s.tool) {
-            if !dragging, let t = s.tool, let c = cellCentres[t] { setLensTarget(x: c.x) }
+            // only an active lens interaction goes through the spring;
+            // a passive switch snaps
+            if dragging { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
+            else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
         }
         .padding(.top, contentTop)
 

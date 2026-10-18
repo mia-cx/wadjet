@@ -50,8 +50,8 @@ using namespace metal;
 // outward SDF normal and f eases ~6 pt at the edge to 0 — plus a faint
 // top-lit edge highlight. Outside the rect: passthrough. The layer this is
 // applied to must contain backdrop beyond the bar's edge to bend.
-#define barEdge 8.0
-#define barPull 6.0
+#define barEdge 14.0
+#define barPull 12.0
 
 static float rrSdf(float2 c, float2 half_, float r) {
     float2 b = float2(max(half_.x - r, 0.0), max(half_.y - r, 0.0));
@@ -76,8 +76,12 @@ static float rrSdf(float2 c, float2 half_, float r) {
     float pull = u * u * barPull;
     float2 lo = float2(0.5), hi = bounds - 0.5;
     half4 o = layer.sample(clamp(position - n * pull, lo, hi));
+    // dispersion in the edge band, like the lens — keep the sampled G/alpha
+    float dk = 0.14 * u;
+    o.r = layer.sample(clamp(position - n * pull * (1.0 - dk), lo, hi)).r;
+    o.b = layer.sample(clamp(position - n * pull * (1.0 + dk), lo, hi)).b;
     // faint top-lit edge highlight
-    float lit = u * u * 0.05 * clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
+    float lit = u * u * 0.08 * clamp(-n.y * 0.5 + 0.5, 0.0, 1.0);
     o.rgb += half(lit * o.a);
     return o;
 }
