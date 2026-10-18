@@ -2253,7 +2253,7 @@ struct ToolbarView: View {
     func syncHit() {
         ToolbarHit.rects[displayIndex] = hoverRect
         if expanded {
-            let xs = [Tool.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
+            let xs = visibleTools.sorted { $0.rawValue < $1.rawValue }
                 .compactMap { t -> String? in
                     guard let f = ctrl.buttonScreenRect(t, on: displayIndex) else { return nil }
                     return "\(t.title):\(Int(f.midX))"
@@ -2894,7 +2894,7 @@ struct ToolbarView: View {
             case .active(let p):
                 if dragging { TipPanel.hide() }
                 else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
-                else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { $0.value.contains(p) })?.key {
+                else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
                     if TipPanel.tool != t { AppLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
                     TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
                     openTheGroup(t.kind, anchor: lensActive ? t : nil) // groups open under the pointer
