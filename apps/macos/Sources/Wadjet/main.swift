@@ -444,6 +444,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
+        case "capture": // debug: a full-display shot on the pointer's display
+            if s.phase == .frozen, s.tool?.kind == .shot {
+                AppLog.line("capture: pointer at \(Int(NSEvent.mouseLocation.x)),\(Int(NSEvent.mouseLocation.y))")
+                let di = overlayCtrl.mouseDisplay()
+                didSelect(CGRect(origin: .zero, size: Freeze.shared.displays[di].screen.frame.size), on: di)
+            }
         case "stop": if s.recActive { stopRecording() }
         case "pause": if s.recActive { togglePause() }
         case "settings": openSettings()
@@ -1593,9 +1599,20 @@ final class OverlayController {
         let primaryH = NSScreen.screens[0].frame.height
         let scrTL = CGRect(x: screen.frame.minX, y: primaryH - screen.frame.maxY,
                            width: screen.frame.width, height: screen.frame.height)
-        let needBare = content.windows.contains { w in
+        // status item windows are SCK-visible but never render into a
+        // screenshot and would keep `needBare` permanently true
+        let statusItemIDs = Set([
+            AppDelegate.shared?.statusItem.button?.window?.windowNumber,
+            AppDelegate.shared?.recStatusItem?.button?.window?.windowNumber,
+        ].compactMap { $0 }.map(CGWindowID.init))
+        let ownWindows = content.windows.filter { w in
             w.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
-                && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
+                && w.isOnScreen && !chromeIDs.contains(w.windowID) && !statusItemIDs.contains(w.windowID)
+                && w.frame.intersects(scrTL)
+        }
+        let needBare = !ownWindows.isEmpty
+        if !ownWindows.isEmpty {
+            AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\(Int($0.frame.minX)),\(Int($0.frame.minY)) \(Int($0.frame.width))x\(Int($0.frame.height))" })")
         }
         // MainActor-inheriting tasks created on the actor itself: the SCK
         // calls suspend off-actor so the captures overlap, while `disp`
