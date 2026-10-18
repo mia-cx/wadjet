@@ -2989,7 +2989,7 @@ struct ToolbarView: View {
                 // the menu droplet budding off the rest capsule's top corner —
                 // hidden while pressing/dragging; high-priority tap so the
                 // row's drag can't take it
-                if t.hasMenu && selected && !lensActive {
+                if t.hasMenu && selected && !collapsed && !lensActive {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
