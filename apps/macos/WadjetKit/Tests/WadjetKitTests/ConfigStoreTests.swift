@@ -214,4 +214,18 @@ struct ConfigStoreTests {
         let reloaded = ConfigStore(file: url, defaults: Vault(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
         #expect(reloaded.value.token == nil)
     }
+
+    @Test func captureSectionDefaultsAndRoundTrips() throws {
+        // no `capture` key at all -> both defaults on
+        let none = try JSONDecoder().decode(WadjetConfig.self, from: Data(#"{}"#.utf8))
+        #expect(none.capture.freeze && none.capture.cursor)
+        // a partial section keeps the missing field's default
+        let partial = try JSONDecoder().decode(WadjetConfig.self, from: Data(#"{"capture":{"cursor":false}}"#.utf8))
+        #expect(!partial.capture.cursor && partial.capture.freeze)
+        // both survive an encode/decode round trip
+        var c = WadjetConfig(); c.capture.freeze = false; c.capture.cursor = false
+        let back = try JSONDecoder().decode(WadjetConfig.self, from: JSONEncoder().encode(c))
+        #expect(back == c)
+        #expect(!back.capture.freeze && !back.capture.cursor)
+    }
 }

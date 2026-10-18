@@ -20,6 +20,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     /// Days before temporary Capture files are swept; their history entries stay.
     public var retentionDays = 7
     public var recording = Recording()
+    public var capture = Capture()
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -61,6 +62,20 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         public var fps = 30
         public init() {}
     }
+    /// `freeze` — take a Freeze Frame when a Tool opens; off leaves the desktop
+    /// live and shoots at confirm (Utilities always freeze — they read pixels).
+    /// `cursor` — the cursor's default in Screenshots and Recordings; the Tool
+    /// menu overrides it per capture.
+    public struct Capture: Codable, Equatable, Sendable {
+        public var freeze = true
+        public var cursor = true
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            freeze = try c.decodeIfPresent(Bool.self, forKey: .freeze) ?? true
+            cursor = try c.decodeIfPresent(Bool.self, forKey: .cursor) ?? true
+        }
+    }
 
     /// Custom so missing keys still fall back to defaults and cross-references
     /// (Shortcut.workflow, defaultWorkflows) validate against `workflows`.
@@ -74,6 +89,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         bookmarks = try c.decodeIfPresent([String: Data].self, forKey: .bookmarks) ?? [:]
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 7
         recording = try c.decodeIfPresent(Recording.self, forKey: .recording) ?? Recording()
+        capture = try c.decodeIfPresent(Capture.self, forKey: .capture) ?? Capture()
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -123,9 +139,10 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(bookmarks, forKey: .bookmarks)
         try c.encode(retentionDays, forKey: .retentionDays)
         try c.encode(recording, forKey: .recording)
+        try c.encode(capture, forKey: .capture)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, freeze, cursor
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
