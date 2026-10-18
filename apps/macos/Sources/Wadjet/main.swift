@@ -40,7 +40,14 @@ enum Tool: String, CaseIterable {
             AppState.shared.config.value.shortcuts.first { $0.tool.rawValue == rawValue }.map { String(describing: $0.keys) }
         }
     }
-    enum Kind { case shot, rec, util }
+    enum Kind: CaseIterable { case shot, rec, util
+        var badge: String {
+            switch self { case .shot: "camera.fill"; case .rec: "video.fill"; case .util: "wrench.and.screwdriver.fill" }
+        }
+        var groupTitle: String {
+            switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities" }
+        }
+    }
     var toolID: ToolID { ToolID(rawValue: rawValue)! }
     var hasMenu: Bool { self != .copyText }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
@@ -53,7 +60,7 @@ extension Color {
     static let wadjetAccent = Color(red: 0.20, green: 0.84, blue: 0.58)
 }
 
-let lensZoom: CGFloat = 1.12 // how much the pressed lens magnifies what's under it
+// nothing — lensZoom removed: the shader lens replaces magnification
 let dimAlpha: CGFloat = 0.4  // Freeze Frame dim outside the capture target
 let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used until the window's own corner is measured
 
@@ -74,6 +81,10 @@ final class AppState: ObservableObject {
     var measureMode: String { // Bounds, Spacing, Horizontal, Vertical
         get { config.value.tools.measure.mode.rawValue }
         set { if let m = MeasureMode(rawValue: newValue) { config.update { $0.tools.measure.mode = m } } }
+    }
+    var confirmMode: String { // release, manual
+        get { config.value.tools.region.confirm.rawValue }
+        set { if let c = WadjetConfig.RegionConfirm(rawValue: newValue) { config.update { $0.tools.region.confirm = c } } }
     }
     @Published var countdown = "Off" // Off 3 5 10
     @Published var sysAudio = false
@@ -174,6 +185,13 @@ final class Freeze {
 // Private API, so only CLEAR_GLASS_PATCH builds (run.sh) compile it; store builds leave it out.
 enum ClearGlassPatch {
     static let identityFill = CGColor(red: 1, green: 1, blue: 1, alpha: 0)
+    /// does this filter's face fill still read as untinted clear glass?
+    static func isIdentityFill(_ v: Any?) -> Bool {
+        guard let v else { return true } // unset on the first frame: let it pass
+        let cg = v as! CGColor
+        guard let c = cg.components, c.count >= 4 else { return true }
+        return c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 0
+    }
     static func install() {
         guard let cls = NSClassFromString("CABackdropLayer") else { return }
         let sel = NSSelectorFromString("setFilters:")
@@ -187,7 +205,10 @@ enum ClearGlassPatch {
                       // clear-glass signature; a regular glass only reaches
                       // bfd == 0 on the first identity->glass frame, where the
                       // values below already are identity's — a no-op
-                      (f.value(forKey: "inputBlurFillDarkenOpacity") as? NSNumber)?.doubleValue == 0
+                      (f.value(forKey: "inputBlurFillDarkenOpacity") as? NSNumber)?.doubleValue == 0,
+                      // ONLY the plain .clear lens: a .clear.tint(…) bar keeps
+                      // its (subtle) blur — its face fill isn't identity's
+                      ClearGlassPatch.isIdentityFill(f.value(forKey: "inputFaceColorMatrixFillColor"))
                 else { continue }
                 for k in ["inputBlurRadius", "inputBlurOpacity0", "inputBlurOpacity1",
                           "inputBlurOpacity2", "inputBlurOpacity3",
@@ -327,11 +348,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             AppLog.line("statusItem frame = \(self.statusItem.button?.window?.frame.debugDescription ?? "?")")
         }
+        // deliverImmediately: AppKit suspends distributed notifications while the
+        // app is inactive, and Wadjet goes inactive again after every overlay
         DistributedNotificationCenter.default().addObserver(
-            forName: .init("cx.mia.wadjet.cmd"), object: nil, queue: .main
-        ) { [weak self] n in
-            if let cmd = n.object as? String { Task { @MainActor in self?.handleCmd(cmd) } }
-        }
+            self, selector: #selector(distCmd(_:)), name: .init("cx.mia.wadjet.cmd"),
+            object: nil, suspensionBehavior: .deliverImmediately)
+    }
+    @objc func distCmd(_ n: Notification) {
+        if let cmd = n.object as? String { Task { @MainActor in handleCmd(cmd) } }
     }
 
     // debug command channel, driven by tools/cmd.sh
@@ -363,6 +387,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "island": s.showIslandWhileRecording = val == "on"
             case "colourFormat": s.colourFmt = val
             case "measureMode": s.measureMode = val
+            case "confirm": s.confirmMode = val
             default: AppLog.line("cmd option: unknown key \(key)")
             }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
@@ -631,7 +656,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         if s.phase == .recording && tool.kind == .rec { stopRecording(); return }
         // switching Tools while frozen keeps the same Freeze Frame
-        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("tool switched to \(tool.title)") }; return }
+        if s.phase == .frozen { if s.tool != tool { s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)") }; return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
@@ -1301,10 +1326,26 @@ final class OverlayController {
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
     }
+    /// re-apply each overlay's cursor when the Tool changes under a still pointer
+    func refreshCursors() {
+        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.updateCursor() } }
+    }
+    /// overlays draw based on pointerOverUI (loupe on/off): repaint when the
+    /// pointer crosses between a toolbar/menu and the Freeze Frame
+    func markOverlaysDirty() {
+        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.needsDisplay = true } }
+    }
     // a Tool button's frame in screen coords (from measured panel-space frames)
     func buttonScreenRect(_ t: Tool, on di: Int) -> CGRect? {
         guard let fr = ToolbarBtnFrames.rects[di]?[t], let p = toolbarPanels[di], let cv = p.contentView else { return nil }
         return p.convertToScreen(cv.convert(fr, to: nil))
+    }
+    /// a rect in a toolbar panel's content-view coords, in screen coords —
+    /// SwiftUI's named "panel" space is the content view's, flipped
+    func panelScreenRect(_ r: CGRect, on di: Int) -> CGRect? {
+        guard let p = toolbarPanels[di], let cv = p.contentView else { return nil }
+        let flipped = CGRect(x: r.minX, y: cv.bounds.height - r.maxY, width: r.width, height: r.height)
+        return p.convertToScreen(cv.convert(flipped, to: nil))
     }
 
     func syncMenu() {
@@ -1329,6 +1370,15 @@ final class OverlayController {
         p.contentView = h; p.orderFront(nil)
         menuPanel = p
         AppLog.line("menu \(t.title) @ \(Int(f.origin.x)),\(Int(f.origin.y)) \(Int(f.width))x\(Int(f.height))")
+        // diag: is it actually on screen a second later, or closed/hidden?
+        Task { @MainActor [weak self, weak p] in
+            try? await Task.sleep(for: .seconds(1))
+            guard let self else { return }
+            guard let mp = self.menuPanel else { AppLog.line("menu diag: closed before 1 s"); return }
+            let ours = (CGWindowListCopyWindowInfo(.optionOnScreenOnly, kCGNullWindowID) as? [[String: Any]])?
+                .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == getpid() }
+            AppLog.line("menu diag: visible=\(mp.isVisible) alpha=\(mp.alphaValue) level=\(mp.level.rawValue) occl=\(mp.occlusionState.rawValue) frame=\(mp.frame) screenWins=\(ours?.count ?? -1) thisWin=\(ours?.contains { $0[kCGWindowNumber as String] as? Int == Int(p?.windowNumber ?? -1) } ?? false)")
+        }
         menuMonitor = NSEvent.addLocalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] e in
             guard let self, let mp = self.menuPanel else { return e }
             if !mp.frame.contains(NSEvent.mouseLocation) {
@@ -1339,6 +1389,8 @@ final class OverlayController {
         }
     }
     func hideMenu() {
+        markOverlaysDirty()
+        if menuPanel != nil { AppLog.line("hideMenu <- \(Thread.callStackSymbols.prefix(6).map { $0.components(separatedBy: " ").dropFirst(3).first ?? "?" }.joined(separator: " | ")))") }
         menuPanel?.close(); menuPanel = nil
         if let m = menuMonitor { NSEvent.removeMonitor(m); menuMonitor = nil }
     }
@@ -1515,12 +1567,16 @@ final class OverlayController {
     }
     var bitmapStore: [[UInt8]] = []
 
+    /// the app that was active before we stole activation for the overlay —
+    /// handed back on close unless the user switched away meanwhile
+    var prevFrontmost: NSRunningApplication?
+
     func showPanels(tool: Tool) {
         let s = AppState.shared
         s.phase = .frozen; s.tool = tool
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
-            let p = NSPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
+            let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver; p.hasShadow = false
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.ignoresMouseEvents = false; p.acceptsMouseMovedEvents = true
@@ -1540,6 +1596,18 @@ final class OverlayController {
             p.orderFront(nil)
             p.makeFirstResponder(ov)
             panels.append(p)
+        }
+        // Only the ACTIVE app's cursor changes reach the screen — the overlay
+        // is non-activating, so while a Freeze Frame is up we take activation
+        // and make the pointer's panel key so cursorUpdate fires for it.
+        // Window lists were read at freeze time, before this.
+        prevFrontmost = NSWorkspace.shared.frontmostApplication
+        if prevFrontmost?.processIdentifier != getpid() {
+            NSApp.activate(ignoringOtherApps: true)
+            AppLog.line("active for overlay (was \(prevFrontmost?.localizedName ?? "?"))")
+        }
+        if let md = panels.firstIndex(where: { $0.screen != nil && NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }) {
+            panels[md].makeKey()
         }
         // borderless nonactivating panels can't be key windows, so keyDown on
         // the view never fires — route keys through a local monitor instead
@@ -1600,15 +1668,87 @@ final class OverlayController {
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]; ToolbarBtnFrames.blobRect = [:]
+        // every teardown — Recording start, Esc, failures — hands activation
+        // back unless the user switched apps meanwhile
+        if let prev = prevFrontmost {
+            prevFrontmost = nil
+            if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
+                prev.activate(options: [])
+                AppLog.line("activation back to \(prev.localizedName ?? "?")")
+            }
+            NSCursor.arrow.set() // once activation leaves, our cursor can't change
+        }
     }
     func closeAll() {
-        closeAllPanelsOnly()
+        // phase first: cursorUpdate on the dying panels must not re-assert
+        // a tool cursor after we're gone
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
+        closeAllPanelsOnly()
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
+        NSCursor.arrow.set()
         AppDelegate.shared?.updateEscHotkey()
     }
+}
+
+/// Per-tool pointer over the Freeze Frame; built once and cached.
+/// Over a toolbar the plain arrow wins (set from the toolbar's own hover).
+@MainActor
+enum WadjetCursors {
+    static var cache: [Tool: NSCursor] = [:]
+    static func cursor(for t: Tool) -> NSCursor {
+        if let c = cache[t] { return c }
+        let c = make(t); cache[t] = c; return c
+    }
+    static func make(_ t: Tool) -> NSCursor {
+        switch t {
+        case .capRegion, .recRegion, .copyText, .measure: return .crosshair
+        case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
+        case .recWindow, .recScreen: return symbol("video.fill", centre: true)
+        case .pickColour: return symbol("eyedropper", centre: false)
+        }
+    }
+    /// white glyph with a soft dark halo so it reads on any backdrop —
+    /// a black template pass under an NSShadow, then the white palette glyph
+    static func symbol(_ name: String, centre: Bool) -> NSCursor {
+        let S: CGFloat = 20
+        let cfg = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            .applying(.init(paletteColors: [.white]))
+        guard let proto = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg) else { return .arrow }
+        // the glyph at its natural aspect ratio, centred in the canvas —
+        // drawing into proto.size keeps it undistorted
+        var drawn = CGRect.zero
+        let img = NSImage(size: CGSize(width: S, height: S), flipped: false) { r in
+            NSGraphicsContext.current?.imageInterpolation = .high
+            let sz = proto.size
+            let dst = CGRect(x: (r.width - sz.width) / 2, y: (r.height - sz.height) / 2,
+                             width: min(sz.width, r.width), height: min(sz.height, r.height))
+            drawn = dst
+            // halo: the same glyph as a black template, blurred 1.5 pt
+            NSGraphicsContext.saveGraphicsState()
+            let sh = NSShadow(); sh.shadowColor = .black.withAlphaComponent(0.6)
+            sh.shadowBlurRadius = 1.5; sh.set()
+            proto.isTemplate = true; NSColor.black.set()
+            proto.draw(in: dst)
+            NSGraphicsContext.restoreGraphicsState()
+            proto.isTemplate = false
+            proto.draw(in: dst)
+            return true
+        }
+        // handler-backed images rasterize lazily — force it so drawn is real
+        _ = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        AppLog.line("cursorimg \(name) glyph=\(Int(drawn.width))x\(Int(drawn.height)) in \(Int(S))")
+        // eyedropper points down-leading; the lens/tip is its hotspot
+        return NSCursor(image: img, hotSpot: centre ? NSPoint(x: S / 2, y: S / 2) : NSPoint(x: 4, y: S - 4))
+    }
+}
+
+/// the Freeze Frame panel: non-activating, but keyable so it can own the
+/// pointer's cursor while the app is activated for the overlay
+final class OverlayPanel: NSPanel {
+    override var canBecomeKey: Bool { true }
 }
 
 // MARK: - Overlay NSView (per display)
@@ -1627,11 +1767,87 @@ final class OverlayNSView: NSView {
     var flash: (text: String, until: Date)? // transient badge near the pointer
     var scrollAcc: CGFloat = 0
     var boundsBoxes: [CGRect] = [] // Bounds boxes kept on screen via Shift
+    // manual region confirm: after mouse-up the selection stays editable —
+    // 8 handles resize, a drag inside moves, the button / Return confirms
+    var confirming = false
+    var confirmHost: NSView?
+    enum SelHandle: CaseIterable { case n, s, e, w, ne, nw, se, sw
+        func point(in r: CGRect) -> CGPoint {
+            CGPoint(x: contains(.w) ? r.minX : contains(.e) ? r.maxX : r.midX,
+                    y: contains(.n) ? r.maxY : contains(.s) ? r.minY : r.midY)
+        }
+        func contains(_ o: SelHandle) -> Bool { self == o || (self == .ne && o == .n) || (self == .nw && o == .n) || (self == .se && o == .s) || (self == .sw && o == .s) || (self == .ne && o == .e) || (self == .se && o == .e) || (self == .nw && o == .w) || (self == .sw && o == .w) }
+    }
+    enum SelOp { case move(start: CGPoint, sel: CGRect), resize(SelHandle, CGRect) }
+    var selOp: SelOp?
+    var manualConfirm: Bool { (tool == .capRegion || tool == .recRegion) && AppState.shared.confirmMode == "manual" }
+    func hitHandle(at pt: CGPoint) -> SelHandle? {
+        guard let s = sel else { return nil }
+        return SelHandle.allCases.first { abs($0.point(in: s).x - pt.x) < 9 && abs($0.point(in: s).y - pt.y) < 9 }
+    }
+    func resizeSel(from orig: CGRect, handle h: SelHandle, to pt: CGPoint) -> CGRect {
+        var r = orig
+        if h.contains(.e) { r.size.width = max(8, pt.x - r.minX) }
+        if h.contains(.w) { let m = r.maxX; r.origin.x = min(pt.x, m - 8); r.size.width = m - r.minX }
+        if h.contains(.n) { r.size.height = max(8, pt.y - r.minY) }
+        if h.contains(.s) { let m = r.maxY; r.origin.y = min(pt.y, m - 8); r.size.height = m - r.minY }
+        return r
+    }
+    func showConfirmHost() {
+        confirmHost?.removeFromSuperview()
+        let label = tool == .capRegion ? "Capture" : "Record"
+        let sym = tool == .capRegion ? "camera.fill" : "record.circle"
+        let v = Button { [weak self] in self?.confirmSel() } label: {
+            Image(systemName: sym).font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(.white).frame(width: 30, height: 30)
+                .glassEffect(.regular.interactive(), in: .circle)
+        }
+        .buttonStyle(.plain)
+        .onContinuousHover { ph in
+            if case .active = ph {
+                TipPanel.hover(label, anchor: self.confirmScreenRect())
+            } else { TipPanel.hide() }
+        }
+        let h = NSHostingView(rootView: v); h.frame.size = h.fittingSize
+        addSubview(h); confirmHost = h; positionConfirmHost()
+    }
+    func confirmScreenRect() -> CGRect {
+        guard let h = confirmHost, let w = window else { return .zero }
+        return w.convertToScreen(h.convert(h.bounds, to: nil))
+    }
+    /// the confirm circle sits just outside the selection's bottom-trailing
+    /// corner, clamped into the overlay
+    func positionConfirmHost() {
+        guard let h = confirmHost, let s = sel else { return }
+        h.frame.origin = CGPoint(
+            x: min(bounds.width - 38, s.maxX + 8),
+            y: max(8, s.minY - 38))
+    }
+    /// manual-confirm bookkeeping for a Tool switch: the pending selection
+    /// belongs to the Tool it was drawn under
+    var lastTool: Tool?
+    func syncConfirmTool() {
+        if lastTool != tool {
+            lastTool = tool
+            if confirming {
+                confirming = false; selOp = nil; sel = nil
+                confirmHost?.removeFromSuperview(); confirmHost = nil
+                needsDisplay = true
+            }
+        }
+    }
+    func confirmSel() {
+        guard confirming, let s = sel,
+              tool == .capRegion || tool == .recRegion else { return }
+        confirming = false; selOp = nil
+        confirmHost?.removeFromSuperview(); confirmHost = nil
+        app?.didSelect(s, on: di) // the exact release path
+    }
     init(frame f: NSRect, displayIndex: Int, controller: OverlayController) {
         di = displayIndex; ctrl = controller
         super.init(frame: f)
         wantsLayer = true
-        let ta = NSTrackingArea(rect: bounds, options: [.mouseMoved, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
+        let ta = NSTrackingArea(rect: bounds, options: [.mouseMoved, .cursorUpdate, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
         addTrackingArea(ta)
     }
     required init?(coder: NSCoder) { fatalError() }
@@ -1671,6 +1887,13 @@ final class OverlayNSView: NSView {
         if let s = sel, t == .capRegion || t == .recRegion || t == .copyText {
             NSColor.white.withAlphaComponent(0.8).setStroke()
             let p = NSBezierPath(rect: s); p.lineWidth = 0.5; p.stroke()
+            if confirming {
+                NSColor.white.setFill()
+                for h in SelHandle.allCases {
+                    let c = h.point(in: s)
+                    NSBezierPath(rect: CGRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)).fill()
+                }
+            }
         }
         if t == .measure { drawMeasure() }
         if !overToolbar && t != .measure { drawLoupe(ctx) }
@@ -1822,14 +2045,27 @@ final class OverlayNSView: NSView {
         } else {
             hoverWin = nil
         }
-        if tool == .measure {
-            NSCursor.crosshair.set()
-            if measureMode != "Bounds" { scanRuler(at: pt) }
-        } else {
-            NSCursor.arrow.set()
-        }
+        if tool == .measure, measureMode != "Bounds" { scanRuler(at: pt) }
+        updateCursor()
         needsDisplay = true
     }
+    /// the arrow over a toolbar/menu, the Tool's own cursor over the frame —
+    /// only while frozen; a late cursorUpdate after close must not re-assert
+    var lastCursorSig = ""
+    func updateCursor() {
+        guard AppState.shared.phase == .frozen else { return }
+        syncConfirmTool()
+        let overUI = ctrl?.pointerOverUI ?? false
+        if overUI { NSCursor.arrow.set() }
+        else { WadjetCursors.cursor(for: tool).set() }
+        // event-rate file I/O is silly — only log when the choice changes
+        let cur = NSCursor.currentSystem ?? NSCursor.current
+        let sig = "\(cur.image.size)x\(cur.hotSpot)x\(tool.rawValue)x\(overUI)"
+        if sig != lastCursorSig { lastCursorSig = sig; AppLog.line("cursor -> sys=\(cur.image.size) hot=\(cur.hotSpot) tool=\(tool.rawValue) overUI=\(overUI)") }
+    }
+    // a non-activating panel still gets cursorUpdate for its tracking area —
+    // that's the reliable hook, mouseMoved alone loses to the system
+    override func cursorUpdate(with e: NSEvent) { updateCursor() }
     // one scroll tick per wheel notch; trackpads accumulate 24 pt per tick and
     // momentum is ignored. Returns +1 for down (next) / -1 for up (previous)
     func scrollStep(_ e: NSEvent) -> Int {
@@ -1897,11 +2133,33 @@ final class OverlayNSView: NSView {
         case .measure where measureMode != "Bounds":
             if let v = rulerLabel() { copyMeasureAndClose(v) }
         default:
-            dragStart = pt; sel = CGRect(origin: pt, size: .zero)
+            if confirming { // manual mode: move / resize / start over
+                if let h = hitHandle(at: pt) { selOp = .resize(h, sel!) }
+                else if let s = sel, s.contains(pt) { selOp = .move(start: pt, sel: s) }
+                else {
+                    confirming = false; selOp = nil
+                    confirmHost?.removeFromSuperview(); confirmHost = nil
+                    dragStart = pt; sel = CGRect(origin: pt, size: .zero)
+                }
+            } else { dragStart = pt; sel = CGRect(origin: pt, size: .zero) }
         }
         needsDisplay = true
     }
     override func mouseDragged(with e: NSEvent) {
+        let pt0 = convert(e.locationInWindow, from: nil)
+        if let op = selOp {
+            switch op {
+            case .move(let st, let orig):
+                var r = orig.offsetBy(dx: pt0.x - st.x, dy: pt0.y - st.y)
+                r.origin.x = min(max(0, r.origin.x), bounds.width - r.width)
+                r.origin.y = min(max(0, r.origin.y), bounds.height - r.height)
+                sel = r
+            case .resize(let h, let orig):
+                sel = resizeSel(from: orig, handle: h, to: pt0)
+            }
+            positionConfirmHost()
+            needsDisplay = true; return
+        }
         guard let st = dragStart else { return }
         let pt = convert(e.locationInWindow, from: nil)
         // Bounds ignores Option/Shift: Shift means "keep this box" at mouseUp
@@ -1920,6 +2178,7 @@ final class OverlayNSView: NSView {
     override func mouseUp(with e: NSEvent) {
         defer { needsDisplay = true }
         AppLog.line("mouseUp \(tool.title) sel=\(sel.debugDescription)")
+        if selOp != nil { selOp = nil; return }
         if tool == .measure, measureMode == "Bounds", let s = sel, dragStart != nil, s.width > 4 && s.height > 4 {
             dragStart = nil
             copyMeasure(fmtDim(s.width) + " × " + fmtDim(s.height))
@@ -1930,12 +2189,16 @@ final class OverlayNSView: NSView {
         guard let s = sel, dragStart != nil else { return }
         dragStart = nil
         if tool == .copyText { copyText(in: s); ctrl?.closeAll(); return }
-        if (tool == .capRegion || tool == .recRegion) && s.width > 4 && s.height > 4 { app?.didSelect(s, on: di); return }
+        if (tool == .capRegion || tool == .recRegion) && s.width > 4 && s.height > 4 {
+            if manualConfirm { confirming = true; showConfirmHost(); return }
+            app?.didSelect(s, on: di); return
+        }
         sel = nil
     }
     // called from the local key monitor (nonactivating panels don't get keyDown)
     @discardableResult
     func handleKey(_ e: NSEvent) -> Bool {
+        if e.keyCode == 36, confirming { confirmSel(); return true } // Return
         if e.keyCode == 53 { ctrl?.closeAll(); return true }
         if e.keyCode == 49 { app?.toggleRegionWindow(); return true } // Space
         // Ctrl+1..4 switch Measure modes while the overlay is open
@@ -2035,6 +2298,7 @@ enum ToolbarHit {
 // measured button frames in each toolbar panel's coordinate space, reported by
 // onGeometryChange — used for hover mapping, menu anchors and CGEvent driving
 enum ToolbarBtnFrames {
+    nonisolated(unsafe) static var recRects: [Int: [String: CGRect]] = [:] // label -> panel frame
     nonisolated(unsafe) static var rects: [Int: [Tool: CGRect]] = [:]
     nonisolated(unsafe) static var blobRect: [Int: CGRect] = [:] // menu droplet per display
 }
@@ -2068,6 +2332,8 @@ struct ToolbarView: View {
     // and an expand chevron (or the recording dot and time) in ears either side
     // of the notch, so the toolbar is visible while collapsed.
     var earW: CGFloat { recording ? 48 : 28 }
+    // A fake island sizes like the notched one: the notch-width formula with
+    // a 185 pt stand-in notch on displays that don't have one.
     var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (recording ? 120 : 100) }
     var islandH: CGFloat { max(22, barH) }
     var gap: CGFloat { hasNotch ? 0 : 3 }
@@ -2079,16 +2345,25 @@ struct ToolbarView: View {
     // The row sits rowGap below the menu bar on every display. Notched display:
     // the shape hangs from the top edge and its top band holds the notch.
     // Island: the expanded shape drops below the menu bar, covering none of it.
-    var rowInset: CGFloat { 10 }
+    /// The concentric rule: one gap `d` between the rest capsule and every
+    /// shape edge, so outer corners (radius selH/2 + d) are concentric with
+    /// the capsule's end caps.
+    var d: CGFloat { 10 }
     var rowGap: CGFloat { 6 }
     var shapeTop: CGFloat { expanded && !hasNotch ? islandH : gap }
-    var contentTop: CGFloat { (hasNotch ? islandH : 0) + rowGap }
-    var recExpandedW: CGFloat { 260 }
-    var expW: CGFloat { min(limit, rowSize.width + 2 * rowInset) }
-    var expH: CGFloat { contentTop + rowSize.height + rowInset }
-    var shapeW: CGFloat { expanded ? (recording ? recExpandedW : expW) : islandW }
+    var contentTop: CGFloat { hasNotch ? islandH + rowGap : d }
+    var expW: CGFloat { min(limit, recording ? recRowSize.width : rowSize.width) }
+    var expH: CGFloat { contentTop + selH + d }
+    var shapeW: CGFloat { expanded ? expW : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
-    var panelW: CGFloat { min(limit, expW) + 48 }
+    // slack beyond expW so a fully stretched lens (lensW × 1.3 at the last
+    // cell) still fits inside the panel — hoverRect is shape-based, unaffected
+    /// room past the bar's ends for the lens: its stretched half-width beyond
+    /// the end cell (~30 pt) plus the spring's overshoot (capped at
+    /// lensOvershootCap below), with a few points spare
+    let lensSlack: CGFloat = 96
+    let lensOvershootCap: CGFloat = 40
+    var panelW: CGFloat { min(limit, expW) + 2 * lensSlack }
     // menus and tooltips are their own panels
     var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
@@ -2115,7 +2390,10 @@ struct ToolbarView: View {
         return hoverRect.contains(q)
     }
     func syncExpanded() {
-        let h = hoverInside || s.openMenu != nil || lensActive
+        // an open menu holds its own display expanded — it must NOT make the
+        // other displays claim expandedDisplay, which collapses this one and
+        // kills the menu
+        let h = hoverInside || lensActive || (s.openMenu != nil && s.expandedDisplay == displayIndex)
         if h != expanded { AppLog.line("hover d\(displayIndex) -> \(h)") }
         if h { s.expandedDisplay = displayIndex }
         else if s.expandedDisplay == displayIndex { s.expandedDisplay = nil }
@@ -2124,7 +2402,7 @@ struct ToolbarView: View {
     func syncHit() {
         ToolbarHit.rects[displayIndex] = hoverRect
         if expanded {
-            let xs = [Tool.capRegion, .capWindow, .capScreen, .recRegion, .recWindow, .recScreen, .pickColour, .copyText, .measure]
+            let xs = visibleTools.sorted { $0.rawValue < $1.rawValue }
                 .compactMap { t -> String? in
                     guard let f = ctrl.buttonScreenRect(t, on: displayIndex) else { return nil }
                     return "\(t.title):\(Int(f.midX))"
@@ -2136,6 +2414,11 @@ struct ToolbarView: View {
     var body: some View {
         morph
             .frame(width: panelW, height: panelH, alignment: .top)
+            #if CLEAR_GLASS_PATCH
+            // the lens is its own glass-free layer drawn over the bar —
+            // glassEffect/backdrop views can't rasterize into layerEffect
+            .overlay { lensLayer }
+            #endif
             .coordinateSpace(name: "panel")
             // hoverInside tracks the pointer; the bar stays expanded while it
             // is inside, a menu is open, or the selection lens is pressed
@@ -2152,11 +2435,16 @@ struct ToolbarView: View {
                 }
             }
             .onChange(of: hoverInside) { syncExpanded() }
-            .onChange(of: lensActive) { syncExpanded() }
-            .onAppear { syncHit() }
-            .onChange(of: rowSize) { syncHit() }
+            .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded() }
+            .onAppear { syncHit(); syncLensBg() }
+            .onChange(of: rowSize) { syncHit(); syncLensBg() }
             .onChange(of: expanded) {
-                syncHit()
+                if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
+                else {
+                    var tx = Transaction(); tx.disablesAnimations = true
+                    withTransaction(tx) { openGroup = s.tool?.kind ?? .shot }
+                }
+                syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
             .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
@@ -2164,9 +2452,10 @@ struct ToolbarView: View {
     }
 
     var shape: UnevenRoundedRectangle {
-        // expanded: fully rounded ends (radius = half the shape's height) —
-        // all four corners on the island, bottom two under a notch
-        let bottom: CGFloat = expanded ? shapeH / 2 : (hasNotch ? 13 : pillH / 2)
+        // expanded corners are concentric with the rest capsule's caps;
+        // collapsed corners stay capsule-round (notch reads as 13 because its
+        // top edge is flat against the screen's)
+        let bottom: CGFloat = expanded ? selH / 2 + d : (hasNotch ? 13 : pillH / 2)
         let top: CGFloat = hasNotch ? 0 : bottom
         return UnevenRoundedRectangle(topLeadingRadius: top, bottomLeadingRadius: bottom,
                                       bottomTrailingRadius: bottom, topTrailingRadius: top)
@@ -2176,17 +2465,20 @@ struct ToolbarView: View {
         ZStack(alignment: .top) {
             // collapsed fill sits under the island icons, not over them
             shape.fill(Color.black).opacity(expanded ? 0 : 1).allowsHitTesting(false)
-            expandedContent
+            // everything expanded lives in panel space at its FINAL geometry,
+            // centred so it never moves — the animating clip reveals it,
+            // nothing slides. (Its morph-space position varies with shapeW
+            // exactly so its panel-space position stays put.)
+            expandedLayer
                 .opacity(expanded ? 1 : 0)
-                .scaleEffect(expanded ? 1 : 0.7, anchor: .top)
-                .frame(width: shapeW, height: shapeH, alignment: .top)
+                .position(x: shapeW / 2, y: panelH / 2 - shapeTop)
             islandContent
                 .opacity(expanded ? 0 : 1)
                 .frame(width: shapeW, height: shapeH)
         }
         .frame(width: shapeW, height: shapeH)
         .clipShape(shape) // nothing may draw outside the island/toolbar shape
-        .glassEffect(.regular.tint(.black.opacity(0.4)).interactive(), in: shape)
+        .glassEffect(ownBar ? .identity : .clear.tint(.black.opacity(0.35)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
         .padding(.top, shapeTop)
@@ -2197,7 +2489,10 @@ struct ToolbarView: View {
     // the rounded end cap (its centre pillH/2 from the edge). Frozen: the
     // current Tool's icon only. Recording: red dot leading, elapsed trailing.
     // island: items sit concentric with the end caps; notch: centred in the ears
-    var islandSlot: CGFloat { hasNotch ? earW : pillH + 6 }
+    // Non-notch: the leading round item's centre sits pillH/2 from the end —
+    // concentric with the end cap — and the trailing item's edge mirrors the
+    // leading item's edge inset (the 8 pt dot's edge is pillH/2 - 4 in).
+    var islandSlot: CGFloat { hasNotch ? earW : pillH }
     var islandContent: some View {
         HStack(spacing: 0) {
             if recording {
@@ -2205,42 +2500,126 @@ struct ToolbarView: View {
                     .frame(width: islandSlot, height: pillH)
             } else {
                 Image(systemName: (s.tool ?? .capRegion).symbol)
-                    .font(.system(size: min(pillH * 0.45, islandSlot - 14)))
+                    .resizable().scaledToFit()
+                    .frame(width: min(pillH * 0.45, pillH - 14), height: min(pillH * 0.45, pillH - 14))
+                    // on the glyph's own frame, so size and position both travel
+                    .matchedGeometryEffect(id: "selectedIcon", in: ns, isSource: !expanded)
                     .frame(width: islandSlot, height: pillH)
             }
             Spacer(minLength: 0)
             if recording {
+                // the time must never touch the cap or the notch: measure it
+                // and inset its edge like the leading dot's, shrinking the
+                // inset only as far as the glyph itself needs
                 Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
-                    .frame(width: islandSlot, height: pillH)
+                    .fixedSize()
+                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { islandTimeW = $0 }
+                    .padding(.trailing, max(4, min((islandSlot - 8) / 2, islandSlot - islandTimeW - 4)))
+                    .frame(height: pillH)
             }
         }
         .foregroundStyle(.white)
         .frame(width: islandW, height: pillH)
     }
 
+    /// where the expanded content's top sits in panel space (final geometry)
+    var expTop: CGFloat { hasNotch ? gap : islandH }
+    /// the expanded bar + row at their final positions in panel coords —
+    /// one layout, revealed by the animating shape rather than re-laid-out
+    var expandedLayer: some View {
+        ZStack {
+            #if CLEAR_GLASS_PATCH
+            // while frozen the bar is our own surface — the same view the
+            // lens bends — so inside the lens reads like outside
+            if lensBg != nil, !recording { barSurface }
+            #endif
+            expandedContent
+                .frame(width: expW, height: expH, alignment: .top)
+                .position(x: panelW / 2, y: expTop + expH / 2)
+        }
+        .frame(width: panelW, height: panelH)
+    }
+
     @ViewBuilder var expandedContent: some View {
         if recording { recControls } else { toolRow }
     }
 
+    @State var recRowSize = CGSize(width: 220, height: 64)
+    @State var islandTimeW: CGFloat = 20 // measured "mm:ss" glyph width
     var recControls: some View {
-        HStack(spacing: 12) {
-            Circle().fill(.red).frame(width: 8, height: 8)
-            Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
-            Button(s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
-            Button("Stop") { AppDelegate.shared?.stopRecording() }
+        // leading: the same red dot + time as the island; trailing: pause and
+        // stop as glass circles, all centred in the selH-tall row
+        HStack(spacing: 16) {
+            HStack(spacing: 8) {
+                Circle().fill(.red).frame(width: 8, height: 8)
+                Text(fmtT(s.recordingElapsed)).font(.system(size: 14)).monospacedDigit().fixedSize()
+            }
+            Spacer(minLength: 0)
+            recButton(s.recordingPaused ? "play.fill" : "pause.fill",
+                      label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
+            recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
         }
-        .font(.system(size: 12))
+        .foregroundStyle(.white)
+        // the outer circles' edges sit so their centres meet the corner
+        // centres (radius selH/2 + d) — concentric, like the tool capsule
+        .padding(.horizontal, selH / 2 + d - 24)
+        .frame(height: selH)
         .padding(.top, contentTop)
+        .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
+    }
+
+    // one recording control: a glass circle, TipPanel tooltip on hover
+    func recButton(_ symbol: String, label: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: symbol).font(.system(size: 18))
+                .frame(width: 48, height: 48)
+                .glassEffect(.regular.interactive(), in: .circle)
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
+            ToolbarBtnFrames.recRects[displayIndex, default: [:]][label] = $0
+        }
+        .onContinuousHover(coordinateSpace: .named("panel")) { phase in
+            switch phase {
+            case .active:
+                // the button's own frame, not a box around the pointer
+                if let r = ToolbarBtnFrames.recRects[displayIndex]?[label] {
+                    TipPanel.hover(label, anchor: ctrl.panelScreenRect(r, on: displayIndex) ?? .zero)
+                }
+            case .ended:
+                TipPanel.hide()
+            }
+        }
     }
 
     let toolD: CGFloat = 72
-    let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size; lens = ×1.15
+    let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
+    // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
+    // inside it and gets refracted (iOS tab-bar lens); the mask follows it
+    let lensOverhang: CGFloat = 7
+    var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
+    var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
+    var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
     // tab-bar state: cell centres measured in row space, capsule centre same
     @State var cellCentres: [Tool: CGPoint] = [:]
     @State var blobX: CGFloat = 0
     @State var blobY: CGFloat = 0
     @State var pressing = false   // finger down, before/without the drag threshold
     @State var dragging = false
+    /// one group open at a time; the rest collapse to their last-used Tool
+    @State var openGroup: Tool.Kind = .shot
+    @State var lastUsed: [Tool.Kind: Tool] = [:]
+    /// One spring sim owns the lens: position chases lensTarget, velocity
+    /// drives the stretch — no gesture-event velocity, no debounce.
+    @State var lensVel = CGPoint.zero
+    @State var lensTarget = CGPoint.zero
+    @State var lensMoving = false
+    @State var lensRunning = false
+    @State var stretchX: CGFloat = 1
+    @State var stretchY: CGFloat = 1
+    var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     @State var pressX: CGFloat = 0
     @State var pressTool: Tool?
     @State var pressActive = false
@@ -2248,6 +2627,105 @@ struct ToolbarView: View {
     @State var holdTask: Task<Void, Never>?
     @State var hoverInside = false
     var lensActive: Bool { pressing || dragging }
+    /// with the clear-glass patch the Metal lens layer owns the pressed look —
+    /// the in-row accent/cut-out lens pieces must not draw under it
+    var shaderLensActive: Bool {
+        #if CLEAR_GLASS_PATCH
+        return lensActive
+        #else
+        return false
+        #endif
+    }
+    /// the pre-patch in-row lens: glass + accent mask + cut-outs, only while
+    /// pressing. With the shader patch nothing in-row draws for the lens
+    var usesInRowLens: Bool {
+        #if CLEAR_GLASS_PATCH
+        return false
+        #else
+        return lensActive
+        #endif
+    }
+    /// frozen + expanded: our barSurface draws the bar; system glass off
+    var ownBar: Bool {
+        #if CLEAR_GLASS_PATCH
+        return expanded && lensBg != nil && !recording
+        #else
+        return false
+        #endif
+    }
+
+    /// row-space centre the lens rests on
+    var rowCentreY: CGFloat { selH / 2 }
+    /// no spring: put the whole lens model on the cell instantly — used
+    /// on expand and passive tool changes, inside a disabled-animation
+    /// transaction so the morph's own transaction can't animate it either
+    func snapLens(to c: CGPoint) {
+        var t = Transaction(); t.disablesAnimations = true
+        withTransaction(t) {
+            blobX = c.x; blobY = c.y
+            lensTarget = c; lensVel = .zero; lensMoving = false
+            stretchX = 1; stretchY = 1
+        }
+    }
+    /// aim the spring: press picks the pressed cell, drag follows the
+    /// pointer (x clamped to the row's ends, y pulled gently toward it)
+    func setLensTarget(x: CGFloat, pointerY: CGFloat? = nil) {
+        var y = rowCentreY
+        if let py = pointerY { y += 6 * tanh((py - rowCentreY) / 30) } // lean toward the cursor, ≤ 6 pt
+        lensTarget = CGPoint(x: x, y: y)
+        if reduceMotion { blobX = x; blobY = y; lensVel = .zero }
+        else { lensMoving = true; kickLens() }
+    }
+
+    /// the spring's driver: a task loop that runs only while unsettled —
+    /// (TimelineView never delivered ticks inside the overlay)
+    func kickLens() {
+        guard !lensRunning else { return }
+        lensRunning = true
+        Task { @MainActor in
+            var last = Date()
+            while lensMoving {
+                try? await Task.sleep(for: .milliseconds(8))
+                if Task.isCancelled { break }
+                let now = Date()
+                stepLens(dt: min(now.timeIntervalSince(last), 0.05))
+                last = now
+            }
+            lensRunning = false
+        }
+    }
+
+    /// fixed-substep underdamped spring — k 380 / c 26
+    func stepLens(dt dt0: TimeInterval) {
+        if reduceMotion { blobX = lensTarget.x; blobY = lensTarget.y; lensVel = .zero; lensMoving = false; return }
+        var p = CGPoint(x: blobX, y: blobY), v = lensVel
+        var dt = dt0
+        let k: CGFloat = 380, c: CGFloat = 26
+        while dt > 0 {
+            let h = min(dt, 1.0 / 240)
+            v.x += (k * (lensTarget.x - p.x) - c * v.x) * h
+            v.y += (k * (lensTarget.y - p.y) - c * v.y) * h
+            p.x += v.x * h; p.y += v.y * h
+            dt -= h
+        }
+        // a hard flick could overshoot past the panel; cap it at the ends
+        let (lo, hi) = rowEnds
+        if hi > lo, p.x < lo - lensOvershootCap || p.x > hi + lensOvershootCap {
+            p.x = min(max(p.x, lo - lensOvershootCap), hi + lensOvershootCap); v.x = 0
+        }
+        blobX = p.x; blobY = p.y; lensVel = v
+        if lensActive, let t = nearestTool(to: p.x) {
+            TipPanel.follow(tipLabel(t), anchor: ctrl.buttonScreenRect(t, on: displayIndex))
+        }
+        // squash/stretch from the sim's own velocity, low-passed; below
+        // 120 pt/s nothing stretches, overshoot does the settle wobble
+        let raw = 1 + min(max((abs(v.x) - 120) / 1400, 0), 0.3)
+        stretchX += (raw - stretchX) * 0.3
+        stretchY = 1 - 0.5 * (stretchX - 1)
+        lensMoving = abs(v.x) + abs(v.y) > 4
+            || abs(lensTarget.x - p.x) + abs(lensTarget.y - p.y) > 0.5
+        if !lensMoving { stretchX = 1; stretchY = 1; lensVel = .zero }
+    }
 
     func openToolMenu(_ t: Tool) {
         guard t.hasMenu else { return }
@@ -2256,51 +2734,215 @@ struct ToolbarView: View {
         s.openMenu = s.openMenu == t ? nil : t
         ctrl.syncMenu()
     }
-    func nearestTool(to x: CGFloat) -> Tool? { cellCentres.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key }
-    var rowEnds: (CGFloat, CGFloat) {
-        let xs = cellCentres.values.map(\.x)
-        return (xs.min() ?? 0, xs.max() ?? 0)
+    struct RowSlot { let tool: Tool; let collapsed: Bool }
+    func groupTools(_ k: Tool.Kind) -> [Tool] { Tool.allCases.filter { $0.kind == k } }
+    /// a collapsed group's representative: its last-used Tool — the selected
+    /// Tool's group always shows the selection
+    func lastUsedTool(_ k: Tool.Kind) -> Tool {
+        if let t = s.tool, t.kind == k { return t }
+        return lastUsed[k] ?? groupTools(k)[0]
     }
-    // the icon strip once, for the accent-tint mask — same layout as the row
-    func iconCell(_ t: Tool) -> some View {
-        Image(systemName: t.symbol).font(.system(size: 22))
-            .frame(width: toolD, height: toolD)
+    func slots(in k: Tool.Kind) -> [RowSlot] {
+        k == openGroup ? groupTools(k).map { RowSlot(tool: $0, collapsed: false) }
+                       : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
+    }
+    var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
+    /// a cell's tooltip: collapsed reps name "<Group> · <last-used Tool>"
+    func tipLabel(_ t: Tool) -> String {
+        let base = t.kind != openGroup ? "\(t.kind.groupTitle) · \(t.title)" : t.title
+        return base + (t.shortcutHint.map { "  " + $0 } ?? "")
     }
 
+    /// open a group — the same centred spring as hover; the lens retargets
+    /// onto the pointer's position in the new layout, so no jump
+    func openTheGroup(_ k: Tool.Kind) {
+        guard k != openGroup else { return }
+        AppLog.line("openTheGroup \(k)")
+        withAnimation(.spring(duration: 0.35)) { openGroup = k }
+    }
+    func nearestTool(to x: CGFloat) -> Tool? {
+        cellCentres.filter { visibleTools.contains($0.key) }.min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
+    }
+    var rowEnds: (CGFloat, CGFloat) {
+        let xs = cellCentres.filter { visibleTools.contains($0.key) }.values.map(\.x)
+        return (xs.min() ?? 0, xs.max() ?? 0)
+    }
+    /// the row laid out once, shared by the real cells, the accent copy and
+    /// the lens's icon strip — every copy keeps the same geometry
+    func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
+        HStack(spacing: 8) {
+            ForEach(Tool.Kind.allCases, id: \.self) { k in
+                if k != .shot { // thin divider between groups
+                    Rectangle().fill(.white.opacity(0.14))
+                        .frame(width: 1, height: selH * 0.6)
+                }
+                ForEach(slots(in: k), id: \.tool) { make($0.tool, $0.collapsed) }
+            }
+        }
+        .padding(.horizontal, d + (selW - toolD) / 2)
+    }
+    // the icon strip once, for the accent-tint mask — same layout as the row
+    func iconCell(_ t: Tool, collapsed: Bool) -> some View {
+        // identical glyph sizing to cell() so the masked splice joins equal
+        Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+            .frame(width: 26, height: 26)
+            .frame(width: toolD, height: selH)
+            .overlay(alignment: .bottomTrailing) {
+                if collapsed { Image(systemName: t.symbol).font(.system(size: 8)).offset(x: 6, y: -5) }
+            }
+    }
+
+    /// pixel-res Freeze Frame crop under the whole toolbar panel — the
+    /// layer's stand-in for the world behind the bar
+    @State var lensBg: CGImage?
+    func syncLensBg() {
+        #if CLEAR_GLASS_PATCH
+        guard let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
+              displayIndex < Freeze.shared.displays.count else { return }
+        let local = CGRect(x: p.frame.minX - sc.frame.minX, y: p.frame.minY - sc.frame.minY,
+                           width: p.frame.width, height: p.frame.height)
+        lensBg = Freeze.shared.crop(rect: local, on: displayIndex)
+        #endif
+    }
+    #if CLEAR_GLASS_PATCH
+    /// the lens capsule's centre in panel coords
+    var lensCentre: CGPoint {
+        CGPoint(x: (panelW - rowSize.width) / 2 + blobX, y: shapeTop + contentTop + blobY)
+    }
+    /// the lens capsule's centre in row space (for the accent mask)
+    var lensCentreInRow: CGPoint {
+        CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
+    }
+    func iconStrip(_ color: Color) -> some View {
+        rowContent(iconCell).foregroundStyle(color)
+    }
+    /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
+    /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
+    /// visible bar (masked into morph) and the lens's input — so inside the
+    /// lens the bar reads exactly like outside, plus the lens's refraction.
+    let notchOverscan: CGFloat = 200
+    var barSurface: some View {
+        ZStack(alignment: .top) {
+            if let img = lensBg {
+                // frost first, so the glass shader's edge, fringe and rim stay crisp
+                Image(decorative: img, scale: CGFloat(img.width) / panelW)
+                    .resizable()
+                    .frame(width: panelW, height: panelH)
+                    .blur(radius: 5)
+            }
+        }
+        .layerEffect(
+            // under a notch the bar hangs from the screen's top edge: extend the
+            // glass rect above the panel so the top has no rounded corners,
+            // rim or edge bend — only the sides and bottom are glass edges
+            ShaderLibrary.barGlass(.float2((panelW - shapeW) / 2, shapeTop - (hasNotch ? notchOverscan : 0)),
+                                   .float2(shapeW, shapeH + (hasNotch ? notchOverscan : 0)),
+                                   .float(selH / 2 + d), .float2(panelW, panelH)),
+            maxSampleOffset: CGSize(width: 32, height: 32))
+        .mask(alignment: .top) {
+            shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
+        }
+        .frame(width: panelW, height: panelH, alignment: .top)
+    }
+
+    /// a glass-free copy of what sits under the lens — backdrop views can't
+    /// rasterize into layerEffect, so the shader bends this instead
+    var lensSource: some View {
+        ZStack(alignment: .top) {
+            if let img = lensBg {
+                // crisp everywhere — the bar copy above frosts what's behind it
+                Image(decorative: img, scale: CGFloat(img.width) / panelW)
+                    .resizable()
+                    .frame(width: panelW, height: panelH)
+            }
+            ZStack(alignment: .top) {
+                barSurface
+                ZStack {
+                    iconStrip(.white)
+                    iconStrip(Color.wadjetAccent)
+                        .mask(Capsule().frame(width: lensW, height: lensH)
+                              .scaleEffect(x: stretchX, y: stretchY)
+                              .position(lensCentreInRow))
+                }
+                .frame(width: shapeW, height: shapeH, alignment: .top)
+                .padding(.top, shapeTop + contentTop)
+            }
+        }
+        .frame(width: panelW, height: panelH, alignment: .top)
+    }
+    /// lensSource refracted through the shader — all lens drawing runs
+    /// through LensEffect so the mask, rim and SDF share the same
+    /// interpolated values every frame (shader args don't animate on
+    /// their own — the mask would run ahead of them during the springs)
+    var lensLayer: some View {
+        lensSource
+            .modifier(LensEffect(bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
+                                 stretch: CGSize(width: stretchX, height: stretchY)))
+            .opacity(lensActive ? 1 : 0)
+            .animation(.smooth(duration: 0.15), value: lensActive)
+            .allowsHitTesting(false)
+    }
+    #endif
+
     var selShape: some View {
-        Capsule().frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+        Capsule()
+            .frame(width: lensSize.width, height: lensSize.height)
+            .scaleEffect(x: stretchX, y: stretchY) // with the lens, never against it
     }
 
     func lens(_ glass: Glass) -> some View {
         Capsule().fill(.clear)
-            .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
+            .frame(width: lensSize.width, height: lensSize.height)
             .glassEffect(lensActive ? glass : .identity, in: .capsule)
             .glassEffectTransition(.materialize)
-            .position(x: blobX, y: blobY) // after the glass, or the capsule spans the whole row
+            .scaleEffect(x: stretchX, y: stretchY) // stretches the glass output too
+            .position(x: blobX, y: blobY)
             .allowsHitTesting(false)
     }
 
-    // one cell of the tab bar: plain white icon, cut out wherever the
-    // capsule/lens covers it — the accent overlay row draws that part
-    func cell(_ t: Tool) -> some View {
+    // one cell of the tab bar: plain white icon (accent on the selected cell
+    // at rest); a collapsed cell carries its group's badge
+    func cell(_ t: Tool, collapsed: Bool) -> some View {
         let selected = s.tool == t
         let c = cellCentres[t] ?? .zero
-        return Image(systemName: t.symbol).font(.system(size: 22))
-            .foregroundStyle(.white)
-            .frame(width: toolD, height: toolD)
+        // a collapsed group's cell IS the group: category icon at Tool size,
+        // the last-used Tool's symbol as the tiny badge
+        return Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+            .frame(width: 26, height: 26)
+            // the selected cell's icon and the island's icon are one element:
+            // it travels into the bar (and back) as the shape morphs
+            .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
+            .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
+            .frame(width: toolD, height: selH)
+            // the rest highlight rides the selected cell, so group reflows
+            // carry it with layout instead of chasing it in row space
+            .background {
+                if selected, !lensActive {
+                    Capsule().fill(.white.opacity(0.10))
+                        .frame(width: selW, height: selH)
+                }
+            }
             .contentShape(Rectangle()) // whole cell, not just the glyph
             .mask {
                 ZStack {
                     Rectangle()
-                    selShape.offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
+                    selShape.opacity(usesInRowLens ? 1 : 0)
+                        .transaction { $0.animation = nil }
+                        .offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
                 }
                 .compositingGroup()
             }
             .overlay(alignment: .bottomTrailing) {
+                if collapsed { // the last-used Tool's symbol as the badge
+                    Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
+                        .foregroundStyle(.white.opacity(0.7))
+                        .frame(width: 16, height: 16)
+                        .background(Circle().fill(.black.opacity(0.85)))
+                        .offset(x: 4, y: -5)
                 // the menu droplet budding off the rest capsule's corner —
                 // hidden while pressing/dragging; high-priority tap so the
                 // row's drag can't take it
-                if t.hasMenu && selected && !lensActive {
+                } else if t.hasMenu && selected && !lensActive {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
@@ -2314,13 +2956,14 @@ struct ToolbarView: View {
                 }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
+            .transition(.scale(scale: 0.6).combined(with: .opacity))
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
-                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + toolD / 2)
-                if !lensActive, s.tool == t { blobX = $0.x + toolD / 2; blobY = $0.y + toolD / 2 }
+                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
+                if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
             }
-            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: {
-                ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = $0
+            .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
+                ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
             }
     }
 
@@ -2328,49 +2971,28 @@ struct ToolbarView: View {
         // rest highlight sits below the icons in .background; the glass lens
         // goes on top with the clear-glass patch (it must refract the icons)
         // and behind them without it
-        HStack(spacing: 8) {
-            ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: cell)
-            Spacer().frame(width: 8) // +8 in-group spacing = 16 between groups
-            ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: cell)
-            Spacer().frame(width: 8)
-            ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: cell)
-        }
-        // 20 pt horizontal inset so the lens can't poke through the rounded ends
-        .padding(.horizontal, 20).padding(.vertical, 10)
+        rowContent(cell)
         .coordinateSpace(name: "row")
-        .background {
-            // rest: subtle translucent highlight (no glass)
-            Capsule().fill(.white.opacity(lensActive ? 0 : 0.10))
-                .frame(width: lensActive ? selW * 1.15 : selW, height: lensActive ? selH * 1.15 : selH)
-                .position(x: blobX, y: blobY)
-        }
         // the accent tint follows the lens, clipped to its shape — the icon row
-        // is drawn a second time in accent, masked to a capsule at blobX
+        // is drawn a second time in accent, masked to a capsule at blobX.
+        // Only while the in-row lens draws: at rest the selected cell's own
+        // icon carries the accent
         .overlay {
-            ZStack {
-                HStack(spacing: 8) {
-                    ForEach([Tool.capRegion, .capWindow, .capScreen], id: \.self, content: iconCell)
-                    Spacer().frame(width: 8)
-                    ForEach([Tool.recRegion, .recWindow, .recScreen], id: \.self, content: iconCell)
-                    Spacer().frame(width: 8)
-                    ForEach([Tool.pickColour, .copyText, .measure], id: \.self, content: iconCell)
-                }
-                .padding(.horizontal, 20).padding(.vertical, 10)
-                // magnified about the lens centre, so only what's inside the lens looks bigger
-                .scaleEffect(lensActive ? lensZoom : 1, anchor: rowSize.width > 0
-                             ? UnitPoint(x: blobX / rowSize.width, y: blobY / rowSize.height) : .center)
-            }
-            .mask(selShape.position(x: blobX, y: blobY))
-            .foregroundStyle(Color.wadjetAccent)
-            .allowsHitTesting(false)
+            rowContent(iconCell)
+                .mask(selShape.opacity(usesInRowLens ? 1 : 0)
+                    .position(x: blobX, y: blobY)
+                    .transaction { $0.animation = nil })
+                .foregroundStyle(Color.wadjetAccent)
+                .allowsHitTesting(false)
         }
         // the glass lens: identity glass at rest, glass while pressing —
         // animating the effect, never inserted. With the clear-glass patch it
         // sits on top and refracts the icons; without it, glass would blur and
         // tint them, so regular glass sits behind the icons instead
-        #if CLEAR_GLASS_PATCH
-        .overlay { lens(.clear) }
-        #else
+        // With the patch the lens also lives outside the bar's clip (see
+        // morph) so it can overhang; without it the lens stays behind the
+        // icons and clipped to the shape.
+        #if !CLEAR_GLASS_PATCH
         .background { lens(.regular) }
         #endif
         .fixedSize()
@@ -2384,9 +3006,11 @@ struct ToolbarView: View {
                     pressActive = true; pressing = true
                     pressX = v.startLocation.x
                     pressTool = nearestTool(to: v.startLocation.x) // gaps pick the nearest cell
-                    // it slides to the pressed cell with the click spring
+                    // start the sim exactly where the rest highlight was
+                    if let sel = s.tool, let sc = cellCentres[sel] { snapLens(to: sc) }
+                    // the spring carries the lens to the pressed cell
                     if let t = pressTool, let c = cellCentres[t], c.x != blobX {
-                        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x }
+                        setLensTarget(x: c.x)
                     }
                     holdTask = Task { @MainActor in
                         try? await Task.sleep(for: .milliseconds(400))
@@ -2401,7 +3025,10 @@ struct ToolbarView: View {
                 }
                 if dragging {
                     let (lo, hi) = rowEnds
-                    blobX = min(hi, max(lo, v.location.x))
+                    setLensTarget(x: min(hi, max(lo, v.location.x)), pointerY: v.location.y)
+                    // hover callbacks don't fire mid-drag — open the group
+                    // under the lens ourselves, anchored on that cell
+                    if let t = nearestTool(to: v.location.x) { openTheGroup(t.kind) }
                 }
             }
             .onEnded { v in
@@ -2414,12 +3041,14 @@ struct ToolbarView: View {
                 if wasDragging {
                     if let n = nearestTool(to: v.location.x) {
                         if n != s.tool { AppDelegate.shared?.trigger(n) }
-                        // shrink back to the rest capsule on the chosen cell
-                        withAnimation(.spring(response: 0.3, dampingFraction: 0.75)) { blobX = cellCentres[n]?.x ?? blobX }
+                        // the spring carries it home — overshoot is the wobble
+                        if let c = cellCentres[n] { setLensTarget(x: c.x) }
                     }
-                } else if !menuByHold, let t = nearestTool(to: v.location.x), t != s.tool {
-                    AppDelegate.shared?.trigger(t)
-                    withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = cellCentres[t]?.x ?? blobX }
+                } else if !menuByHold, let t = nearestTool(to: v.location.x) {
+                    if t != s.tool {
+                        AppDelegate.shared?.trigger(t)
+                        if let c = cellCentres[t] { setLensTarget(x: c.x) }
+                    } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
                 }
                 pressTool = nil; pressActive = false; menuByHold = false
             })
@@ -2427,23 +3056,71 @@ struct ToolbarView: View {
         .onContinuousHover(coordinateSpace: .named("panel")) { phase in
             switch phase {
             case .active(let p):
+                NSCursor.arrow.set()
+                ctrl.markOverlaysDirty() // loupe off while over the bar
                 if dragging { TipPanel.hide() }
                 else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
-                else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { $0.value.contains(p) })?.key {
-                    if TipPanel.tool != t { AppLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
-                    TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
+                else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
+                    let tip = tipLabel(t)
+                    if TipPanel.current != tip { AppLog.line("hover map -> \(tip) p=\(Int(p.x)),\(Int(p.y))") }
+                    TipPanel.hover(tip, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
+                    openTheGroup(t.kind) // groups open under the pointer
                 } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
-            case .ended: TipPanel.hide()
+            case .ended:
+                TipPanel.hide()
+                ctrl.markOverlaysDirty() // loupe back on the Freeze Frame
             }
         }
         .onChange(of: s.tool) {
-            if !dragging, let t = s.tool, let c = cellCentres[t] {
-                withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) { blobX = c.x; blobY = c.y }
-            }
+            if let t = s.tool { lastUsed[t.kind] = t }
+            // only an active lens interaction goes through the spring;
+            // a passive switch snaps
+            if dragging { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
+            else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
+            // the selected Tool's group is the default open one; a collapsed
+            // group's click opens it
+            if !lensActive { openTheGroup(s.tool?.kind ?? .shot) }
         }
         .padding(.top, contentTop)
+
     }
 }
+
+#if CLEAR_GLASS_PATCH
+/// The pressed-lens effect as one animatable unit: shader, capsule mask and
+/// glass body/rim all read the same interpolated centre/size/stretch.
+struct LensEffect: ViewModifier, @preconcurrency Animatable {
+    var bounds: CGSize = .zero // the source layer's size; samples clamp to it
+    var centre: CGPoint
+    var size: CGSize
+    var stretch: CGSize
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
+                                      AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
+                                                      AnimatablePair<CGFloat, CGFloat>>> {
+        get { .init(.init(centre.x, centre.y),
+                    .init(.init(size.width, size.height), .init(stretch.width, stretch.height))) }
+        set {
+            centre = CGPoint(x: newValue.first.first, y: newValue.first.second)
+            size = CGSize(width: newValue.second.first.first, height: newValue.second.first.second)
+            stretch = CGSize(width: newValue.second.second.first, height: newValue.second.second.second)
+        }
+    }
+    func body(content: Content) -> some View {
+        content
+            .layerEffect(
+                ShaderLibrary.lens(.float2(centre.x, centre.y),
+                                   .float2(size.width, size.height),
+                                   .float2(stretch.width, stretch.height),
+                                   .float2(bounds.width, bounds.height)),
+                maxSampleOffset: CGSize(width: 64, height: 64))
+            .mask {
+                Capsule().frame(width: size.width + 2, height: size.height + 2)
+                    .scaleEffect(x: stretch.width, y: stretch.height)
+                    .position(centre)
+            }
+    }
+}
+#endif
 
 // catches right-clicks without blocking left ones — the view only claims the
 // hit while a rightMouseDown is being dispatched
@@ -2466,37 +3143,56 @@ enum TipPanel {
     static var panel: NSPanel?
     static var task: Task<Void, Never>?
     static var tool: Tool? // button currently hovered, so the tip doesn't chase
+    static var current: String?
+    static var tipSize = CGSize.zero
+    static var anchor = CGRect.zero
+    /// centred under the anchor (a Tool cell or control), just below the
+    /// bar's edge — the cell sits `belowCell` points above it — kept on screen
+    static let belowCell: CGFloat = 10 + 6
+    static func tipOrigin(_ size: CGSize) -> CGPoint {
+        var o = CGPoint(x: anchor.midX - size.width / 2, y: anchor.minY - belowCell - size.height)
+        if let scr = NSScreen.screens.first(where: { $0.frame.intersects(anchor) }) {
+            o.x = min(max(scr.frame.minX + 4, o.x), scr.frame.maxX - size.width - 4)
+        }
+        return o
+    }
+    /// immediate — no hover delay; `anchor` kept for the call sites' sake
     static func hover(_ t: Tool, anchor: CGRect) {
         tool = t
-        task?.cancel()
-        let a = anchor
-        task = Task { @MainActor in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, AppState.shared.openMenu == nil else { return }
-            show(t, anchor: a)
-        }
+        show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: anchor)
     }
-    static func show(_ t: Tool, anchor: CGRect) {
+    /// Same tip for things that aren't a Tool cell (the recording controls).
+    static func hover(_ label: String, anchor: CGRect) {
+        tool = nil
+        show(label, anchor: anchor)
+    }
+    /// the tool under the lens, under its cell while pressed/dragged
+    /// collapsed cells read "<Group> · <last-used Tool>" — the caller
+    /// resolves the label so the lens tip and hover tip read the same
+    static func follow(_ label: String?, anchor: CGRect?) {
+        guard let label, let anchor else { hide(); return }
+        guard AppState.shared.openMenu == nil else { hide(); return }
+        show(label, anchor: anchor)
+    }
+    static func show(_ label: String, anchor a: CGRect) {
+        anchor = a
+        // same label: just re-anchor
+        if let p = panel, current == label { p.setFrameOrigin(tipOrigin(tipSize)); return }
         panel?.close()
-        let label = t.title + (t.shortcutHint.map { "  " + $0 } ?? "")
         let h = NSHostingView(rootView: Text(label).font(.system(size: 11)).foregroundStyle(.white)
             .padding(.horizontal, 9).padding(.vertical, 4)
             .background(Color.black.opacity(0.85), in: .rect(cornerRadius: 6)))
         h.frame.size = h.fittingSize
-        var f = NSRect(origin: CGPoint(x: anchor.maxX - 32 + 12, y: anchor.minY - 28 - h.fittingSize.height),
-                       size: h.fittingSize)
-        if let scr = NSScreen.screens.first(where: { $0.frame.contains(anchor.origin) }) {
-            f.origin.x = min(max(scr.frame.minX + 4, f.origin.x), scr.frame.maxX - f.width - 4)
-            f.origin.y = max(scr.frame.minY + 4, f.origin.y)
-        }
+        tipSize = h.fittingSize; current = label
+        let f = NSRect(origin: tipOrigin(h.fittingSize), size: h.fittingSize)
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 3; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
         p.collectionBehavior = [.canJoinAllSpaces]; p.ignoresMouseEvents = true
         p.contentView = h; p.orderFront(nil); panel = p
-        AppLog.line("tip \(label) anchor=\(Int(anchor.midX)),\(Int(anchor.midY)) at \(Int(f.origin.x)),\(Int(f.origin.y))")
+        AppLog.line("tip \(label) at \(Int(f.origin.x)),\(Int(f.origin.y))")
     }
-    static func hide() { task?.cancel(); task = nil; tool = nil; panel?.close(); panel = nil }
+    static func hide() { task?.cancel(); task = nil; tool = nil; current = nil; panel?.close(); panel = nil }
 }
 
 // a Tool's dropdown menu: its own dark panel under the button. Radio rows
@@ -2510,8 +3206,10 @@ struct ToolMenuView: View {
             switch tool.kind {
             case .shot:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
+                if tool == .capRegion { confirmRow() }
             case .rec:
                 section("Workflow", picks: s.workflows(for: tool), current: s.workflowFor(tool)) { s.workflowByTool[tool] = $0; s.triggerWorkflow = nil } // a menu pick wins over the Shortcut's
+                if tool == .recRegion { confirmRow() }
                 Text("Options").font(.system(size: 11, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
                     .padding(.horizontal, 10).padding(.top, 8).padding(.bottom, 2)
                 section("Countdown", picks: ["Off", "3 s", "5 s", "10 s"], current: s.countdown == "Off" ? "Off" : s.countdown + " s") { v in s.countdown = v.replacingOccurrences(of: " s", with: "") }
@@ -2550,6 +3248,24 @@ struct ToolMenuView: View {
             .buttonStyle(.plain)
         }
     }
+    @ViewBuilder func confirmRow() -> some View {
+        Button {
+            s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
+            s.openMenu = nil; ctrl.syncMenu()
+        } label: {
+            HStack {
+                Image(systemName: "checkmark").font(.system(size: 11, weight: .bold))
+                    .opacity(s.confirmMode == "release" ? 1 : 0)
+                Text("Confirm on Release").font(.system(size: 13)).foregroundStyle(.white)
+                Spacer()
+            }
+            .frame(maxWidth: .infinity, minHeight: 28, alignment: .leading)
+            .padding(.horizontal, 8)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+    }
+
     @ViewBuilder func toggles() -> some View {
         let rows: [(String, Binding<Bool>)] = [
             ("System audio", $s.sysAudio), ("Microphone", $s.mic), ("Show cursor", $s.cursor),

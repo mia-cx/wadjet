@@ -40,6 +40,21 @@ struct ConfigStoreTests {
         #expect(errors[0].message.contains("at least 1"))
     }
 
+    @Test func regionConfirmDefaultsAndValidation() throws {
+        let minimal = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
+        #expect(minimal.tools.region.confirm == .release)
+
+        let manual = try JSONDecoder().decode(WadjetConfig.self, from: Data(#"{"tools":{"region":{"confirm":"manual"}}}"#.utf8))
+        #expect(manual.tools.region.confirm == .manual)
+
+        let url = tempFile()
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"tools":{"region":{"confirm":"bogus"}}}"#.utf8).write(to: url)
+        var errors: [ConfigError] = []
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        #expect(errors.count == 1)
+    }
+
     @Test func recordingDefaultsAndValidation() throws {
         let minimal = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
         #expect(minimal.recording.resolution == 1920)
