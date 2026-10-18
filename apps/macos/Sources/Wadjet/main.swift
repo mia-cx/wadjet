@@ -1878,6 +1878,7 @@ final class OverlayController {
         for (i, fd) in Freeze.shared.displays.enumerated() {
             let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver; p.hasShadow = false
+            p.animationBehavior = .none // no system scale-in: the Freeze Frame must sit exactly on the screen it copies
             p.isOpaque = false; p.backgroundColor = .clear // live desktop shows through when the Freeze Frame is off
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.ignoresMouseEvents = false; p.acceptsMouseMovedEvents = true
@@ -1942,7 +1943,7 @@ final class OverlayController {
                                                 width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
-            p.hasShadow = false
+            p.hasShadow = false; p.animationBehavior = .none
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
             p.contentView = hosting; p.orderFront(nil)
