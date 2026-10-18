@@ -44,6 +44,9 @@ enum Tool: String, CaseIterable {
         var badge: String {
             switch self { case .shot: "camera.fill"; case .rec: "video.fill"; case .util: "wrench.and.screwdriver.fill" }
         }
+        var groupTitle: String {
+            switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities" }
+        }
     }
     var toolID: ToolID { ToolID(rawValue: rawValue)! }
     var hasMenu: Bool { self != .copyText }
@@ -2670,7 +2673,7 @@ struct ToolbarView: View {
         }
         blobX = p.x; blobY = p.y; lensVel = v
         if lensActive, let t = nearestTool(to: p.x) {
-            TipPanel.follow(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex))
+            TipPanel.follow(tipLabel(t), anchor: ctrl.buttonScreenRect(t, on: displayIndex))
         }
         // squash/stretch from the sim's own velocity, low-passed; below
         // 120 pt/s nothing stretches, overshoot does the settle wobble
@@ -2702,6 +2705,12 @@ struct ToolbarView: View {
                        : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
     }
     var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
+    /// a cell's tooltip: collapsed reps name "<Group> · <last-used Tool>"
+    func tipLabel(_ t: Tool) -> String {
+        let base = t.kind != openGroup ? "\(t.kind.groupTitle) · \(t.title)" : t.title
+        return base + (t.shortcutHint.map { "  " + $0 } ?? "")
+    }
+
     /// open a group — the same centred spring as hover; the lens retargets
     /// onto the pointer's position in the new layout, so no jump
     func openTheGroup(_ k: Tool.Kind) {
@@ -2732,10 +2741,12 @@ struct ToolbarView: View {
     }
     // the icon strip once, for the accent-tint mask — same layout as the row
     func iconCell(_ t: Tool, collapsed: Bool) -> some View {
-        Image(systemName: t.symbol).font(.system(size: 22))
+        // identical glyph sizing to cell() so the masked splice joins equal
+        Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+            .frame(width: 26, height: 26)
             .frame(width: toolD, height: selH)
             .overlay(alignment: .bottomTrailing) {
-                if collapsed { Image(systemName: t.kind.badge).font(.system(size: 8)).offset(x: 6, y: -5) }
+                if collapsed { Image(systemName: t.symbol).font(.system(size: 8)).offset(x: 6, y: -5) }
             }
     }
 
@@ -2852,7 +2863,9 @@ struct ToolbarView: View {
     func cell(_ t: Tool, collapsed: Bool) -> some View {
         let selected = s.tool == t
         let c = cellCentres[t] ?? .zero
-        return Image(systemName: t.symbol).resizable().scaledToFit()
+        // a collapsed group's cell IS the group: category icon at Tool size,
+        // the last-used Tool's symbol as the tiny badge
+        return Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
             .frame(width: 26, height: 26)
             // the selected cell's icon and the island's icon are one element:
             // it travels into the bar (and back) as the shape morphs
@@ -2878,8 +2891,8 @@ struct ToolbarView: View {
                 .compositingGroup()
             }
             .overlay(alignment: .bottomTrailing) {
-                if collapsed { // the group's badge on its last-used cell
-                    Image(systemName: t.kind.badge).font(.system(size: 9, weight: .bold))
+                if collapsed { // the last-used Tool's symbol as the badge
+                    Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
                         .foregroundStyle(.white.opacity(0.7))
                         .frame(width: 16, height: 16)
                         .background(Circle().fill(.black.opacity(0.85)))
@@ -3006,8 +3019,9 @@ struct ToolbarView: View {
                 if dragging { TipPanel.hide() }
                 else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
-                    if TipPanel.tool != t { AppLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
-                    TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
+                    let tip = tipLabel(t)
+                    if TipPanel.current != tip { AppLog.line("hover map -> \(tip) p=\(Int(p.x)),\(Int(p.y))") }
+                    TipPanel.hover(tip, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
                     openTheGroup(t.kind) // groups open under the pointer
                 } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
             case .ended:
@@ -3111,10 +3125,12 @@ enum TipPanel {
         show(label, anchor: anchor)
     }
     /// the tool under the lens, under its cell while pressed/dragged
-    static func follow(_ t: Tool?, anchor: CGRect?) {
-        guard let t, let anchor else { hide(); return }
+    /// collapsed cells read "<Group> · <last-used Tool>" — the caller
+    /// resolves the label so the lens tip and hover tip read the same
+    static func follow(_ label: String?, anchor: CGRect?) {
+        guard let label, let anchor else { hide(); return }
         guard AppState.shared.openMenu == nil else { hide(); return }
-        show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: anchor)
+        show(label, anchor: anchor)
     }
     static func show(_ label: String, anchor a: CGRect) {
         anchor = a
