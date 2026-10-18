@@ -111,10 +111,14 @@ public struct ShortcutOptions: Codable, Equatable, Sendable {
     public var microphone: Bool?
     public var cursor: Bool?
     public var clickCircles: Bool?
+    /// `false`: Window/Screen Tools capture at once — the pointer's display or
+    /// the focused window — without the Freeze Frame pick
+    public var confirm: Bool?
     public init(countdown: Int? = nil, systemAudio: Bool? = nil, microphone: Bool? = nil,
-                cursor: Bool? = nil, clickCircles: Bool? = nil) {
+                cursor: Bool? = nil, clickCircles: Bool? = nil, confirm: Bool? = nil) {
         self.countdown = countdown; self.systemAudio = systemAudio; self.microphone = microphone
         self.cursor = cursor; self.clickCircles = clickCircles
+        self.confirm = confirm
     }
 }
 

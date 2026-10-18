@@ -186,6 +186,8 @@ enum SettingsPanes: String, CaseIterable {
                             } ?? false
                             if !ok { c.shortcuts[i].workflow = nil }
                         }
+                        // confirm-off only makes sense on Window/Screen Tools
+                        if Tool(rawValue: newID.rawValue)?.confirmOptional != true { c.shortcuts[i].options.confirm = nil }
                     }
                 })) {
                     ForEach(Tool.allCases, id: \.rawValue) { Text($0.title).tag($0.toolID) }
@@ -203,6 +205,15 @@ enum SettingsPanes: String, CaseIterable {
                     Text("Default").tag("")
                     ForEach(workflows, id: \.self) { Text($0).tag($0) }
                 }
+            }
+            if tool?.confirmOptional == true {
+                Toggle(tool!.kind == .rec ? "Confirm before recording" : "Confirm before capture",
+                       isOn: Binding(get: { sc.options.confirm ?? true }, set: { v in
+                           edit { guard i < $0.shortcuts.count else { return }
+                               // on is the default — write nil so the file stays tidy
+                               $0.shortcuts[i].options.confirm = v ? nil : false
+                           }
+                       }))
             }
             if tool?.kind == .rec {
                 DisclosureGroup("Options") {
