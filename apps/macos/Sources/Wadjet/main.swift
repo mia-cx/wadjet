@@ -1369,9 +1369,12 @@ final class OverlayController {
         h.frame.size = h.fittingSize
         var f = NSRect(origin: .zero, size: h.fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
-        let anchor = buttonScreenRect(t, on: di) ?? toolbarShapeScreenRect(on: di) ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
+        let bar = toolbarShapeScreenRect(on: di)
+        let anchor = buttonScreenRect(t, on: di) ?? bar ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
+        // centred under the Tool, its top 8 pt below the bar's bottom edge
+        let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
-                           y: max(scr.minY + 8, anchor.minY - 8 - (f.height - headroom))) // menu top 8 pt under the cell
+                           y: max(scr.minY + 8, top - (f.height - headroom)))
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
         p.hasShadow = false
