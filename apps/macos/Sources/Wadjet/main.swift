@@ -1701,23 +1701,36 @@ enum WadjetCursors {
         case .pickColour: return symbol("eyedropper", centre: false)
         }
     }
-    /// white glyph with a dark halo so it reads on any backdrop
+    /// white glyph with a soft dark halo so it reads on any backdrop —
+    /// a black template pass under an NSShadow, then the white palette glyph
     static func symbol(_ name: String, centre: Bool) -> NSCursor {
-        let S: CGFloat = 20
+        let S: CGFloat = 24
         let img = NSImage(size: CGSize(width: S, height: S), flipped: false) { r in
+            NSGraphicsContext.current?.imageInterpolation = .high
             guard let sym = NSImage(systemSymbolName: name, accessibilityDescription: nil)?
-                .withSymbolConfiguration(.init(pointSize: 15, weight: .medium)) else { return false }
-            sym.isTemplate = true
-            for dx in [-1.0, 0.0, 1.0] { for dy in [-1.0, 0.0, 1.0] where dx != 0 || dy != 0 {
-                NSColor.black.withAlphaComponent(0.9).set()
-                sym.draw(in: r.offsetBy(dx: dx, dy: dy))
-            } }
-            NSColor.white.set()
+                .withSymbolConfiguration(.init(pointSize: 17, weight: .semibold)
+                    .applying(.init(paletteColors: [.white]))) else { return false }
+            // halo: the same glyph as a black template, blurred 2 pt
+            NSGraphicsContext.saveGraphicsState()
+            let sh = NSShadow(); sh.shadowColor = .black.withAlphaComponent(0.6)
+            sh.shadowBlurRadius = 2; sh.set()
+            sym.isTemplate = true; NSColor.black.set()
+            sym.draw(in: r)
+            NSGraphicsContext.restoreGraphicsState()
+            // the white glyph itself
+            sym.isTemplate = false
             sym.draw(in: r)
             return true
         }
+        // the image's own pixels prove the render: centre light, edge dark
+        if let cg = img.cgImage(forProposedRect: nil, context: nil, hints: nil) {
+            let rep = NSBitmapImageRep(cgImage: cg)
+            let c = rep.colorAt(x: cg.width / 2, y: cg.height / 2) ?? .clear
+            let e = rep.colorAt(x: 1, y: 1) ?? .clear
+            AppLog.line("cursorimg \(name) centre=\(Int(c.redComponent * 255)),\(Int(c.greenComponent * 255)),\(Int(c.blueComponent * 255)) edge=\(Int(e.redComponent * 255)),\(Int(e.greenComponent * 255)),\(Int(e.blueComponent * 255))")
+        }
         // eyedropper points down-leading; the lens/tip is its hotspot
-        return NSCursor(image: img, hotSpot: centre ? NSPoint(x: S / 2, y: S / 2) : NSPoint(x: 4, y: S - 4))
+        return NSCursor(image: img, hotSpot: centre ? NSPoint(x: S / 2, y: S / 2) : NSPoint(x: 5, y: S - 5))
     }
 }
 
