@@ -1386,7 +1386,7 @@ final class OverlayController {
             guard let self, let mp = self.menuPanel else { return e }
             // clicks inside the toolbar are the toolbar's own business —
             // the tap lands in its gesture and toggles the menu from there
-            if toolbarPanels[di]?.frame.contains(NSEvent.mouseLocation) == true { return e }
+            if toolbarShapeScreenRect(on: di)?.contains(NSEvent.mouseLocation) == true { return e }
             // the panel's top 40 pt is scale-in headroom — clicks there count as outside
             let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
             if !body.contains(NSEvent.mouseLocation) {
