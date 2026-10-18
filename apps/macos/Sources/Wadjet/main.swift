@@ -26,18 +26,19 @@ enum Tool: String, CaseIterable {
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
         }
     }
+    // the permanent label under the cell icon — as short as it can be
+    var shortTitle: String {
+        switch self {
+        case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
+        case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
+        }
+    }
     var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; default: .util } }
     var symbol: String {
         switch self {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        }
-    }
-    // its Shortcut's key text, if config.json defines one — reads AppState (main-actor)
-    var shortcutHint: String? {
-        @MainActor get {
-            AppState.shared.config.value.shortcuts.first { $0.tool.rawValue == rawValue }.map { String(describing: $0.keys) }
         }
     }
     enum Kind: CaseIterable { case shot, rec, util
@@ -2714,9 +2715,6 @@ struct ToolbarView: View {
             p.x = min(max(p.x, lo - lensOvershootCap), hi + lensOvershootCap); v.x = 0
         }
         blobX = p.x; blobY = p.y; lensVel = v
-        if lensActive, let t = nearestTool(to: p.x) {
-            TipPanel.follow(tipLabel(t), anchor: ctrl.buttonScreenRect(t, on: displayIndex))
-        }
         // squash/stretch from the sim's own velocity, low-passed; below
         // 120 pt/s nothing stretches, overshoot does the settle wobble
         let raw = 1 + min(max((abs(v.x) - 120) / 1400, 0), 0.3)
@@ -2747,12 +2745,6 @@ struct ToolbarView: View {
                        : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
     }
     var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
-    /// a cell's tooltip: collapsed reps name "<Group> · <last-used Tool>"
-    func tipLabel(_ t: Tool) -> String {
-        let base = t.kind != openGroup ? "\(t.kind.groupTitle) · \(t.title)" : t.title
-        return base + (t.shortcutHint.map { "  " + $0 } ?? "")
-    }
-
     /// open a group — the same centred spring as hover; the lens retargets
     /// onto the pointer's position in the new layout, so no jump
     func openTheGroup(_ k: Tool.Kind) {
@@ -2783,13 +2775,24 @@ struct ToolbarView: View {
     }
     // the icon strip once, for the accent-tint mask — same layout as the row
     func iconCell(_ t: Tool, collapsed: Bool) -> some View {
-        // identical glyph sizing to cell() so the masked splice joins equal
-        Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
-            .frame(width: 26, height: 26)
-            .frame(width: toolD, height: selH)
-            .overlay(alignment: .bottomTrailing) {
-                if collapsed { Image(systemName: t.symbol).font(.system(size: 8)).offset(x: 6, y: -5) }
-            }
+        // pixel-identical layout to cell() so the masked splice joins equal:
+        // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
+        VStack(spacing: 3) {
+            Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+                .frame(width: 24, height: 24)
+                .overlay(alignment: .bottomTrailing) {
+                    if collapsed { // the last-used Tool's symbol as the badge
+                        Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(width: 16, height: 16)
+                            .background(Circle().fill(.black.opacity(0.85)))
+                            .offset(x: 6, y: 4)
+                    }
+                }
+            Text(collapsed ? t.kind.groupTitle : t.shortTitle)
+                .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+        }
+        .frame(width: toolD, height: selH)
     }
 
     /// pixel-res Freeze Frame crop under the whole toolbar panel — the
@@ -2907,12 +2910,25 @@ struct ToolbarView: View {
         let c = cellCentres[t] ?? .zero
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
-        return Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
-            .frame(width: 26, height: 26)
-            // the selected cell's icon and the island's icon are one element:
-            // it travels into the bar (and back) as the shape morphs
-            .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
-            .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
+        return VStack(spacing: 3) {
+            Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+                .frame(width: 24, height: 24)
+                // the selected cell's icon and the island's icon are one element:
+                // it travels into the bar (and back) as the shape morphs
+                .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
+                .overlay(alignment: .bottomTrailing) {
+                    if collapsed { // the last-used Tool's symbol as the badge
+                        Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white.opacity(0.7))
+                            .frame(width: 16, height: 16)
+                            .background(Circle().fill(.black.opacity(0.85)))
+                            .offset(x: 6, y: 4)
+                    }
+                }
+            Text(collapsed ? t.kind.groupTitle : t.shortTitle)
+                .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
+        }
+        .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space
@@ -2932,17 +2948,11 @@ struct ToolbarView: View {
                 }
                 .compositingGroup()
             }
-            .overlay(alignment: .bottomTrailing) {
-                if collapsed { // the last-used Tool's symbol as the badge
-                    Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
-                        .foregroundStyle(.white.opacity(0.7))
-                        .frame(width: 16, height: 16)
-                        .background(Circle().fill(.black.opacity(0.85)))
-                        .offset(x: 4, y: -5)
-                // the menu droplet budding off the rest capsule's corner —
+            .overlay(alignment: .topTrailing) {
+                // the menu droplet budding off the rest capsule's top corner —
                 // hidden while pressing/dragging; high-priority tap so the
                 // row's drag can't take it
-                } else if t.hasMenu && selected && !lensActive {
+                if t.hasMenu && selected && !lensActive {
                     Image(systemName: "chevron.down").font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.white)
                         .frame(width: 26, height: 26)
@@ -2952,7 +2962,7 @@ struct ToolbarView: View {
                         .highPriorityGesture(TapGesture().onEnded { openToolMenu(t) })
                         .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { ToolbarBtnFrames.blobRect[displayIndex] = $0 }
                         .transition(.scale(scale: 0.6).combined(with: .opacity))
-                        .offset(x: 6, y: -8) // ~4 pt inside the capsule's corner
+                        .offset(x: 6, y: 8) // ~4 pt inside the capsule's corner
                 }
             }
             .overlay(RightClickCatcher { openToolMenu(t) })
@@ -3058,14 +3068,10 @@ struct ToolbarView: View {
             case .active(let p):
                 NSCursor.arrow.set()
                 ctrl.markOverlaysDirty() // loupe off while over the bar
-                if dragging { TipPanel.hide() }
-                else if let b = ToolbarBtnFrames.blobRect[displayIndex], b.contains(p) { TipPanel.hide() }
+                if dragging || (ToolbarBtnFrames.blobRect[displayIndex] ?? .zero).contains(p) { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
-                    let tip = tipLabel(t)
-                    if TipPanel.current != tip { AppLog.line("hover map -> \(tip) p=\(Int(p.x)),\(Int(p.y))") }
-                    TipPanel.hover(tip, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
                     openTheGroup(t.kind) // groups open under the pointer
-                } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
+                } else { TipPanel.hide() }
             case .ended:
                 TipPanel.hide()
                 ctrl.markOverlaysDirty() // loupe back on the Freeze Frame
@@ -3142,7 +3148,6 @@ final class RCView: NSView {
 enum TipPanel {
     static var panel: NSPanel?
     static var task: Task<Void, Never>?
-    static var tool: Tool? // button currently hovered, so the tip doesn't chase
     static var current: String?
     static var tipSize = CGSize.zero
     static var anchor = CGRect.zero
@@ -3157,21 +3162,8 @@ enum TipPanel {
         return o
     }
     /// immediate — no hover delay; `anchor` kept for the call sites' sake
-    static func hover(_ t: Tool, anchor: CGRect) {
-        tool = t
-        show(t.title + (t.shortcutHint.map { "  " + $0 } ?? ""), anchor: anchor)
-    }
-    /// Same tip for things that aren't a Tool cell (the recording controls).
+    /// (recording controls, the manual-confirm button — Tools have labels now)
     static func hover(_ label: String, anchor: CGRect) {
-        tool = nil
-        show(label, anchor: anchor)
-    }
-    /// the tool under the lens, under its cell while pressed/dragged
-    /// collapsed cells read "<Group> · <last-used Tool>" — the caller
-    /// resolves the label so the lens tip and hover tip read the same
-    static func follow(_ label: String?, anchor: CGRect?) {
-        guard let label, let anchor else { hide(); return }
-        guard AppState.shared.openMenu == nil else { hide(); return }
         show(label, anchor: anchor)
     }
     static func show(_ label: String, anchor a: CGRect) {
@@ -3192,7 +3184,7 @@ enum TipPanel {
         p.contentView = h; p.orderFront(nil); panel = p
         AppLog.line("tip \(label) at \(Int(f.origin.x)),\(Int(f.origin.y))")
     }
-    static func hide() { task?.cancel(); task = nil; tool = nil; current = nil; panel?.close(); panel = nil }
+    static func hide() { task?.cancel(); task = nil; current = nil; panel?.close(); panel = nil }
 }
 
 // a Tool's dropdown menu: its own dark panel under the button. Radio rows
