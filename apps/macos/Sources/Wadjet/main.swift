@@ -1737,6 +1737,8 @@ enum WadjetCursors {
             proto.draw(in: dst)
             return true
         }
+        // handler-backed images rasterize lazily — force it so drawn is real
+        _ = img.cgImage(forProposedRect: nil, context: nil, hints: nil)
         AppLog.line("cursorimg \(name) glyph=\(Int(drawn.width))x\(Int(drawn.height)) in \(Int(S))")
         // eyedropper points down-leading; the lens/tip is its hotspot
         return NSCursor(image: img, hotSpot: centre ? NSPoint(x: S / 2, y: S / 2) : NSPoint(x: 4, y: S - 4))
