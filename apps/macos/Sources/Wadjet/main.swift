@@ -1821,8 +1821,22 @@ final class OverlayNSView: NSView {
             x: min(bounds.width - 38, s.maxX + 8),
             y: max(8, s.minY - 38))
     }
+    /// manual-confirm bookkeeping for a Tool switch: the pending selection
+    /// belongs to the Tool it was drawn under
+    var lastTool: Tool?
+    func syncConfirmTool() {
+        if lastTool != tool {
+            lastTool = tool
+            if confirming {
+                confirming = false; selOp = nil; sel = nil
+                confirmHost?.removeFromSuperview(); confirmHost = nil
+                needsDisplay = true
+            }
+        }
+    }
     func confirmSel() {
-        guard confirming, let s = sel else { return }
+        guard confirming, let s = sel,
+              tool == .capRegion || tool == .recRegion else { return }
         confirming = false; selOp = nil
         confirmHost?.removeFromSuperview(); confirmHost = nil
         app?.didSelect(s, on: di) // the exact release path
