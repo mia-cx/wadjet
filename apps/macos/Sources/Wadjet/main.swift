@@ -345,11 +345,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0) {
             AppLog.line("statusItem frame = \(self.statusItem.button?.window?.frame.debugDescription ?? "?")")
         }
+        // deliverImmediately: AppKit suspends distributed notifications while the
+        // app is inactive, and Wadjet goes inactive again after every overlay
         DistributedNotificationCenter.default().addObserver(
-            forName: .init("cx.mia.wadjet.cmd"), object: nil, queue: .main
-        ) { [weak self] n in
-            if let cmd = n.object as? String { Task { @MainActor in self?.handleCmd(cmd) } }
-        }
+            self, selector: #selector(distCmd(_:)), name: .init("cx.mia.wadjet.cmd"),
+            object: nil, suspensionBehavior: .deliverImmediately)
+    }
+    @objc func distCmd(_ n: Notification) {
+        if let cmd = n.object as? String { Task { @MainActor in handleCmd(cmd) } }
     }
 
     // debug command channel, driven by tools/cmd.sh
