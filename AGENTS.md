@@ -16,6 +16,10 @@
 - The root is a pnpm Turborepo with Biome. `pnpm lint`, `pnpm build`, and `pnpm test` cover `packages/*` and `apps/*` except `apps/macos`.
 - `packages/protocol/PROTOCOL.md` quotes every fixture in `packages/protocol/fixtures/` in full, and a test fails when they disagree. Change both together.
 
+## Releases
+
+- Every user-visible change to the macOS app adds one changeset (`pnpm changeset` → `@wadjet/macos`, one short summary sentence; keep pending changeset files immutable). See `.changeset/README.md`.
+
 ## Code gotchas
 
 - The selection lens strips Liquid Glass blur and tint by swizzling the private `CABackdropLayer.setFilters:` (`ClearGlassPatch` in `main.swift`). SwiftUI offers no public control for it, so keep the patch and recheck it after each macOS update. It compiles only with the `CLEAR_GLASS_PATCH` condition, which run.sh sets and store builds leave off (`WADJET_CLEAR_GLASS=0 ./run.sh`).
