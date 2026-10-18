@@ -6,7 +6,7 @@ using namespace metal;
 // magnified (kCentre < 1); only a thin band at the rim compresses hard
 // (k climbs past 1, pulling in what lies beyond the lens, so the bar's edges
 // fold inside it), with per-channel dispersion in that band and a faint
-// top-lit hairline. Samples are clamped to the source. `px` is one device
+// pointer-lit hairline sized in device pixels, not points. Samples are clamped to the source. `px` is one device
 // pixel in points (1 / backingScaleFactor): the rim blends the last half-
 // pixel instead of a hard 1-sample step. Gotchas: stitchable
 // functions read program-scope `constant` globals as 0 (use #define), and
@@ -61,13 +61,15 @@ using namespace metal;
         o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
         o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
     }
-    // faint hairline lit from the pointer, plus a small hotspot near it;
+        // faint pixel-wide hairline lit from the pointer, plus a small hotspot;
     // a light far above reproduces the old top-lit look
-    float hair = smoothstep(-1.4, -0.5, s) * (1.0 - smoothstep(-0.5, 0.0, s));
+    // pixel-aware hairline: ~1px rise + ~2px fade at any backing scale
+    float dpx = -sdf / px;
+    float hair = smoothstep(0.0, 1.0, dpx) * (1.0 - smoothstep(1.0, 3.0, dpx));
     float2 ldir = normalize(light - centre);
     float facing = 0.35 + 0.65 * clamp(dot(normalize(sc), ldir) * 0.5 + 0.5, 0.0, 1.0);
     float spec = exp(-length(light - position) / 140.0) * 0.09;
-    o.rgb += half(hair * (facing * 0.06 + spec));
+    o.rgb += half(hair * (facing * 0.03 + spec * 0.5));
     // coverage: sdf 0 → full effect, +half a px → plain backdrop
     return mix(layer.sample(position), o, half(clamp(0.5 - sdf / px, 0.0, 1.0)));
 }
