@@ -2328,10 +2328,9 @@ struct ToolbarView: View {
     var expH: CGFloat { contentTop + selH + d }
     var shapeW: CGFloat { expanded ? expW : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
-    // slack beyond expW: a fully stretched lens (lensW × 1.3 at the last
-    // cell) plus a full anchored group reflow (~2 cells + divider per side)
-    // — hoverRect is shape-based, unaffected
-    var panelW: CGFloat { min(limit, expW) + 260 }
+    // slack beyond expW so a fully stretched lens (lensW × 1.3 at the last
+    // cell) still fits inside the panel — hoverRect is shape-based, unaffected
+    var panelW: CGFloat { min(limit, expW) + 80 }
     // menus and tooltips are their own panels
     var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
@@ -2381,7 +2380,6 @@ struct ToolbarView: View {
 
     var body: some View {
         morph
-            .offset(x: barOffsetX) // pressed reflows anchor on the pointer
             .frame(width: panelW, height: panelH, alignment: .top)
             #if CLEAR_GLASS_PATCH
             // the lens is its own glass-free layer drawn over the bar —
@@ -2411,7 +2409,7 @@ struct ToolbarView: View {
                 if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
                 else {
                     var tx = Transaction(); tx.disablesAnimations = true
-                    withTransaction(tx) { openGroup = s.tool?.kind ?? .shot; barOffsetX = 0 }
+                    withTransaction(tx) { openGroup = s.tool?.kind ?? .shot }
                 }
                 syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
@@ -2572,11 +2570,6 @@ struct ToolbarView: View {
     /// one group open at a time; the rest collapse to their last-used Tool
     @State var openGroup: Tool.Kind = .shot
     @State var lastUsed: [Tool.Kind: Tool] = [:]
-    /// horizontal offset of the whole bar inside the panel — nonzero only
-    /// while a pressed reflow anchors the cell under the pointer
-    @State var barOffsetX: CGFloat = 0
-    /// the cell whose panel x must not move through a pressed reflow
-    @State var pendingAnchor: (tool: Tool, x: CGFloat)?
     /// One spring sim owns the lens: position chases lensTarget, velocity
     /// drives the stretch — no gesture-event velocity, no debounce.
     @State var lensVel = CGPoint.zero
@@ -2708,12 +2701,11 @@ struct ToolbarView: View {
                        : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
     }
     var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
-    /// open a group; while pressed the reflow is anchored on `anchor` — the
-    /// cell under the pointer keeps its panel x, the bar shifts under it
-    func openTheGroup(_ k: Tool.Kind, anchor t: Tool? = nil) {
+    /// open a group — the same centred spring as hover; the lens retargets
+    /// onto the pointer's position in the new layout, so no jump
+    func openTheGroup(_ k: Tool.Kind) {
         guard k != openGroup else { return }
-        if let t, let r = ToolbarBtnFrames.rects[displayIndex]?[t] { pendingAnchor = (t, r.midX) }
-        AppLog.line("openTheGroup \(k) anchor=\(t?.title ?? "-") off=\(Int(barOffsetX))")
+        AppLog.line("openTheGroup \(k)")
         withAnimation(.spring(duration: 0.35)) { openGroup = k }
     }
     func nearestTool(to x: CGFloat) -> Tool? {
@@ -2761,7 +2753,7 @@ struct ToolbarView: View {
     #if CLEAR_GLASS_PATCH
     /// the lens capsule's centre in panel coords
     var lensCentre: CGPoint {
-        CGPoint(x: (panelW - rowSize.width) / 2 + blobX + barOffsetX, y: shapeTop + contentTop + blobY)
+        CGPoint(x: (panelW - rowSize.width) / 2 + blobX, y: shapeTop + contentTop + blobY)
     }
     /// the lens capsule's centre in row space (for the accent mask)
     var lensCentreInRow: CGPoint {
@@ -2821,7 +2813,6 @@ struct ToolbarView: View {
                 .frame(width: shapeW, height: shapeH, alignment: .top)
                 .padding(.top, shapeTop + contentTop)
             }
-            .offset(x: barOffsetX)
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -2917,15 +2908,6 @@ struct ToolbarView: View {
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
-                // a pressed reflow keeps the anchor cell under the pointer:
-                // correct per frame (geometry reports the animated position)
-                // until the press ends, not just at the landed frame
-                if let a = pendingAnchor, a.tool == t {
-                    var tx = Transaction(); tx.disablesAnimations = true
-                    withTransaction(tx) { barOffsetX += a.x - f.midX }
-                    AppLog.line("anchor \(t.title) off -> \(Int(barOffsetX))")
-                    if !lensActive { pendingAnchor = nil }
-                }
             }
     }
 
@@ -2990,7 +2972,7 @@ struct ToolbarView: View {
                     setLensTarget(x: min(hi, max(lo, v.location.x)), pointerY: v.location.y)
                     // hover callbacks don't fire mid-drag — open the group
                     // under the lens ourselves, anchored on that cell
-                    if let t = nearestTool(to: v.location.x) { openTheGroup(t.kind, anchor: t) }
+                    if let t = nearestTool(to: v.location.x) { openTheGroup(t.kind) }
                 }
             }
             .onEnded { v in
@@ -3025,7 +3007,7 @@ struct ToolbarView: View {
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
                     if TipPanel.tool != t { AppLog.line("hover map -> \(t.title) p=\(Int(p.x)),\(Int(p.y)) frames=\(ToolbarBtnFrames.rects[displayIndex]?.count ?? 0)") }
                     TipPanel.hover(t, anchor: ctrl.buttonScreenRect(t, on: displayIndex) ?? .zero)
-                    openTheGroup(t.kind, anchor: lensActive ? t : nil) // groups open under the pointer
+                    openTheGroup(t.kind) // groups open under the pointer
                 } else { if TipPanel.tool != nil { AppLog.line("hover map -> none p=\(Int(p.x)),\(Int(p.y))") }; TipPanel.hide() }
             case .ended:
                 TipPanel.hide()
