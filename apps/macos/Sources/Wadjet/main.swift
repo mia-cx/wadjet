@@ -3623,7 +3623,8 @@ struct BarGlassEffect: ViewModifier {
         content.layerEffect(
             ShaderLibrary.barGlass(.float2(rect.minX, rect.minY), .float2(rect.width, rect.height),
                                    .float(radius), .float2(bounds.width, bounds.height),
-                                   .float2(Float(lp.x), Float(lp.y))),
+                                   .float2(Float(lp.x), Float(lp.y)),
+                                   .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
             maxSampleOffset: CGSize(width: 32, height: 32))
     }
 }
@@ -3657,7 +3658,8 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
                                    {
                                        let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height, above: centre)
                                        return .float2(Float(lp.x), Float(lp.y))
-                                   }()),
+                                   }(),
+                                   .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
                 maxSampleOffset: CGSize(width: 64, height: 64))
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
