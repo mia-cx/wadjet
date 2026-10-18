@@ -39,9 +39,28 @@ using namespace metal;
     float k = mix(kCentre, kRim, e);
     float dk = disp * e;
     float2 lo = float2(0.5), hi = bounds - 0.5;
-    half4 o = layer.sample(clamp(centre + c * k, lo, hi));
-    o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
-    o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
+    half4 o;
+    if (e > 0.01) {
+        // the band minifies (k climbs past 1): several source px fold into
+        // one output px, and point-sampling the folded bar edge aliases —
+        // average 5 taps across this pixel's radial footprint. The map is
+        // m(c) = c·k(sdf); the footprint in points ≈ (k + |c|·dk/dsdf)·px.
+        float dksdf = (kRim - kCentre) * 3.0 * u * u / band;
+        float fp = fabs(k + length(c) * dksdf) * px;
+        float2 dir = c / max(length(c), 1e-3); // radial direction, source space
+        half4 acc = 0;
+        for (int i = -2; i <= 2; i++) {
+            float t = float(i) * 0.2 * fp;
+            acc.ga += layer.sample(clamp(centre + c * k + dir * t, lo, hi)).ga;
+            acc.r += layer.sample(clamp(centre + c * (k - dk) + dir * t, lo, hi)).r;
+            acc.b += layer.sample(clamp(centre + c * (k + dk) + dir * t, lo, hi)).b;
+        }
+        o = acc / 5.0;
+    } else {
+        o = layer.sample(clamp(centre + c * k, lo, hi));
+        o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
+        o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
+    }
     // faint hairline lit from the pointer, plus a small hotspot near it;
     // a light far above reproduces the old top-lit look
     float hair = smoothstep(-1.4, -0.5, s) * (1.0 - smoothstep(-0.5, 0.0, s));
