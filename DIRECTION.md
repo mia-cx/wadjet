@@ -6,6 +6,7 @@ It starts as a private Swift app for macOS 26+.
 ## Current effort
 
 The [wadjet v1 map](https://github.com/mia-cx/wadjet/issues/1) holds the decisions; the [macOS v1 PRD](https://github.com/mia-cx/wadjet/issues/17) turns them into a build plan, sliced into #18–#45. The [Wadjet Server PRD](https://github.com/mia-cx/wadjet/issues/47) does the same for the server (#48–#56); its 18 drafting decisions follow their recommendations until Mia reviews them.
+The [wadjet Markup map](https://github.com/mia-cx/wadjet/issues/89) charts Markup Tools, the Canvas, and the Editor toward a Markup PRD that ships before the v1 release.
 The native prototype of the Freeze Frame overlay, toolbar, and toast became the app itself: `apps/macos`, an Xcode project with the UI-free `WadjetKit` package, built by CI on every change.
 Shipped on the Mac: sandbox, the live `config.json` store, the Workflow runner with every local Step, Shortcuts, the Settings window, and the History store with OCR and the Recent submenu. Still simulated: Recording and uploads; the History window, Destinations, and GIF are not built yet.
 Shipped on the server: the protocol doc with replayed fixtures, the Hono core on Node (filesystem + SQLite), the Docker image (S3 + Postgres optional), and the Cloudflare Worker (R2, D1, edge purge; dry-run only, not deployed). Multipart uploads, thumbnails, deletion links, and the `.sxcu` are in review; OAuth, Helm, and deployment follow.
@@ -15,13 +16,13 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 
 - Capture the cursor and select regions on a Freeze Frame of every screen. It looks like macOS's own screenshot UI.
 - The toolbar shows on every display at once: as the notch on the built-in display, or a black fake Dynamic Island on other displays, showing the current Tool. It expands on hover into Liquid Glass with touch-size Tool buttons; on displays without a notch it drops below the menu bar instead of covering it. Only the hovered toolbar expands, and only the pointer's display shows the loupe.
-- The expanded toolbar groups its Tools: still (Region, Window, Screen) | video (Region, Window, Screen) | utilities (Pick colour, Copy text, Measure), split by thin dividers. One group is open at a time and shows all its Tools; the others collapse to their group's icon (camera, video camera, tools) with a tiny badge of their last-used Tool. Hovering a group opens it, and so does dragging the lens into it, with the same smooth centred expand either way. Markup comes later as its own group: it's a whole suite of mixed vector and raster tools.
+- The expanded toolbar groups its Tools: still (Region, Window, Screen) | video (Region, Window, Screen) | utilities (Pick colour, Copy text, Measure), split by thin dividers. One group is open at a time and shows all its Tools; the others collapse to their group's icon (camera, video camera, tools) with a tiny badge of their last-used Tool. Hovering a group opens it, and so does dragging the lens into it, with the same smooth centred expand either way. Markup is its own group: Markup Tools draw Annotations on the live screen or the Freeze Frame, and Capture and Record Tools capture them.
 - Region selection either confirms on release or waits for a manual confirm, so a region can be moved and resized before the Screenshot is taken or the Recording starts. A toggle switches between the two. There are no typed width/height fields.
 - Clicking the selected Tool opens its menu: its Workflow, Recording options, copy format, or Measure mode. Each Tool keeps its own Workflow.
 - Each Tool shows a short permanent label under its icon (collapsed groups read Still / Video / Utilities); Tools have no hover tooltips — the recording and confirm buttons keep theirs. The loupe flips to stay on screen.
 - Scroll cycles the selected Tool's variants: Region, Window, Screen (within Capture or within Record), Measure modes, or copy formats. Option+scroll changes the Tool's value, such as Measure's tolerance. Space toggles Region and Window, as in macOS.
 - Freeze Frames and Screenshots keep HDR on HDR displays; HDR Screenshots save as HEIC with a gain map. Recordings are SDR in v1.
-- Tools are Capture region, window, and screen; Record region, window, and screen; Pick colour; Copy text; and Measure. Brushes and markup are deferred.
+- Tools are Capture region, window, and screen; Record region, window, and screen; Pick colour; Copy text; and Measure. Markup Tools arrive with the Markup map.
 - Pick colour, Copy text, and Measure put their result on the clipboard and run no Workflow.
 - Measure works like PowerToys Screen Ruler: Bounds (drag a box; Shift keeps it), Spacing, Horizontal, and Vertical, which find edges from the pointer on the Freeze Frame. Values are in points; a click copies them.
 - Pick colour's loupe shows hex, rgb, hsl, oklch, and lab. It copies hex by default; the format is set in Settings or the Tool's menu.
@@ -32,7 +33,7 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - A Workflow can repeat a Step, with separate options for each instance.
 - Use built-in Steps in v1. Custom command and script Steps are deferred.
 - After-capture Steps are Save file, Copy image, Copy file, Open in an app, Show toast, and Pin to screen.
-- Show toast is an iOS-style thumbnail in the top-right; clicking it opens the file until the editor exists.
+- Show toast is an iOS-style thumbnail in the top-right; clicking it opens the file until the Editor exists, then the Screenshot's Canvas in the Editor.
 - Pin to screen opens a Screenshot in a borderless, always-on-top window you can drag, pan, zoom, and resize.
 - After-upload Steps retain that catalogue and add Copy link, Copy image + link in one clipboard item, and Open link.
 - Order Copy image before Copy link for the image-then-link sequence.
@@ -78,6 +79,6 @@ Upload starts disabled. wadjet ships no Shortcuts, like iShare, and flags a hotk
 
 ## Later efforts
 
-Scrolling capture, an annotation editor, and public release are later efforts.
+Scrolling capture and public release are later efforts.
 A free public Wadjet Server with 30-day storage may come with public release.
 Use [CONTEXT.md](CONTEXT.md) for the glossary and the map's linked tickets for decision details.

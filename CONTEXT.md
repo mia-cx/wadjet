@@ -28,6 +28,26 @@ _Avoid_: Snap, still
 A Capture that is a video or GIF rather than a still image.
 _Avoid_: Screencast, video capture
 
+### Markup
+
+**Markup Tool**:
+A Tool in the toolbar's Markup group that draws Annotations anywhere on the live screen or the Freeze Frame, with no region selection.
+It captures nothing itself; Capture and Record Tools capture whatever Annotations are on screen.
+_Avoid_: Drawing tool, annotation tool
+
+**Annotation**:
+One vector object drawn by a Markup Tool, such as a shape, line, text, or step counter. It stays on screen until erased or cleared, and stays editable inside a Canvas.
+_Avoid_: A markup, drawing, mark
+
+**Canvas**:
+wadjet's editable image document, saved as a `.wadjet` file: the whole uncropped screen, the crop and its corner radius, and every Annotation as its own layer.
+History keeps a Canvas for each Screenshot; the clipboard and the Workflow get the flattened image.
+_Avoid_: Project, document, layered image
+
+**Editor**:
+The window that opens a Canvas or any image file to recrop it and edit its Annotations, then save, copy, share, or run a Screenshot Workflow on the result.
+_Avoid_: Annotate window, viewer
+
 ### Customisation
 
 **Shortcut**:
