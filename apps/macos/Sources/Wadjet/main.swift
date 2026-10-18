@@ -71,9 +71,14 @@ final class AppState: ObservableObject {
     @Published var phase: Phase = .desktop
     @Published var recActive = false // a Recording is running (independent of the overlay)
     // Screenshot options, toggled live on an open Freeze Frame — session state
-    // like the recording toggles, not persisted
+    // like the recording toggles, not persisted. Each fresh capture starts
+    // from Settings' cursor default, so these are per-capture overrides.
     @Published var shotCursor = true { didSet { AppDelegate.shared?.overlayCtrl.swapFrozenImages() } }
     @Published var shotWadjet = true { didSet { AppDelegate.shared?.overlayCtrl.swapFrozenImages() } }
+    func applyCaptureDefaults() {
+        shotCursor = config.value.capture.cursor
+        cursor = config.value.capture.cursor
+    }
     @Published var bubblesDying = false // set while a recording bubble merges back into the island
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
@@ -713,17 +718,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // a Record Shortcut always stops the Recording, Freeze Frame or not —
         // and must not touch the Recording's options or its stored Workflow
         if s.recActive && tool.kind == .rec { stopRecording(); return }
+        // a fresh capture starts from Settings' defaults; the Shortcut's own
+        // options and any menu toggles then override on top. Toolbar triggers
+        // do the same in trigger() — never mid-capture (the Recording reads
+        // cursor after the overlay closes).
+        if s.phase == .desktop { s.applyCaptureDefaults() }
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
         if let v = sc.options.cursor { if tool.kind == .shot { s.shotCursor = v } else { s.cursor = v } }
         if let v = sc.options.clickCircles { s.clickCircles = v }
         s.triggerWorkflow = sc.workflow
-        trigger(tool, at: ContinuousClock.now) // Shortcut press -> Freeze Frame latency starts here
+        trigger(tool, at: ContinuousClock.now, applyDefaults: false) // Shortcut press -> Freeze Frame latency starts here
     }
 
     // MARK: trigger
-    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now) {
+    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true) {
         let s = AppState.shared
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
@@ -738,6 +748,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.phase == .desktop && s.recActive && tool.kind == .rec { stopRecording(); return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
+        if applyDefaults { s.applyCaptureDefaults() }
         Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
     }
     func permissionNeeded() {
