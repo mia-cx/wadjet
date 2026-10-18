@@ -3334,7 +3334,7 @@ struct ToolbarView: View {
     /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
     /// visible bar (masked into morph) and the lens's input — so inside the
-    /// lens the bar reads like outside, plus the lens's refraction.
+    /// lens the bar reads exactly like outside, plus the lens's refraction.
     let notchOverscan: CGFloat = 200
     /// the visible bar keeps its full rim (`rimGain` 1); lensSource's copy
     /// tones it down so the lens doesn't stack a highlight on a highlight
