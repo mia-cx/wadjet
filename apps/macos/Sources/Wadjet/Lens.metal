@@ -6,9 +6,10 @@ using namespace metal;
 // magnified (kCentre < 1); only a thin band at the rim compresses hard
 // (k climbs past 1, pulling in what lies beyond the lens, so the bar's edges
 // fold inside it), with per-channel dispersion in that band and a faint
-// pointer-lit hairline sized in device pixels, not points. Samples are clamped to the source. `px` is one device
-// pixel in points (1 / backingScaleFactor): the rim blends the last half-
-// pixel instead of a hard 1-sample step. Gotchas: stitchable
+// pointer-lit hairline. Samples are clamped to the source. `px` is one
+// device pixel in points (1 / backingScaleFactor): the rim blends the last
+// half-pixel instead of a hard 1-sample step, and the hairline is sized in
+// pixels so it stays a soft ~3 px line at 1× and 2×. Gotchas: stitchable
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
 // keep the whole sampled half4 and overwrite only r and b.
@@ -61,9 +62,9 @@ using namespace metal;
         o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
         o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
     }
-        // faint pixel-wide hairline lit from the pointer, plus a small hotspot;
-    // a light far above reproduces the old top-lit look
-    // pixel-aware hairline: ~1px rise + ~2px fade at any backing scale
+    // faint hairline lit from the pointer, plus a small hotspot near it; a
+    // light far above reproduces the old top-lit look. Measured in device
+    // pixels: rises over the outer pixel, fades over the next two
     float dpx = -sdf / px;
     float hair = smoothstep(0.0, 1.0, dpx) * (1.0 - smoothstep(1.0, 3.0, dpx));
     float2 ldir = normalize(light - centre);
