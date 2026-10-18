@@ -34,6 +34,9 @@ enum Tool: String, CaseIterable {
         }
     }
     var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; default: .util } }
+    /// Tools that can skip the pick: one obvious target (the pointer's display
+    /// or the focused window) — a Shortcut can capture them without confirming
+    var confirmOptional: Bool { [.capWindow, .capScreen, .recWindow, .recScreen].contains(self) }
     var symbol: String {
         switch self {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
@@ -471,6 +474,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 PointerLight.shared.screen = CGPoint(x: x, y: y)
                 PointerLight.shared.debugHoldUntil = Date().addingTimeInterval(5)
             }
+        case "now" where parts.count > 1: // debug: a confirm-off Shortcut press
+            if let t = Tool(rawValue: parts[1]) { trigger(t, immediate: true) }
         case "capture": // debug: a full-display shot on the pointer's display
             if s.phase == .frozen, s.tool?.kind == .shot {
                 AppLog.line("capture: pointer at \(Int(NSEvent.mouseLocation.x)),\(Int(NSEvent.mouseLocation.y))")
@@ -732,11 +737,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if let v = sc.options.cursor { if tool.kind == .shot { s.shotCursor = v } else { s.cursor = v } }
         if let v = sc.options.clickCircles { s.clickCircles = v }
         s.triggerWorkflow = sc.workflow
-        trigger(tool, at: ContinuousClock.now, applyDefaults: false) // Shortcut press -> Freeze Frame latency starts here
+        trigger(tool, at: ContinuousClock.now, applyDefaults: false,
+                immediate: sc.options.confirm == false && tool.confirmOptional) // Shortcut press -> Freeze Frame latency starts here
     }
 
     // MARK: trigger
-    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true) {
+    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
@@ -752,7 +758,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         if applyDefaults { s.applyCaptureDefaults() }
-        Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
+        Task { await overlayCtrl.freezeAndShow(tool: tool, start: start, immediate: immediate) }
     }
     func permissionNeeded() {
         _ = CGRequestScreenCaptureAccess()
@@ -785,6 +791,47 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         } catch {
             AppLog.line("window capture \(id) failed: \(error.localizedDescription)")
             return nil
+        }
+    }
+    /// the frontmost app's first window that's also in the frozen window list —
+    /// nil when Wadjet is frontmost or nothing matches (window numbers are
+    /// compared as Int; CGWindowID() traps on bad values)
+    func focusedWindow() -> (id: CGWindowID, frame: CGRect, display: Int)? {
+        guard let front = NSWorkspace.shared.frontmostApplication,
+              front.processIdentifier != getpid() else { return nil }
+        let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for w in infos {
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
+                  let wn = w[kCGWindowNumber as String] as? Int else { continue }
+            for (di, fd) in Freeze.shared.displays.enumerated() {
+                if let e = fd.windowFrames.first(where: { Int($0.id) == wn }) {
+                    return (e.id, e.frame, di)
+                }
+            }
+        }
+        return nil
+    }
+    /// a confirm-off Shortcut: shoot without the overlay — Screen Tools take
+    /// the pointer's display, Window Tools the focused window. Anything
+    /// ambiguous falls back to the normal pick. Doesn't activate Wadjet, so
+    /// the focused window keeps focus.
+    func captureImmediately(_ tool: Tool) {
+        AppState.shared.tool = tool // didSelect/didSelectWindow/showsFrozen read it
+        switch tool {
+        case .capScreen, .recScreen:
+            let di = overlayCtrl.mouseDisplay()
+            didSelect(CGRect(origin: .zero, size: Freeze.shared.displays[di].screen.frame.size), on: di)
+        case .capWindow, .recWindow:
+            if let w = focusedWindow() {
+                AppLog.line("immediate: window \(w.id) on d\(w.display)")
+                didSelectWindow(id: w.id, frame: w.frame, on: w.display)
+            } else {
+                AppLog.line("immediate: no focused window — falling back to the pick")
+                overlayCtrl.showPanels(tool: tool)
+            }
+        default:
+            overlayCtrl.showPanels(tool: tool)
         }
     }
     func didSelectWindow(id: CGWindowID, frame: CGRect, on display: Int) {
@@ -1592,7 +1639,7 @@ final class OverlayController {
         init(_ description: String) { errorDescription = description }
     }
 
-    func freezeAndShow(tool: Tool, start: ContinuousClock.Instant) async {
+    func freezeAndShow(tool: Tool, start: ContinuousClock.Instant, immediate: Bool = false) async {
         func ms(_ d: Duration) -> Int { Int(d / .milliseconds(1)) }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -1615,6 +1662,14 @@ final class OverlayController {
             // the same per-display work as the screenshots
             let tCapture = start.duration(to: .now)
             await MainActor.run {
+                // a confirm-off Shortcut: the captures above filled the displays,
+                // windows and corners the select paths need — shoot without the
+                // overlay and leave the latency/phase logging out, it's wrong here
+                if immediate {
+                    AppLog.line("freeze \(ms(start.duration(to: .now))) ms → immediate \(tool.title)")
+                    AppDelegate.shared?.captureImmediately(tool)
+                    return
+                }
                 self.showPanels(tool: tool)
                 CATransaction.flush() // commit the Freeze Frame layers, then stop the clock
                 let total = start.duration(to: .now)
