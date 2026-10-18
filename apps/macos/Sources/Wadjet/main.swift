@@ -2497,6 +2497,7 @@ struct ToolbarView: View {
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
     /// visible bar (masked into morph) and the lens's input — so inside the
     /// lens the bar reads exactly like outside, plus the lens's refraction.
+    let notchOverscan: CGFloat = 200
     var barSurface: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
@@ -2508,9 +2509,12 @@ struct ToolbarView: View {
             }
         }
         .layerEffect(
-            ShaderLibrary.barGlass(.float2((panelW - shapeW) / 2, shapeTop),
-                                   .float2(shapeW, shapeH), .float(selH / 2 + d),
-                                   .float2(panelW, panelH)),
+            // under a notch the bar hangs from the screen's top edge: extend the
+            // glass rect above the panel so the top has no rounded corners,
+            // rim or edge bend — only the sides and bottom are glass edges
+            ShaderLibrary.barGlass(.float2((panelW - shapeW) / 2, shapeTop - (hasNotch ? notchOverscan : 0)),
+                                   .float2(shapeW, shapeH + (hasNotch ? notchOverscan : 0)),
+                                   .float(selH / 2 + d), .float2(panelW, panelH)),
             maxSampleOffset: CGSize(width: 32, height: 32))
         .mask(alignment: .top) {
             shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
