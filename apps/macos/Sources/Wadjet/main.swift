@@ -3022,7 +3022,7 @@ struct ToolbarView: View {
             #if CLEAR_GLASS_PATCH
             // while frozen the bar is our own surface — the same view the
             // lens bends — so inside the lens reads like outside
-            if lensBg != nil, !recording { barSurface() }
+            if lensBg != nil, !recording { barSurface }
             #endif
             expandedContent
                 .frame(width: expW, height: expH, alignment: .top)
@@ -3336,9 +3336,7 @@ struct ToolbarView: View {
     /// visible bar (masked into morph) and the lens's input — so inside the
     /// lens the bar reads exactly like outside, plus the lens's refraction.
     let notchOverscan: CGFloat = 200
-    /// the visible bar keeps its full rim (`rimGain` 1); lensSource's copy
-    /// tones it down so the lens doesn't stack a highlight on a highlight
-    func barSurface(rimGain: CGFloat = 1) -> some View {
+    var barSurface: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
                 // frost first, so the glass shader's edge, fringe and rim stay crisp
@@ -3354,8 +3352,7 @@ struct ToolbarView: View {
         .modifier(BarGlassEffect(ctrl: ctrl, di: displayIndex,
                                  rect: CGRect(x: (panelW - shapeW) / 2, y: shapeTop - (hasNotch ? notchOverscan : 0),
                                               width: shapeW, height: shapeH + (hasNotch ? notchOverscan : 0)),
-                                 radius: selH / 2 + d, bounds: CGSize(width: panelW, height: panelH),
-                                 rimGain: rimGain))
+                                 radius: selH / 2 + d, bounds: CGSize(width: panelW, height: panelH)))
         .mask(alignment: .top) {
             shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
         }
@@ -3363,9 +3360,7 @@ struct ToolbarView: View {
     }
 
     /// a glass-free copy of what sits under the lens — backdrop views can't
-    /// rasterize into layerEffect, so the shader bends this instead. Its
-    /// barSurface copy passes a low rimGain: inside the lens the bar reads
-    /// like outside except the rim it folds in is toned down.
+    /// rasterize into layerEffect, so the shader bends this instead
     var lensSource: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
@@ -3375,7 +3370,7 @@ struct ToolbarView: View {
                     .frame(width: panelW, height: panelH)
             }
             ZStack(alignment: .top) {
-                barSurface(rimGain: 0.35)
+                barSurface
                 ZStack {
                     iconStrip(.white)
                     iconStrip(Color.wadjetAccent)
@@ -3626,7 +3621,6 @@ struct BarGlassEffect: ViewModifier {
     var rect: CGRect
     var radius: CGFloat
     var bounds: CGSize
-    var rimGain: CGFloat = 1 // scales the glow+rim terms; the lens's bar copy wants less
     @ObservedObject var light = PointerLight.shared
     func body(content: Content) -> some View {
         let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height,
@@ -3635,7 +3629,6 @@ struct BarGlassEffect: ViewModifier {
             ShaderLibrary.barGlass(.float2(rect.minX, rect.minY), .float2(rect.width, rect.height),
                                    .float(radius), .float2(bounds.width, bounds.height),
                                    .float2(Float(lp.x), Float(lp.y)),
-                                   .float(Float(rimGain)),
                                    .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
             maxSampleOffset: CGSize(width: 32, height: 32))
     }
