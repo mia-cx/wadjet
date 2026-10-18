@@ -215,10 +215,13 @@ final class Freeze {
     func crop(rect: CGRect, on d: Int, hdr: Bool = false) -> CGImage? {
         guard d < displays.count else { return nil }
         let f = displays[d]
-        let src = f.output(hdr: hdr)
-        let sx = CGFloat(src.width) / f.screen.frame.width
-        let sy = CGFloat(src.height) / f.screen.frame.height
-        let r = CGRect(x: rect.origin.x * sx, y: (f.screen.frame.height - rect.origin.y - rect.height) * sy,
+        return Freeze.pixelCrop(of: f.output(hdr: hdr), rect: rect, in: f.screen)
+    }
+    /// view-rect (bottom-left) -> pixel crop of a full-display image
+    static func pixelCrop(of src: CGImage, rect: CGRect, in screen: NSScreen) -> CGImage? {
+        let sx = CGFloat(src.width) / screen.frame.width
+        let sy = CGFloat(src.height) / screen.frame.height
+        let r = CGRect(x: rect.origin.x * sx, y: (screen.frame.height - rect.origin.y - rect.height) * sy,
                        width: rect.width * sx, height: rect.height * sy).integral
         return src.cropping(to: r)
     }
@@ -740,7 +743,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.phase == .frozen {
             if s.tool != tool {
                 guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
-                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)")
+                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.applyFreezeVisibility(); AppLog.line("tool switched to \(tool.title)")
             }
             return
         }
@@ -810,6 +813,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
+            if !overlayCtrl.showsFrozen {
+                // the Screenshot is taken at confirm — collect every overlay-
+                // session window before teardown so it can be left out
+                let screen = Freeze.shared.displays[display].screen
+                var ids = Set(overlayCtrl.panels.map(\.windowNumber))
+                ids.formUnion(overlayCtrl.toolbarPanels.values.map(\.windowNumber))
+                ids.formUnion(overlayCtrl.recBubblePanels.values.map(\.windowNumber))
+                ids.formUnion(overlayCtrl.dyingBubbles.values.map(\.windowNumber))
+                if let m = overlayCtrl.menuPanel { ids.insert(m.windowNumber) }
+                overlayCtrl.closeAll()
+                Task { @MainActor in
+                    let thumb = await overlayCtrl.liveShot(rect: rect, screen: screen, excluding: ids)
+                    self.runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))")
+                }
+                return
+            }
             // screenshots keep HDR pixels when the display provides them
             let thumb = Freeze.shared.crop(rect: rect, on: display, hdr: true)
             overlayCtrl.closeAll()
@@ -1426,6 +1445,11 @@ final class OverlayController {
     /// Freeze Frame is gone then, so nothing else can supply them)
     var chromeScreens: [NSScreen] = []
     var frozenImageViews: [NSView] = [] // each Freeze panel's picture layer
+    /// whether the frozen picture shows over the desktop — off when Settings
+    /// has Freeze disabled, except for Utilities, which read the frozen pixels
+    var showsFrozen: Bool {
+        AppState.shared.config.value.capture.freeze || AppState.shared.tool?.kind == .util
+    }
     /// the Cursor/Wadjet toggles act on the Freeze Frame already up — swap every
     /// panel's picture to the new pick, keeping HDR where the variant has it
     func swapFrozenImages() {
@@ -1524,7 +1548,7 @@ final class OverlayController {
         // darkened, under .regular glass for the rim — nil without a Freeze
         var backdrop: CGImage? = nil
         #if CLEAR_GLASS_PATCH
-        if di < Freeze.shared.displays.count {
+        if showsFrozen, di < Freeze.shared.displays.count {
             backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: f.minY - scr.minY,
                                                      width: f.width, height: f.height - headroom), on: di)
         }
@@ -1652,7 +1676,9 @@ final class OverlayController {
         let ownWindows = content.windows.filter { w in
             ownWindow(w) && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
         }
-        let needBare = !ownWindows.isEmpty
+        // bare images only feed the frozen display swap — skip them when the
+        /// Freeze Frame isn't shown (the live shot at confirm decides then)
+        let needBare = AppState.shared.config.value.capture.freeze && !ownWindows.isEmpty
         if !ownWindows.isEmpty {
             AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\($0.frame)" })")
         }
@@ -1797,6 +1823,7 @@ final class OverlayController {
         for (i, fd) in Freeze.shared.displays.enumerated() {
             let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver; p.hasShadow = false
+            p.isOpaque = false; p.backgroundColor = .clear // live desktop shows through when the Freeze Frame is off
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.ignoresMouseEvents = false; p.acceptsMouseMovedEvents = true
             p.hidesOnDeactivate = false
@@ -1807,6 +1834,7 @@ final class OverlayController {
             imageView.layer?.contents = fd.output(hdr: true)
             imageView.layer?.contentsGravity = .resize
             if fd.outputHDR != nil { imageView.layer?.preferredDynamicRange = .high }
+            imageView.isHidden = !showsFrozen
             frozenImageViews.append(imageView)
             let ov = OverlayNSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size), displayIndex: i, controller: self)
             let container = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
@@ -1894,6 +1922,13 @@ final class OverlayController {
         for (di, _) in recBubblePanels { layoutBubble(on: di) }
     }
 
+    /// hide/show the frozen picture for the current Tool — a mid-session
+    /// switch to a Utility reveals it, switching back hides it again
+    func applyFreezeVisibility() {
+        let hidden = !showsFrozen
+        for v in frozenImageViews { v.isHidden = hidden }
+        markOverlaysDirty()
+    }
     /// the island pill's midline and height on a display — the same maths the
     /// ToolbarView uses (islandH/gap/pillH), so the bubble stays centred on the
     /// pill whatever shape the toolbar is in
@@ -1905,6 +1940,35 @@ final class OverlayController {
         let gap: CGFloat = hasNotch ? 0 : 3
         let pillH = islandH - 2 * gap
         return (sc.frame.maxY - gap - pillH / 2, pillH)
+    }
+    /// a Screenshot taken at confirm, not at freeze — the desktop has moved on
+    /// by then. Called after closeAll, so our session windows are already down;
+    /// their window numbers leave the shot when Wadjet windows stay in.
+    func liveShot(rect: CGRect, screen: NSScreen, excluding: Set<Int>) async -> CGImage? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let disp = content.displays.first(where: { $0.displayID == num }) else {
+            AppLog.line("live shot: no shareable display")
+            return nil
+        }
+        let s = AppState.shared
+        let filter: SCContentFilter
+        if s.shotWadjet {
+            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluding.contains(Int($0.windowID)) })
+        } else {
+            let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        }
+        let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
+        let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
+        let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        guard let out = try? await screenshot(disp, width: w, height: h, cursor: s.shotCursor, hdr: hdr, filter: filter),
+              let img = out.hdr ?? out.sdr else {
+            AppLog.line("live shot: capture failed")
+            return nil
+        }
+        AppLog.line("live shot \(img.width)x\(img.height)")
+        return Freeze.pixelCrop(of: img, rect: rect, in: screen)
     }
     /// leading edge 8 pt off the right edge of whatever shape is up (island or
     /// expanded bar), centred on the island pill — called on every
@@ -2267,6 +2331,7 @@ final class OverlayNSView: NSView {
     }
     func drawLoupe(_ ctx: CGContext) {
         guard tool != .capScreen && tool != .recScreen else { return }
+        guard ctrl?.showsFrozen != false else { return } // no frozen pixels on a live desktop
         guard NSEvent.mouseLocation.x != 0 || hoverPt != .zero else { return }
         let pt = mouseInView()
         guard bounds.contains(pt) else { return } // one loupe, on the pointer's display
@@ -3140,7 +3205,7 @@ struct ToolbarView: View {
     @State var lensBg: CGImage?
     func syncLensBg() {
         #if CLEAR_GLASS_PATCH
-        guard let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
+        guard ctrl.showsFrozen, let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
               displayIndex < Freeze.shared.displays.count else { return }
         let local = CGRect(x: p.frame.minX - sc.frame.minX, y: p.frame.minY - sc.frame.minY,
                            width: p.frame.width, height: p.frame.height)
