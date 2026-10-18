@@ -4134,6 +4134,7 @@ final class ToastItem: ObservableObject, Identifiable {
     @Published var showCancel = false
     @Published var progress: Double = 0
     var remaining: TimeInterval = 5; var timer: Timer?; var t0 = Date()
+    var dragging = false // a file drag is in progress — hover must not restart the timer
     init(cap: Capture) { self.cap = cap }
 }
 
@@ -4208,6 +4209,42 @@ final class ToastController: ObservableObject {
     }
 }
 
+/// an AppKit drag source over the thumbnail — dragging it hands the saved
+/// file to whatever it's dropped on, like macOS's screenshot thumbnail
+struct ToastDragSource: NSViewRepresentable {
+    let url: URL
+    let thumb: CGImage?
+    let onClick: () -> Void
+    let onDragStart: () -> Void
+    let onEnd: (NSDragOperation, NSPoint) -> Void
+    func makeNSView(context: Context) -> DragView { let v = DragView(); v.rep = self; return v }
+    func updateNSView(_ v: DragView, context: Context) { v.rep = self }
+    final class DragView: NSView, NSDraggingSource {
+        var rep: ToastDragSource?
+        var downPt: NSPoint?
+        var didDrag = false
+        override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
+        override func mouseDown(with e: NSEvent) { downPt = convert(e.locationInWindow, from: nil); didDrag = false }
+        override func mouseDragged(with e: NSEvent) {
+            guard !didDrag, let down = downPt, let rep else { return }
+            let pt = convert(e.locationInWindow, from: nil)
+            guard hypot(pt.x - down.x, pt.y - down.y) > 3 else { return }
+            didDrag = true
+            rep.onDragStart()
+            let item = NSDraggingItem(pasteboardWriter: rep.url as NSURL)
+            let img = rep.thumb.map { NSImage(cgImage: $0, size: bounds.size) }
+                ?? NSWorkspace.shared.icon(forFile: rep.url.path)
+            item.setDraggingFrame(bounds, contents: img)
+            beginDraggingSession(with: [item], event: e, source: self)
+        }
+        override func mouseUp(with e: NSEvent) { if !didDrag { rep?.onClick() }; downPt = nil }
+        func draggingSession(_ s: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+        func draggingSession(_ s: NSDraggingSession, endedAt p: NSPoint, operation: NSDragOperation) {
+            rep?.onEnd(operation, p)
+        }
+    }
+}
+
 struct ToastStackView: View {
     @EnvironmentObject var ctrl: ToastController
     var body: some View {
@@ -4231,7 +4268,10 @@ struct ToastView: View {
         .gesture(DragGesture().onChanged { offset = max(0, $0.translation.width) }
             .onEnded { if $0.translation.width > 80 { ctrl.dismiss(item) } else { offset = 0 } })
         .onTapGesture { open() }
-        .onHover { h in h ? ctrl.pauseTimer(item) : ctrl.startTimer(item) }
+        .onHover { h in
+            if h { ctrl.pauseTimer(item) }
+            else if !item.dragging { ctrl.startTimer(item) }
+        }
         .transition(.move(edge: .trailing).combined(with: .opacity))
         .animation(.smooth(duration: 0.35), value: offset)
     }
@@ -4246,6 +4286,23 @@ struct ToastView: View {
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.9), lineWidth: 2))
                     .shadow(radius: 10, y: 4)
+                    .overlay {
+                        if let url = item.cap.url {
+                            ToastDragSource(url: url, thumb: cg,
+                                onClick: { open() },
+                                onDragStart: {
+                                    item.dragging = true; ctrl.pauseTimer(item)
+                                },
+                                onEnd: { op, pt in
+                                    item.dragging = false
+                                    // a landed drop, or a fling off the right edge, dismisses
+                                    let gone = op != [] || (ctrl.panel?.screen ?? .main)
+                                        .map { pt.x >= $0.frame.maxX - 40 } ?? false
+                                    if gone { ctrl.dismiss(item) } else { ctrl.startTimer(item) }
+                                    AppLog.line("toast drag ended op=\(op.rawValue) → \(gone ? "dismissed" : "kept")")
+                                })
+                        }
+                    }
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "text.viewfinder").font(.system(size: 11))
