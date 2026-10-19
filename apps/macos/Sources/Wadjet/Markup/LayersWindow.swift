@@ -147,7 +147,11 @@ extension AnnotationKind {
         case let .shape(kind, _): kind.variant.rawValue.capitalized
         case let .counter(_, _, value, format): "\(format.label(value))"
         case .magnify: "Magnify"
-        case .text: "Text"
+        // a text row names itself by its first line, else falls back to "Text"
+        case let .text(d):
+            String(d.string.split(separator: "\n").first ?? "")
+                .trimmingCharacters(in: .whitespaces).isEmpty ? "Text"
+                : String(d.string.split(separator: "\n").first!)
         }
     }
 }

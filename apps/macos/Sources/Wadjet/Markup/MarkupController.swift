@@ -153,10 +153,14 @@ final class MarkupController {
     private func endHistoryIfClosed() {
         if !AppState.shared.toolbarOpen { history.end(ifCleared: stack) }
     }
+    /// true while an in-place editor (or a Tool-menu text field) owns typing —
+    /// suspends Markup's command keys so ⌘Z/⌘V/⌘] reach it; a Tool-menu text
+    /// field resumes the keys by calling syncSession() on focus and blur
+    var textHasFocus: Bool { editing != nil || NSApp.keyWindow?.firstResponder is NSText }
     /// Carbon command keys and the Layers window track the toolbar; call on
     /// every phase/tool change
     func syncSession() {
-        MarkupKeys.shared.sync(active: AppState.shared.toolbarOpen)
+        MarkupKeys.shared.sync(active: AppState.shared.toolbarOpen && !textHasFocus)
         LayersWindow.shared.sync()
         endHistoryIfClosed()
     }

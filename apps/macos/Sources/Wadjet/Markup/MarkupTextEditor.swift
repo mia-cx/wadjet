@@ -178,7 +178,10 @@ extension MarkupController {
         syncEditor()
         host.view.window?.makeKey()
         host.view.window?.makeFirstResponder(tv)
-        if isScreen { AppDelegate.shared?.updateEscHotkey() }
+        if isScreen {
+            syncSession() // suspend Markup's command keys while text owns typing
+            AppDelegate.shared?.updateEscHotkey()
+        }
         AppLog.line("markup: editing text")
     }
 
@@ -208,7 +211,10 @@ extension MarkupController {
         // the selection only makes sense to Select once editing ends
         setSelection(armed == .select && kept ? id : nil)
         render()
-        if isScreen { AppDelegate.shared?.updateEscHotkey() }
+        if isScreen {
+            syncSession()
+            AppDelegate.shared?.updateEscHotkey()
+        }
         AppLog.line("markup: committed text")
         return true
     }

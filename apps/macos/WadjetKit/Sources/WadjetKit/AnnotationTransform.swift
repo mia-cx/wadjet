@@ -357,6 +357,11 @@ extension Annotation {
             }
             out.append(rotate)
             return out
+        // Text resizes its width alone — a box grip would imply a height it has
+        case .text:
+            return [(.resize(x: -1, y: 0), CGPoint(x: b.minX, y: b.midY).applying(m)),
+                    (.resize(x: 1, y: 0), CGPoint(x: b.maxX, y: b.midY).applying(m)),
+                    rotate]
         default:
             return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
