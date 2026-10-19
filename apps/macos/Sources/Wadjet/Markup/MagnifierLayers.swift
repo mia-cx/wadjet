@@ -7,7 +7,8 @@ import WadjetKit
 /// rims — NSHostingViews inside pass-through wrappers in `container`, views
 /// above the panel's other layers (each masked out where a higher Annotation
 /// paints over the magnifier). An Editor's magnifiers draw the Canvas's own
-/// display images and flatten the glass in — `MagnifyRenderer.glass` stands
+/// display images plus the windows stacked beneath each Magnify, and flatten
+/// the glass in — `MagnifyRenderer.glass` stands
 /// in for the live rims so the view shows what a Screenshot will flatten to.
 /// Either way: a content layer per magnifier — the viewport magnified — added
 /// as a sublayer of the Annotation's shape layer so it sits above the source
@@ -19,6 +20,9 @@ import WadjetKit
     private let screen: NSScreen?
     /// nil in live mode — an Editor's fixed sources: the Canvas's display images
     private let staticSources: [MagnifyRenderer.Source]?
+    /// static mode's windows-beneath render: `CanvasDocument.beneathSource`,
+    /// so a Magnify samples moved windows where they sit, like flatten
+    private let beneath: (([Annotation], CGRect, CGFloat) -> CensorSource?)?
     /// static mode renders at the Canvas's own scale; nil means the sync scale
     private let staticScale: CGFloat?
     /// the global rect magnifiers draw within — the display's frame or the Canvas's bounds
@@ -39,15 +43,19 @@ import WadjetKit
         self.screen = screen
         coverage = screen.frame
         staticSources = nil
+        beneath = nil
         staticScale = nil
         container = MagnifierGlassHost()
     }
 
-    /// an Editor's magnifiers: the Canvas's own displays at `scale`, the
-    /// flattened glass pass standing in for the live rims — no container
-    init(staticSources: [MagnifyRenderer.Source], scale: CGFloat) {
+    /// an Editor's magnifiers: the Canvas's displays, plus the windows beneath
+    /// each Magnify through `beneath`, at `scale`; the flattened glass pass
+    /// stands in for the live rims — no container
+    init(staticSources: [MagnifyRenderer.Source], scale: CGFloat,
+         beneath: @escaping ([Annotation], CGRect, CGFloat) -> CensorSource?) {
         screen = nil
         self.staticSources = staticSources
+        self.beneath = beneath
         staticScale = scale
         coverage = staticSources.reduce(.null) { $0.union($1.rect) }
         container = nil
@@ -70,8 +78,23 @@ import WadjetKit
             layer.frame = m.frame // canvas sublayers are in global points
             layer.contentsScale = renderScale
             layer.backgroundColor = CGColor(gray: 0, alpha: 1) // fallback until a sample lands
-            let sources = staticSources?.filter { $0.rect.intersects(m.viewport) }
-                ?? ScreenSamples.shared.sources(covering: m.viewport)
+            var sources: [MagnifyRenderer.Source]
+            if let staticSources {
+                // what flatten samples: only the visible windows beneath this
+                // Magnify in stack order; none falls back to the displays
+                let below = annotations[..<i].filter {
+                    if case .window = $0.kind { return !$0.hidden }
+                    return false
+                }
+                if !below.isEmpty {
+                    sources = beneath?(below, m.viewport, renderScale)
+                        .map { [(CIImage(cgImage: $0.image), $0.frame)] } ?? []
+                } else {
+                    sources = staticSources.filter { $0.rect.intersects(m.viewport) }
+                }
+            } else {
+                sources = ScreenSamples.shared.sources(covering: m.viewport)
+            }
             var content = MagnifyRenderer.content(m, sources: sources, scale: renderScale)
             // static mode is what the Screenshot flattens to: bake the glass in
             if staticSources != nil, m.options.glass, let c = content {

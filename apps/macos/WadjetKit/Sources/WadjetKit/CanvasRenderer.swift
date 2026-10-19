@@ -70,37 +70,12 @@ extension CanvasDocument {
             }
             var sources = displaySources
             if let box = annotation.sampledRect {
-                // moved windows must be sampled where they sit, not where the
-                // flat displays froze them: render the displays plus the
-                // visible windows stacked beneath this Annotation (backdrop
-                // layers stay out, as before) — the filters only read inside
-                // their sampled rect
                 let below = layerStack.annotations[..<index].filter {
                     if case .window = $0.kind { return !$0.hidden }
                     return false
                 }
-                // snap outward to the output pixel grid: flatten allocates
-                // ceil-sized pixels, and the filters infer one scale from
-                // width — an unsnapped box would leave a strip unsampled. The
-                // frame's size comes from the rendered image: at fractional
-                // scales snapped.width*scale can round up a pixel, so the
-                // image is the exact record of what was rendered (pixel i
-                // covers snapped.min + i/scale; a roundoff pixel sits past
-                // the edge).
-                let snapped = CGRect(x: floor(box.minX * scale) / scale,
-                                     y: floor(box.minY * scale) / scale,
-                                     width: ceil(box.maxX * scale) / scale - floor(box.minX * scale) / scale,
-                                     height: ceil(box.maxY * scale) / scale - floor(box.minY * scale) / scale)
-                if !below.isEmpty, Self.validRect(snapped) {
-                    var beneath = self
-                    beneath.layerStack = LayerStack(below)
-                    beneath.cornerRadius = 0
-                    beneath.windowLayers = windowLayers.filter { $0.id != nil }
-                    let image = try beneath.flatten(crop: snapped, scale: scale)
-                    sources = [CensorSource(image: image, frame: CGRect(
-                        origin: snapped.origin,
-                        size: CGSize(width: CGFloat(image.width) / scale,
-                                     height: CGFloat(image.height) / scale)))]
+                if !below.isEmpty, let b = try beneathSource(windows: below, rect: box, scale: scale) {
+                    sources = [b]
                 }
             }
             context.draw(annotation, sources: sources, scale: scale, format: .RGBAh,
@@ -109,5 +84,37 @@ extension CanvasDocument {
         context.endTransparencyLayer()
         guard let image = context.makeImage() else { throw CanvasDocumentError.renderFailed }
         return image
+    }
+
+    /// The pixels a sampling Annotation reads when windows sit beneath it: the
+    /// displays plus `windows` (visible `.window` Annotations, back to front;
+    /// backdrop layers stay out) rendered over `rect` snapped outward to the
+    /// pixel grid at `scale`; the frame's size comes from the rendered image.
+    /// Moved windows are sampled where they sit, not where the flat displays
+    /// froze them — the filters only read inside their sampled rect.
+    public func beneathSource(windows: [Annotation], rect: CGRect,
+                            scale: CGFloat) throws -> CensorSource? {
+        // snap outward to the output pixel grid: flatten allocates
+        // ceil-sized pixels, and the filters infer one scale from
+        // width — an unsnapped box would leave a strip unsampled. The
+        // frame's size comes from the rendered image: at fractional
+        // scales snapped.width*scale can round up a pixel, so the
+        // image is the exact record of what was rendered (pixel i
+        // covers snapped.min + i/scale; a roundoff pixel sits past
+        // the edge).
+        let snapped = CGRect(x: floor(rect.minX * scale) / scale,
+                             y: floor(rect.minY * scale) / scale,
+                             width: ceil(rect.maxX * scale) / scale - floor(rect.minX * scale) / scale,
+                             height: ceil(rect.maxY * scale) / scale - floor(rect.minY * scale) / scale)
+        guard Self.validRect(snapped) else { return nil }
+        var beneath = self
+        beneath.layerStack = LayerStack(windows)
+        beneath.cornerRadius = 0
+        beneath.windowLayers = windowLayers.filter { $0.id != nil }
+        let image = try beneath.flatten(crop: snapped, scale: scale)
+        return CensorSource(image: image, frame: CGRect(
+            origin: snapped.origin,
+            size: CGSize(width: CGFloat(image.width) / scale,
+                         height: CGFloat(image.height) / scale)))
     }
 }

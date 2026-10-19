@@ -338,15 +338,24 @@ final class EditorCanvasView: NSView {
         }
     }
 
-    /// Magnifies in an Editor sample the Canvas's own displays — the same
-    /// pixels flatten draws, at the window's backing scale so they stay crisp
+    /// Magnifies in an Editor sample what flatten draws: the Canvas's displays
+    /// plus the windows beneath each one, at the window's backing scale so
+    /// they stay crisp
     private func magnifierSource() -> MagnifierLayers? {
         let canvas = doc.canvas
         let sources = canvas.layout.compactMap { d -> MagnifyRenderer.Source? in
             canvas.displayImages[d.id].map { (CIImage(cgImage: $0), d.frame) }
         }
         guard !sources.isEmpty else { return nil }
-        return MagnifierLayers(staticSources: sources, scale: window?.backingScaleFactor ?? 2)
+        return MagnifierLayers(staticSources: sources, scale: window?.backingScaleFactor ?? 2) {
+            windows, rect, scale in
+            do {
+                return try canvas.beneathSource(windows: windows, rect: rect, scale: scale)
+            } catch {
+                AppLog.line("magnifier source: \(error.localizedDescription)")
+                return nil
+            }
+        }
     }
 
     // MARK: keys — the view is the window's first responder
