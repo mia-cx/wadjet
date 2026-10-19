@@ -114,7 +114,7 @@ struct CanvasEditorToolbar: View {
             }
         } label: {
             VStack(spacing: 4) {
-                Image(systemName: t.symbol).font(.system(size: 20))
+                Image(systemName: t.icon).font(.system(size: 20))
                 Text(t.shortTitle).font(.system(size: 12, weight: .medium))
             }
             .foregroundStyle(armed ? Color.wadjetAccent : .white)

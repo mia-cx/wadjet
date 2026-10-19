@@ -2313,7 +2313,7 @@ final class OverlayNSView: NSView {
     var rulerY: (lo: CGFloat, hi: CGFloat)?
     var tolerance = 30
     var flash: (text: String, until: Date)? // transient badge near the pointer
-    var scrollAcc: CGFloat = 0
+    var scrollTicks = ScrollTicks()
     var boundsBoxes: [CGRect] = [] // Bounds boxes kept on screen via Shift
     // manual region confirm: after mouse-up the selection stays editable —
     // 8 handles resize, a drag inside moves, the button / Return confirms
@@ -2615,20 +2615,8 @@ final class OverlayNSView: NSView {
     // a non-activating panel still gets cursorUpdate for its tracking area —
     // that's the reliable hook, mouseMoved alone loses to the system
     override func cursorUpdate(with e: NSEvent) { updateCursor() }
-    // one scroll tick per wheel notch; trackpads accumulate 24 pt per tick and
-    // momentum is ignored. Returns +1 for down (next) / -1 for up (previous)
-    func scrollStep(_ e: NSEvent) -> Int {
-        guard e.momentumPhase.isEmpty, e.scrollingDeltaY != 0 else { return 0 }
-        if !e.hasPreciseScrollingDeltas { return e.scrollingDeltaY > 0 ? -1 : 1 }
-        if e.phase == .began { scrollAcc = 0 }
-        scrollAcc += e.scrollingDeltaY
-        var n = 0
-        while scrollAcc >= 24 { scrollAcc -= 24; n += 1 }
-        while scrollAcc <= -24 { scrollAcc += 24; n -= 1 }
-        return n
-    }
     override func scrollWheel(with e: NSEvent) {
-        let step = scrollStep(e)
+        let step = scrollTicks.step(e)
         guard step != 0 else { return }
         if e.modifierFlags.contains(.option) {
             // Option+scroll = the Tool's value: edge tolerance on the ruler
@@ -2838,7 +2826,9 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
     // Everything outside the current island/toolbar shape is click-through, so
     // the panel never shadows the selection layer underneath it.
     var displayIndex = 0
+    var scrollTicks = ScrollTicks()
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
+    override func scrollWheel(with e: NSEvent) { if !scrollVariant(e) { super.scrollWheel(with: e) } }
     override func hitTest(_ point: NSPoint) -> NSView? {
         let rect = ToolbarHit.rects[displayIndex] ?? .zero
         let hit = rect.contains(point)
@@ -3094,7 +3084,7 @@ struct ToolbarView: View {
             } else {
                 // nothing selected (the count island, or the live toolbar
                 // unarmed): the Markup group's badge
-                Image(systemName: s.tool?.symbol ?? Tool.Kind.markup.badge)
+                Image(systemName: s.tool?.icon ?? Tool.Kind.markup.badge)
                     .resizable().scaledToFit()
                     .frame(width: min(pillH * 0.45, pillH - 14), height: min(pillH * 0.45, pillH - 14))
                     // on the glyph's own frame, so size and position both travel
@@ -3420,12 +3410,12 @@ struct ToolbarView: View {
         // pixel-identical layout to cell() so the masked splice joins equal:
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
-            Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+            Image(systemName: collapsed ? t.kind.badge : t.icon).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
-                        Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
+                        Image(systemName: t.icon).font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.white.opacity(0.7))
                             .frame(width: 16, height: 16)
                             .background(Circle().fill(.black.opacity(0.85)))
@@ -3574,7 +3564,7 @@ struct ToolbarView: View {
                 // geometry) still applies to More
                 moreButton
             } else {
-            Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
+            Image(systemName: collapsed ? t.kind.badge : t.icon).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
@@ -3582,7 +3572,7 @@ struct ToolbarView: View {
                 .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
-                        Image(systemName: t.symbol).font(.system(size: 9, weight: .bold))
+                        Image(systemName: t.icon).font(.system(size: 9, weight: .bold))
                             .foregroundStyle(.white.opacity(0.7))
                             .frame(width: 16, height: 16)
                             .background(Circle().fill(.black.opacity(0.85)))
