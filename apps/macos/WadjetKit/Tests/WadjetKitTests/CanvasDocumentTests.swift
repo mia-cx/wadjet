@@ -162,6 +162,27 @@ struct CanvasDocumentTests {
         #expect(pixel(11, 5) == [0, 0, 0, 0]) // stroked off: nothing outside it
     }
 
+    // Mask passes (Magnify's rim) set their own blend mode — the Annotation's
+    // multiply must not override it. Fails when `draw` ignored `blending`.
+    @Test func drawHonoursTheCallersBlendMode() throws {
+        let ctx = try #require(CGContext(data: nil, width: 8, height: 8, bitsPerComponent: 8,
+            bytesPerRow: 8 * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                | CGBitmapInfo.byteOrder32Little.rawValue))
+        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+        ctx.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        ctx.setBlendMode(.destinationOut)
+        let highlighter = Annotation(
+            kind: .path(PathData(nodes: [PathNode(anchor: CGPoint(x: 0, y: 4)),
+                                         PathNode(anchor: CGPoint(x: 8, y: 4))])),
+            style: .init(colour: .init(red: 0, green: 0, blue: 0, alpha: 1), width: 4,
+                         blend: .multiply),
+            transform: AnnotationTransform())
+        ctx.draw(highlighter, blending: false)
+        let px = try linearPixels(try #require(ctx.makeImage()))
+        #expect(px[4 * (4 * 8 + 4) + 3] == 0) // the stroke erased the mask's alpha
+    }
+
     // Proves a Pixelate censor flattens to uniform blocks of the content beneath.
     @Test func censorPixelatesFlattenedRect() throws {
         // every pixel a distinct grey dominated by its quadrant, so blocks only

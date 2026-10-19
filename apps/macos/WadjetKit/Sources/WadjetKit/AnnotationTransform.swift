@@ -55,7 +55,7 @@ extension AnnotationKind {
         case let .path(data):
             return .path(PathData(nodes: data.nodes.map {
                 PathNode(anchor: f($0.anchor), handleIn: $0.handleIn.map(f), handleOut: $0.handleOut.map(f))
-            }, closed: data.closed))
+            }, closed: data.closed, rawPoints: data.rawPoints?.map(f), smoothing: data.smoothing))
         case let .censor(rect, method):
             return .censor(rect: rect.mapCorners(f), method: method)
         case let .shape(kind, rect):
@@ -127,6 +127,20 @@ extension Annotation {
         var a = self
         a.kind = kind.mapPoints { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
         return a
+    }
+
+    /// a Brush stroke refit at a new smoothing, kept in place: the transform
+    /// pivots on the bounds centre, which a refit can move, so the first raw
+    /// sample's screen position is pinned (the fitter keeps endpoints, and the
+    /// samples move with the geometry, so later refits stay stable). Anything
+    /// else returns unchanged — a Pen path refits identically anyway.
+    public func refitted(smoothing s: CGFloat) -> Annotation {
+        guard case let .path(d) = kind, let pin = d.rawPoints?.first else { return self }
+        var a = self
+        a.kind = .path(d.refitted(smoothing: s))
+        guard case let .path(r) = a.kind, let pinNow = r.rawPoints?.first else { return a }
+        let was = pin.applying(affineTransform), now = pinNow.applying(a.affineTransform)
+        return a.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y))
     }
 
     /// this close to the chord midpoint a bend straightens back to a line
@@ -306,6 +320,10 @@ extension Annotation {
                     (.vertex(1), end.applying(m)),
                     (.bend, mid.applying(m)),
                     rotate]
+        case let .path(data) where data.rawPoints != nil:
+            // a Brush stroke resizes as a frame — its nodes come from fitting,
+            // and a refit would discard node edits
+            return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case let .path(data):
             var out: [(handle: SelectionHandle, at: CGPoint)] = data.nodes.indices.map {
                 (.vertex($0), data.nodes[$0].anchor.applying(m))
