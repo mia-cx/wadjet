@@ -104,9 +104,11 @@ final class MarkupStyles {
             eyedropper = nil
         case .frozen where s.tool != .pickColour:
             eyedropper = nil
-        // while the live Freeze Frame is being taken the phase is still
-        // .toolbar with the Markup Tool selected — that must NOT clear it
-        case .toolbar where s.tool != e.tool:
+        // two transitional states must NOT clear it: the Markup Tool is still
+        // selected while the live Freeze Frame is being taken, and Pick Colour
+        // is selected a moment before the phase turns .frozen (showPanels sets
+        // tool before phase)
+        case .toolbar where s.tool != e.tool && s.tool != .pickColour:
             eyedropper = nil
         default: break
         }

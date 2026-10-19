@@ -1698,13 +1698,14 @@ final class OverlayController {
         let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
                            y: max(scr.minY + 8, top - (f.height - Self.menuHeadroom)))
-        // the menu's own frost: the Freeze Frame under its body, blurred and
-        // darkened, under .regular glass for the rim — nil without a Freeze
+        // the menu's own frost: the Freeze Frame column from its body's top to
+        // the display's bottom, so a menu that grows downward stays aligned;
+        // blurred and darkened, under .regular glass for the rim — nil without a Freeze
         var backdrop: CGImage? = nil
         #if CLEAR_GLASS_PATCH
         if showsFrozen, di < Freeze.shared.displays.count {
-            backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: f.minY - scr.minY,
-                                                     width: f.width, height: f.height - Self.menuHeadroom), on: di)
+            backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: 0,
+                                                     width: f.width, height: f.maxY - Self.menuHeadroom - scr.minY), on: di)
         }
         #endif
         let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self, backdrop: backdrop)
@@ -4033,11 +4034,14 @@ struct ToolMenuView: View {
         // their corners nest inside the menu's
         .containerShape(Self.shape)
         // heavy frost like the reference menu: the frozen world behind, hard
-        // blurred and darkened, under the glass's rim and highlight
+        // blurred and darkened, under the glass's rim and highlight. The crop
+        // is the whole column under the menu body, drawn at its natural size
+        // top-aligned — a taller menu reveals more of it, aligned with the scene
         .background {
             if let backdrop {
                 ZStack {
-                    Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280).resizable()
+                    Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                         .blur(radius: 24, opaque: true)
                     Color.black.opacity(0.28)
                 }
