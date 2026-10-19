@@ -9,7 +9,8 @@ struct CanvasStoreMetadata: Codable {
 
 /// Owns History's UUID-named .wadjet packages in one directory. Save file copies live
 /// elsewhere; links never grant this store ownership of another directory.
-/// Callers serialize adds, edits and sweeps, as with CaptureFiles.
+/// Store mutations coordinate directory access with each other and NSDocument
+/// Editors, so a background sweep cannot overwrite a simultaneous package save.
 public struct CanvasStore: Sendable {
     public let directory: URL
     /// ImageIO quality used for the irreversible lossy retention stage.
@@ -27,12 +28,14 @@ public struct CanvasStore: Sendable {
     public func add(_ canvas: CanvasDocument, for entryID: UUID, createdAt: Date) throws -> URL {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = packageURL(for: entryID)
-        guard !fm.fileExists(atPath: url.path) else { throw CocoaError(.fileWriteFileExists) }
-        var canvas = canvas
-        canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt)
-        try canvas.write(to: url)
-        return url
+        return try coordinateMutation {
+            let url = packageURL(for: entryID)
+            guard !fm.fileExists(atPath: url.path) else { throw CocoaError(.fileWriteFileExists) }
+            var canvas = canvas
+            canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt)
+            try canvas.write(to: url)
+            return url
+        }
     }
 
     /// Finds an owned Canvas while its package still exists. History outlives it.
@@ -55,6 +58,11 @@ public struct CanvasStore: Sendable {
     /// aborts planning, because its links may protect another package from deletion.
     @discardableResult
     public func sweep(settings: CanvasRetentionSettings = .init()) throws -> [CanvasRetentionDecision] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try coordinateMutation { try sweepCoordinated(settings: settings) }
+    }
+
+    private func sweepCoordinated(settings: CanvasRetentionSettings) throws -> [CanvasRetentionDecision] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path) else { return [] }
         let urls = try fm.contentsOfDirectory(at: directory,
@@ -223,6 +231,18 @@ public struct CanvasStore: Sendable {
 
     private func packageURL(for id: UUID) -> URL {
         directory.appendingPathComponent(id.uuidString).appendingPathExtension("wadjet")
+    }
+
+    // Coordinate the directory, including link planning, rather than separate
+    // packages: adding a newer linker must not race deletion of its target.
+    private func coordinateMutation<T>(_ operation: () throws -> T) throws -> T {
+        var result: Result<T, Error>?
+        var error: NSError?
+        NSFileCoordinator().coordinate(writingItemAt: directory, options: [], error: &error) { _ in
+            result = Result { try operation() }
+        }
+        if let error { throw error }
+        return try result!.get()
     }
 
     private func replace(_ name: String, with data: Data, in wrapper: FileWrapper) {

@@ -229,6 +229,9 @@ struct CanvasStoreTests {
         #expect(try store.sweep(settings: settings).isEmpty)
         #expect(try store.url(for: id) != nil)
         #expect(try packageBytes(at: saved) == original)
+        #expect(try store.sweep().flatMap(\.actions) == [.delete])
+        #expect(try store.url(for: id) == nil)
+        #expect(try packageBytes(at: saved) == original)
     }
 
     // Proves a damaged host's unreadable links cannot cause deletion of its target.

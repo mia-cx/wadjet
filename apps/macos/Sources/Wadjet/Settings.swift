@@ -115,6 +115,7 @@ enum SettingsPanes: String, CaseIterable {
             Toggle("Freeze the screen while selecting", isOn: cfgBinding(\.capture.freeze))
             Toggle("Capture the cursor", isOn: cfgBinding(\.capture.cursor))
         }
+        CanvasRetentionRows()
         Section {
             Button("Reveal config.json") {
                 NSWorkspace.shared.activateFileViewerSelecting([AppState.shared.config.file])
