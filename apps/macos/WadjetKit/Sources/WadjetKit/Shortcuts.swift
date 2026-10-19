@@ -116,11 +116,18 @@ public struct ShortcutOptions: Codable, Equatable, Sendable {
     /// `false`: Window/Screen Tools capture at once — the pointer's display or
     /// the focused window — without the Freeze Frame pick
     public var confirm: Bool?
+    /// overrides whether the Tool opens on a Freeze Frame; nil inherits
+    public var freeze: Bool?
+    /// overrides whether the Tool opens on a Freeze Frame while a Recording
+    /// runs; nil inherits `freeze`
+    public var freezeWhileRecording: Bool?
     public init(countdown: Int? = nil, systemAudio: Bool? = nil, microphone: Bool? = nil,
-                cursor: Bool? = nil, clickCircles: Bool? = nil, confirm: Bool? = nil) {
+                cursor: Bool? = nil, clickCircles: Bool? = nil, confirm: Bool? = nil,
+                freeze: Bool? = nil, freezeWhileRecording: Bool? = nil) {
         self.countdown = countdown; self.systemAudio = systemAudio; self.microphone = microphone
         self.cursor = cursor; self.clickCircles = clickCircles
         self.confirm = confirm
+        self.freeze = freeze; self.freezeWhileRecording = freezeWhileRecording
     }
 }
 
