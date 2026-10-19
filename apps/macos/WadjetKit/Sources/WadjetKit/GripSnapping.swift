@@ -1,14 +1,17 @@
 import CoreGraphics
 
 extension Annotation {
-    /// a grip drag that snaps: a resize grip follows the pointer's delta from `from`
-    /// (an off-centre press doesn't jump) and snaps only along the screen axes it can
-    /// move; `.rotate` is unsnapped. Returns the result and the guides it reached.
+    /// a grip drag that snaps: a resize or vertex grip follows the pointer's delta
+    /// from `from` (an off-centre press doesn't jump) and snaps only along the
+    /// screen axes it can move; `.rotate` and `.bend` are unsnapped. Returns the
+    /// result and the guides it reached.
     public func dragging(_ handle: SelectionHandle, from: CGPoint, to: CGPoint,
                          minExtent: CGFloat, rotateOffset: CGFloat,
                          targets: [SnapTarget], range: CGFloat, skip: Bool)
         -> (annotation: Annotation, guides: [SnapGuide]) {
-        guard case .resize = handle else { return (dragging(handle, from: from, to: to), []) }
+        guard handle != .rotate, handle != .bend else {
+            return (dragging(handle, from: from, to: to), [])
+        }
         guard let grip = handles(minExtent: minExtent, rotateOffset: rotateOffset)
             .filter({ $0.handle == handle })
             .min(by: { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) })?.at
@@ -16,7 +19,9 @@ extension Annotation {
         let proposed = CGPoint(x: grip.x + to.x - from.x, y: grip.y + to.y - from.y)
         let r = SnappingEngine.snap(points: [proposed], targets: targets,
                                     range: range, skip: skip, axes: freeAxes(handle))
-        return (dragging(handle, from: from,
+        // delta-based handles (vertex) read `from` for the grip's position, so
+        // forward the grip — the press point would apply the press offset twice
+        return (dragging(handle, from: grip,
                          to: CGPoint(x: proposed.x + r.offset.x, y: proposed.y + r.offset.y)),
                 r.guides)
     }
@@ -25,6 +30,7 @@ extension Annotation {
     /// along its one local axis, which maps to a screen axis only at
     /// right-angle rotations — flips don't change axes
     private func freeAxes(_ handle: SelectionHandle) -> SnapAxes {
+        if case .vertex = handle { return .both } // an end moves anywhere
         guard case let .resize(x, y) = handle else { return [] }
         let local: SnapAxes
         switch (x != 0, y != 0) {

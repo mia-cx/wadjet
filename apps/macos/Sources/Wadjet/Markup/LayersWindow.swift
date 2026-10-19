@@ -144,6 +144,7 @@ extension AnnotationKind {
         case .line: "Line"
         case let .censor(_, method): method.title
         case let .shape(kind, _): kind.variant.rawValue.capitalized
+        case let .counter(_, _, value, format): "\(format.label(value))"
         }
     }
 }

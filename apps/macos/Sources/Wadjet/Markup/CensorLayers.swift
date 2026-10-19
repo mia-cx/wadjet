@@ -12,7 +12,7 @@ import WadjetKit
     private let sampler: LiveSampler
     private var latest: LiveSample?
     private var annotations: [Annotation] = []
-    private var shapes: [Annotation.ID: CAShapeLayer] = [:]
+    private var shapes: [Annotation.ID: CALayer] = [:]
     private var imageLayers: [Annotation.ID: CALayer] = [:]
 
     init(screen: NSScreen) {
@@ -24,7 +24,7 @@ import WadjetKit
 
     /// the panel's annotations each render; `layers` is MarkupView's shape
     /// layer map so each sample lands on its own Censor's layer
-    func sync(_ annotations: [Annotation], layers: [Annotation.ID: CAShapeLayer]) {
+    func sync(_ annotations: [Annotation], layers: [Annotation.ID: CALayer]) {
         self.annotations = annotations
         shapes = layers
         let sampling = annotations.filter { a in

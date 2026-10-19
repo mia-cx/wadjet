@@ -31,7 +31,7 @@ final class MarkupPanel: NSPanel {
 /// global screen coords, so every panel draws its own part of each stroke
 final class MarkupView: NSView {
     let canvas = CALayer()
-    var shapeLayers: [Annotation.ID: CAShapeLayer] = [:]
+    var shapeLayers: [Annotation.ID: AnnotationLayer] = [:]
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
@@ -80,30 +80,9 @@ final class MarkupView: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for a in annotations {
-            let l = shapeLayers[a.id] ?? CAShapeLayer()
+            let l = shapeLayers[a.id] ?? AnnotationLayer()
             shapeLayers[a.id] = l
-            l.path = PathGeometry.path(for: a)
-            l.fillColor = a.fillColour.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
-            l.strokeColor = a.strokeColour.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
-            // Black out stays opaque whatever the style
-            if case .censor = a.kind { l.opacity = 1 } else { l.opacity = Float(a.style.opacity) }
-            l.allowsGroupOpacity = true // opacity fades a counter's circle and label together
-            l.lineWidth = a.style.width
-            l.lineCap = .round; l.lineJoin = .round
-            l.contentsScale = scale
-            // a counter's label: one white child layer, gone when there's no label
-            let label = PathGeometry.labelPath(for: a)
-            let sub = l.sublayers?.first as? CAShapeLayer
-            if let label {
-                let s = sub ?? CAShapeLayer()
-                s.path = label
-                s.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
-                s.strokeColor = nil
-                s.contentsScale = scale
-                if s.superlayer == nil { l.addSublayer(s) }
-            } else if sub != nil {
-                l.sublayers = nil
-            }
+            l.update(a, scale: scale)
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }
@@ -144,7 +123,9 @@ final class MarkupView: NSView {
         MarkupController.shared.begin(at: screenPt(e), command: e.modifierFlags.contains(.command))
     }
     // drags keep coming to this view across displays
-    override func mouseDragged(with e: NSEvent) { MarkupController.shared.drag(to: screenPt(e)) }
+    override func mouseDragged(with e: NSEvent) {
+        MarkupController.shared.drag(to: screenPt(e), constrained: e.modifierFlags.contains(.shift))
+    }
     override func mouseUp(with e: NSEvent) { MarkupController.shared.end() }
 
     override func updateTrackingAreas() {

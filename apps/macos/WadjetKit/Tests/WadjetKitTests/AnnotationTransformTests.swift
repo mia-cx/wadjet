@@ -17,7 +17,7 @@ struct AnnotationTransformTests {
     func resize(handle: SelectionHandle, to: CGPoint, end: CGPoint) {
         let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 50)), style: style)
         let r = a.dragging(handle, from: .zero, to: to)
-        guard case let .line(s, e) = r.kind else { Issue.record(); return }
+        guard case let .line(s, e, _) = r.kind else { Issue.record(); return }
         #expect(near(s, .zero) && near(e, end))
     }
 
@@ -27,7 +27,7 @@ struct AnnotationTransformTests {
         let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style,
                            transform: AnnotationTransform(rotation: .pi / 2))
         let r = a.dragging(.resize(x: 1, y: 0), from: .zero, to: CGPoint(x: 50, y: 150))
-        guard case let .line(s, e) = r.kind else { Issue.record(); return }
+        guard case let .line(s, e, _) = r.kind else { Issue.record(); return }
         #expect(near(s, CGPoint(x: -50, y: 50)) && near(e, CGPoint(x: 150, y: 50)))
         #expect(near(r.transform.rotation, .pi / 2))
     }
@@ -44,7 +44,7 @@ struct AnnotationTransformTests {
         let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style,
                            transform: AnnotationTransform(rotation: .pi / 4))
             .flipped(horizontally: true)
-        guard case let .line(s, e) = a.kind else { Issue.record(); return }
+        guard case let .line(s, e, _) = a.kind else { Issue.record(); return }
         let shown = [s, e].map { $0.applying(a.affineTransform) }
         let want = [CGPoint(x: 14.645, y: 35.355), CGPoint(x: 85.355, y: -35.355)]
         #expect(want.allSatisfy { w in shown.contains { near($0, w) } })
@@ -82,31 +82,29 @@ struct AnnotationTransformTests {
           (.resize(x: 1, y: 0), CGPoint(x: 100, y: 50)),
           (.rotate, CGPoint(x: 50, y: 120))]),
     ])
-    func handles(end: CGPoint, expected: [(SelectionHandle, CGPoint)]) {
+    func frameHandles(end: CGPoint, expected: [(SelectionHandle, CGPoint)]) {
         let a = Annotation(kind: .line(start: .zero, end: end), style: style)
-        let hs = a.handles(minExtent: 12, rotateOffset: 20)
+        let hs = a.frameHandles(minExtent: 12, rotateOffset: 20)
         #expect(hs.count == expected.count)
         for (h, e) in zip(hs, expected) {
             #expect(h.handle == e.0 && near(h.at, e.1))
         }
     }
 
-    // a press resolves to the NEAREST grip, not the first in array order:
-    // on (0,0)->(100,5) the press at (100,5) means resize(1,1)@(100,5), not
-    // resize(1,-1)@(100,0); a shrunken Line keeps its corner grips working
+    // a press resolves to the NEAREST grip, not the first in array order: on
+    // (0,0)->(10,0) vertex(1)@(10,0) and bend@(5,0) crowd within radius, so a
+    // press nearer the end still moves the end
     @Test(arguments: [
-        (CGPoint(x: 100, y: 5), CGPoint(x: 100, y: 5), SelectionHandle.resize(x: 1, y: 1),
-         CGPoint(x: 150, y: 50), CGPoint(x: 150, y: 50)),
-        (CGPoint(x: 5, y: 3), CGPoint(x: 5, y: 3), .resize(x: 1, y: 1),
-         CGPoint(x: 100, y: 50), CGPoint(x: 100, y: 50)),
+        (CGPoint(x: 9, y: 1), SelectionHandle.vertex(1), CGPoint(x: 9, y: 51), CGPoint(x: 10, y: 50)),
+        (CGPoint(x: 5.5, y: 0.5), .bend, CGPoint(x: 5.5, y: 20.5), CGPoint(x: 10, y: 0)),
     ])
-    func handlePick(end: CGPoint, press: CGPoint, handle: SelectionHandle,
+    func handlePick(press: CGPoint, handle: SelectionHandle,
                     to: CGPoint, endAfter: CGPoint) {
-        let a = Annotation(kind: .line(start: .zero, end: end), style: style)
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 10, y: 0)), style: style)
         let h = a.handle(at: press, radius: 6, minExtent: 12, rotateOffset: 20)
         #expect(h == handle)
         let r = a.dragging(h!, from: press, to: to)
-        guard case let .line(s, e) = r.kind else { Issue.record(); return }
+        guard case let .line(s, e, _) = r.kind else { Issue.record(); return }
         #expect(near(s, .zero) && near(e, endAfter))
     }
 
@@ -125,6 +123,83 @@ struct AnnotationTransformTests {
         #expect(method == .blackOut)
         #expect(rect.width >= 0 && rect.height >= 0)
         #expect(near(rect, CGRect(x: -40, y: -20, width: 40, height: 20)))
+    }
+
+    // a Line's grips: one per end, one on the curve (the bend itself, or the
+    // chord midpoint when straight), then rotate above the frame
+    @Test func lineHandles() {
+        let straight = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let hs = straight.handles(minExtent: 12, rotateOffset: 20)
+        #expect(hs.map(\.handle) == [.vertex(0), .vertex(1), .bend, .rotate])
+        for (h, e) in zip(hs, [CGPoint(x: 0, y: 0), CGPoint(x: 100, y: 0),
+                               CGPoint(x: 50, y: 0), CGPoint(x: 50, y: 20)]) {
+            #expect(near(h.at, e))
+        }
+        let bent = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0),
+                                        bend: CGPoint(x: 50, y: 40)), style: style)
+        #expect(near(bent.handles(minExtent: 12, rotateOffset: 20)[2].at, CGPoint(x: 50, y: 40)))
+    }
+
+    // dragging a vertex moves only that end; the press needn't land dead-on —
+    // the new position is the grip's start position plus the drag
+    @Test func vertexDrag() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let r = a.dragging(.vertex(1), from: CGPoint(x: 98, y: 2), to: CGPoint(x: 98, y: 52))
+        guard case let .line(s, e, b) = r.kind else { Issue.record(); return }
+        #expect(near(s, .zero) && near(e, CGPoint(x: 100, y: 50)) && b == nil)
+    }
+
+    // Shift snaps the moved end to a 45° ray from the other end: (100,80) is
+    // 38.7° off horizontal, so the end lands on the diagonal, x kept
+    @Test func constrainedVertexDrag() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let r = a.dragging(.vertex(1), from: CGPoint(x: 100, y: 0), to: CGPoint(x: 100, y: 80),
+                           constrained: true)
+        guard case let .line(s, e, _) = r.kind else { Issue.record(); return }
+        #expect(near(s, .zero) && near(e, CGPoint(x: 90, y: 90)))
+    }
+
+    // the bend grip sets the on-curve point: the drawn path passes through it
+    // while the old chord is left behind
+    @Test func bendDrag() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let r = a.dragging(.bend, from: CGPoint(x: 50, y: 0), to: CGPoint(x: 50, y: 40))
+        guard case let .line(_, _, b) = r.kind else { Issue.record(); return }
+        #expect(b == CGPoint(x: 50, y: 40))
+        #expect(PathGeometry.hitTest(r, at: CGPoint(x: 50, y: 40)))
+        #expect(!PathGeometry.hitTest(r, at: CGPoint(x: 50, y: 0)))
+    }
+
+    // dragged back to within bendStraightenRadius of the chord midpoint the
+    // curve straightens
+    @Test func bendStraighten() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0),
+                                     bend: CGPoint(x: 50, y: 40)), style: style)
+        let r = a.dragging(.bend, from: CGPoint(x: 50, y: 40), to: CGPoint(x: 50, y: 2))
+        guard case let .line(_, _, b) = r.kind else { Issue.record(); return }
+        #expect(b == nil)
+    }
+
+    // the bend keeps its place relative to the chord: (50,50) on (0,0)->(100,0)
+    // is z = 0.5+0.5i along it; on (0,0)->(100,100) that lands at (0,100)
+    @Test func vertexDragKeepsBendOnChord() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0),
+                                     bend: CGPoint(x: 50, y: 50)), style: style)
+        let r = a.dragging(.vertex(1), from: CGPoint(x: 100, y: 0), to: CGPoint(x: 100, y: 100))
+        guard case let .line(_, e, b) = r.kind else { Issue.record(); return }
+        #expect(near(e, CGPoint(x: 100, y: 100)) && near(b!, CGPoint(x: 0, y: 100)))
+    }
+
+    // a rotated Line's vertex drag bakes the transform into the points: the
+    // end displayed at (50,50) (rotation pi/2 about (50,0)) moves, the other
+    // displayed end stays put
+    @Test func vertexDragBakesTransform() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style,
+                           transform: AnnotationTransform(rotation: .pi / 2))
+        let r = a.dragging(.vertex(1), from: CGPoint(x: 50, y: 50), to: CGPoint(x: 50, y: 100))
+        guard case let .line(s, e, _) = r.kind else { Issue.record(); return }
+        #expect(r.transform == .identity)
+        #expect(near(s, CGPoint(x: 50, y: -50)) && near(e, CGPoint(x: 50, y: 100)))
     }
 }
 

@@ -72,19 +72,36 @@ extension CanvasDocument {
             if case .censor = annotation.kind { context.setAlpha(1) }
             else { context.setAlpha(annotation.style.opacity) }
             context.beginTransparencyLayer(auxiliaryInfo: nil)
-            let path = PathGeometry.path(for: annotation)
-            if let fill = annotation.fillColour {
-                context.setFillColor(fill.cgColor)
-                context.addPath(path)
-                context.fillPath()
-            }
-            if let stroke = annotation.strokeColour {
-                context.setStrokeColor(stroke.cgColor)
+            if case .line = annotation.kind {
+                // a Line strokes its trimmed drawing and fills its ends,
+                // dash pattern scaled to the stroke width
+                let cg = annotation.style.colour.cgColor
+                let drawing = PathGeometry.drawing(for: annotation)
+                context.setStrokeColor(cg)
+                context.setFillColor(cg)
                 context.setLineWidth(annotation.style.width)
                 context.setLineCap(.round)
                 context.setLineJoin(.round)
-                context.addPath(path)
+                context.setLineDash(phase: 0, lengths: annotation.style.dash.pattern(width: annotation.style.width) ?? [])
+                context.addPath(drawing.stroke)
                 context.strokePath()
+                context.addPath(drawing.ends)
+                context.fillPath()
+            } else {
+                let path = PathGeometry.path(for: annotation)
+                if let fill = annotation.fillColour {
+                    context.setFillColor(fill.cgColor)
+                    context.addPath(path)
+                    context.fillPath()
+                }
+                if let stroke = annotation.strokeColour {
+                    context.setStrokeColor(stroke.cgColor)
+                    context.setLineWidth(annotation.style.width)
+                    context.setLineCap(.round)
+                    context.setLineJoin(.round)
+                    context.addPath(path)
+                    context.strokePath()
+                }
             }
             if let label = PathGeometry.labelPath(for: annotation) {
                 context.setFillColor(RGBAColour(red: 1, green: 1, blue: 1, alpha: 1).cgColor)

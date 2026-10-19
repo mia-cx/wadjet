@@ -62,6 +62,27 @@ struct MarkupStyleControls: View {
                           value: $opacity, range: 0.1...1, step: 0.05, editing: $editing) {
                 styles.restyle(tool) { $0.opacity = opacity }
             }
+            if lineControls {
+                divider()
+                endRow(side: "Start", atStart: true, current: style.tail) { end in
+                    styles.restyle(tool) { $0.tail = end }
+                }
+                endRow(side: "End", atStart: false, current: style.head) { end in
+                    styles.restyle(tool) { $0.head = end }
+                }
+                HStack(spacing: 0) {
+                    ForEach(LineDash.allCases, id: \.self) { d in
+                        MenuCell(pinned: d == style.dash) {
+                            styles.restyle(tool) { $0.dash = d }
+                        } content: {
+                            lineGlyph(dash: d)
+                        }
+                        .accessibilityLabel("Dash: \(d.title)")
+                        .accessibilityAddTraits(d == style.dash ? .isSelected : [])
+                    }
+                }
+                .frame(minHeight: 40)
+            }
         }
         .onAppear {
             styles.refreshSwatches()
@@ -80,6 +101,47 @@ struct MarkupStyleControls: View {
     func divider() -> some View {
         Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
             .padding(.horizontal, 20).padding(.vertical, 3)
+    }
+
+    // MARK: line ends and dashes — drawn by WadjetKit so glyphs match the canvas
+
+    /// the Line-only rows show while the Line Tool is armed or a Line is selected
+    var lineControls: Bool {
+        if tool == .draw { return true }
+        guard let k = MarkupController.shared.selected?.kind, case .line = k else { return false }
+        return true
+    }
+
+    /// a row of the five LineEnds; `atStart` decorates the sample line's left tip
+    func endRow(side: String, atStart: Bool, current: LineEnd,
+                pick: @escaping (LineEnd) -> Void) -> some View {
+        HStack(spacing: 0) {
+            ForEach(LineEnd.allCases, id: \.self) { end in
+                MenuCell(pinned: end == current) { pick(end) } content: {
+                    lineGlyph(head: atStart ? .none : end, tail: atStart ? end : .none)
+                }
+                .accessibilityLabel("\(side): \(end.title)")
+                .accessibilityAddTraits(end == current ? .isSelected : [])
+            }
+        }
+        .frame(minHeight: 40)
+    }
+
+    /// a ~26 pt sample Line rendered by PathGeometry itself — what the glyph
+    /// shows is what the canvas draws
+    func lineGlyph(head: LineEnd = .none, tail: LineEnd = .none, dash: LineDash = .solid) -> some View {
+        let w = 2.0
+        let a = Annotation(kind: .line(start: CGPoint(x: 0, y: 10), end: CGPoint(x: 26, y: 10)),
+                           style: AnnotationStyle(colour: RGBAColour(red: 1, green: 1, blue: 1, alpha: 1),
+                                                  width: w, head: head, tail: tail, dash: dash))
+        let d = PathGeometry.drawing(for: a)
+        return ZStack {
+            Path(d.stroke)
+                .stroke(.white, style: StrokeStyle(lineWidth: w, lineCap: .round, lineJoin: .round,
+                                                   dash: dash.pattern(width: w) ?? []))
+            Path(d.ends).fill(.white)
+        }
+        .frame(width: 26, height: 20)
     }
 }
 
@@ -203,6 +265,29 @@ struct MenuSliderRow: View {
         }
         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
         .padding(.horizontal, 14)
+    }
+}
+
+extension LineEnd {
+    /// accessibility/menu naming, sentence case
+    var title: String {
+        switch self {
+        case .none: "None"
+        case .openArrow: "Open arrow"
+        case .filledArrow: "Filled arrow"
+        case .dot: "Dot"
+        case .bar: "Bar"
+        }
+    }
+}
+
+extension LineDash {
+    var title: String {
+        switch self {
+        case .solid: "Solid"
+        case .dashed: "Dashed"
+        case .dotted: "Dotted"
+        }
     }
 }
 

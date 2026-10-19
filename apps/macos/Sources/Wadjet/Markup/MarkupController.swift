@@ -349,15 +349,18 @@ final class MarkupController {
         render()
         AppLog.line("markup: placed counter \(format.label(value))")
     }
-    func drag(to p: CGPoint) {
+    /// `constrained` = Shift held: drawing and end drags snap to 45°
+    func drag(to p: CGPoint, constrained: Bool = false) {
         switch gesture {
         case let .drawing(d, from):
             let so = snapper?.offset(points: [p]) ?? .zero
             let p = CGPoint(x: p.x + so.dx, y: p.y + so.dy)
             var a = d
             switch d.kind {
-            case .line:
-                a.kind = .line(start: from, end: p)
+            case let .line(_, _, bend):
+                a.kind = .line(start: from,
+                               end: constrained ? PathGeometry.snapAngle(p, from: from) : p,
+                               bend: bend)
             case let .shape(kind, _):
                 // ⇧ constrains to a square, ⌥ draws from the centre
                 let f = NSEvent.modifierFlags
@@ -374,11 +377,16 @@ final class MarkupController {
             let snapped = snapper?.offset(rect: PathGeometry.path(for: moved).boundingBoxOfPath) ?? .zero
             stack.replace(moved.moved(by: snapped))
         case let .handle(h, start, from):
-            // the grip follows the pointer's delta whether or not it snaps
-            stack.replace(snapper?.dragging(start, h, from: from, to: p)
-                ?? start.dragging(h, from: from, to: p,
-                                  minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset,
-                                  targets: [], range: 0, skip: true).annotation)
+            if constrained, case .vertex = h {
+                // Shift's 45° constraint wins: a point snap would leave the ray
+                stack.replace(start.dragging(h, from: from, to: p, constrained: true))
+            } else {
+                // the grip follows the pointer's delta whether or not it snaps
+                stack.replace(snapper?.dragging(start, h, from: from, to: p)
+                    ?? start.dragging(h, from: from, to: p,
+                                      minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset,
+                                      targets: [], range: 0, skip: true).annotation)
+            }
         case nil:
             return
         }
@@ -387,7 +395,7 @@ final class MarkupController {
     func end() {
         if case let .drawing(d, _) = gesture {
             let drawn: Bool = switch d.kind {
-            case let .line(start, end):
+            case let .line(start, end, _):
                 hypot(end.x - start.x, end.y - start.y) >= Self.minDraftSize
             case let .shape(_, rect), let .censor(rect, _):
                 rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
