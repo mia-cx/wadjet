@@ -43,6 +43,20 @@
             <true/>
             <key>NSDocumentClass</key>
             <string>CanvasEditorDocument</string>
+            <key>NSIsRelatedItemType</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array><string>public.image</string></array>
+            <key>NSDocumentClass</key>
+            <string>CanvasEditorDocument</string>
         </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>
