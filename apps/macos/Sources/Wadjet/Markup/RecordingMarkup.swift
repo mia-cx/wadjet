@@ -29,10 +29,9 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
     let windowID: CGWindowID
     private let writer: MP4Writer
     private let queue: DispatchQueue
-    private let interval: CMTime
+    private var clock: FrameClock
     private let compositor = WindowFrameCompositor()
     private var pending = false
-    private var lastWrite = CMTime.zero
     private var lastMapping: WindowFrameAnnotator?
     // the captured frame's own placement values, kept for refresh-time compositing
     private var contentRect: CGRect = .zero
@@ -43,7 +42,7 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
         self.windowID = windowID
         self.writer = writer
         self.queue = queue
-        interval = CMTime(value: 1, timescale: CMTimeScale(fps))
+        clock = FrameClock(interval: CMTime(value: 1, timescale: CMTimeScale(fps)))
     }
 
     /// a complete captured frame (called on `queue` from RecOutput): remember it, write it composited
@@ -54,13 +53,12 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
               let contentDict = attachments.first?[.contentRect] as? [String: Any],
               let contentRect = CGRect(dictionaryRepresentation: contentDict as CFDictionary),
               let scaleFactor = (attachments.first?[.scaleFactor] as? NSNumber)?.doubleValue
-        else { writer.append(pb, at: pts); return }
+        else { writer.append(pb, at: clock.stamp(pts)); return }
         compositor.capture(pb, contentRect: contentRect, scaleFactor: CGFloat(scaleFactor))
         self.contentRect = contentRect
         self.scaleFactor = CGFloat(scaleFactor)
         frameSize = CGSize(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
-        writer.append(compose() ?? pb, at: pts)
-        lastWrite = pts
+        writer.append(compose() ?? pb, at: clock.stamp(pts))
     }
 
     /// the Annotations changed, or the Recording resumed: rewrite the last frame with them,
@@ -69,13 +67,11 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
         queue.async { [self] in
             guard !pending else { return }
             pending = true
-            let wait = max(0, CMTimeGetSeconds(lastWrite + interval - CMClockGetTime(CMClockGetHostTimeClock())))
+            let wait = CMTimeGetSeconds(clock.wait(from: CMClockGetTime(CMClockGetHostTimeClock())))
             queue.asyncAfter(deadline: .now() + wait) { [self] in
                 pending = false
                 guard let out = compose() else { return }
-                let t = CMClockGetTime(CMClockGetHostTimeClock())
-                writer.append(out, at: t)
-                lastWrite = t
+                writer.append(out, at: clock.stamp(CMClockGetTime(CMClockGetHostTimeClock())))
             }
         }
     }
