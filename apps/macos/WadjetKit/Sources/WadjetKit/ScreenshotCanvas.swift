@@ -31,7 +31,8 @@ extension CanvasDocument {
     /// off-crop Annotations; a window capture retains fills/strokes touching its frame.
     public init(capturedDisplays: [CapturedCanvasDisplay], crop: CGRect, cornerRadius: CGFloat = 0,
                 annotations: LayerStack, windowCapture: Bool = false,
-                images: [UUID: CGImage] = [:], canvases: [URL: CanvasDocument] = [:]) {
+                images: [UUID: CGImage] = [:], canvases: [URL: CanvasDocument] = [:],
+                embedded: [String: CanvasDocument] = [:]) {
         let frames = windowCapture ? [crop] : capturedDisplays.map(\.display.frame)
         let kept = annotations.annotations.filter { annotation in
             let coverage = PathGeometry.coverage(for: annotation)
@@ -39,21 +40,23 @@ extension CanvasDocument {
                 coverage.intersects(CGPath(rect: frame, transform: nil), using: .winding)
             }
         }
-        // assets and links only travel with the Annotations that name them;
-        // linkedCanvases keeps History retention holding the targets
-        var assets: [UUID: CGImage] = [:], links: [CanvasLink] = []
+        // assets, links and embedded Canvases only travel with the Annotations
+        // that name them; linkedCanvases keeps History retention holding the targets
+        var assets: [UUID: CGImage] = [:], links: [CanvasLink] = [], names: Set<String> = []
         for annotation in kept {
             switch annotation.kind {
             case let .image(asset, _): assets[asset] = images[asset]
-            case let .canvas(link, _):
+            case let .canvas(.linked(link), _):
                 if !links.contains(where: { $0.url == link.url }) { links.append(link) }
+            case let .canvas(.embedded(name), _): names.insert(name)
             default: break
             }
         }
         self.init(layout: capturedDisplays.map(\.display), crop: crop, cornerRadius: cornerRadius,
             layerStack: LayerStack(kept),
             displayImages: Dictionary(uniqueKeysWithValues: capturedDisplays.map { ($0.display.id, $0.image) }),
-            images: assets, linkedCanvases: links)
+            images: assets, embeddedCanvases: embedded.filter { names.contains($0.key) },
+            linkedCanvases: links)
         linkedDocuments = canvases.filter { url, _ in links.contains { $0.url == url } }
     }
 

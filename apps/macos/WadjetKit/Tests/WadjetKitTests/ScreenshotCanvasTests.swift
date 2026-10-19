@@ -82,8 +82,8 @@ struct ScreenshotCanvasTests {
         let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(),
             crop: CGRect(x: 1, y: 1, width: 8, height: 6),
             annotations: LayerStack([
-                Annotation(kind: .canvas(link, placement), style: style),
-                Annotation(kind: .canvas(link, placement), style: style),
+                Annotation(kind: .canvas(.linked(link), placement), style: style),
+                Annotation(kind: .canvas(.linked(link), placement), style: style),
                 // off the crop but on a display: kept, and keeps its asset
                 Annotation(kind: .image(asset: kept, ImagePlacement(
                     frame: CGRect(x: -18, y: 12, width: 4, height: 4),
@@ -93,6 +93,28 @@ struct ScreenshotCanvasTests {
         #expect(canvas.linkedCanvases == [link])
         #expect(canvas.linkedDocuments[url] != nil)
         #expect(canvas.images.count == 1 && canvas.images[kept] != nil)
+    }
+
+    // Proves embedded Canvases travel with the kept Annotations that name
+    // them — an unreferenced package and one named by a dropped Annotation
+    // both stay behind.
+    @Test func capturesReferencedEmbeddedCanvases() throws {
+        let style = AnnotationStyle(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2)
+        let child = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+                                   displayImages: [:])
+        func embedded(_ name: String, frame: CGRect) -> Annotation {
+            Annotation(kind: .canvas(.embedded(name), ImagePlacement(frame: frame, crop: frame)),
+                       style: style)
+        }
+        let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(),
+            crop: CGRect(x: 1, y: 1, width: 8, height: 6),
+            annotations: LayerStack([
+                embedded("kept.wadjet", frame: CGRect(x: 2, y: 2, width: 4, height: 4)),
+                // off the crop and the displays: dropped, and its package with it
+                embedded("outside.wadjet", frame: CGRect(x: 40, y: 40, width: 4, height: 4)),
+            ]),
+            embedded: ["kept.wadjet": child, "outside.wadjet": child, "unreferenced.wadjet": child])
+        #expect(canvas.embeddedCanvases.count == 1 && canvas.embeddedCanvases["kept.wadjet"] != nil)
     }
 
     // Proves exported pixels use panel geometry (rotation and flips) and multiply style opacity by colour alpha.

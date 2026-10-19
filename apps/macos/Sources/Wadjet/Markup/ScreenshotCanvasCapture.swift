@@ -16,6 +16,7 @@ extension AppDelegate {
         let annotations = MarkupController.shared.stack
         // pasted/dropped assets leave with the Annotations — snapshot them before closeAll or Clear can drop them
         let images = MarkupController.shared.assets.images, canvases = MarkupController.shared.assets.canvases
+        let embedded = MarkupController.shared.assets.embedded
         let workflow = takeShotWorkflow()
         let cursor = state.shotCursor, wadjet = state.shotWadjet
         let keepWindows = tool.captureSettings.map { state.config.value.tools[keyPath: $0].windowLayers } ?? false
@@ -26,11 +27,7 @@ extension AppDelegate {
         let redactStyle = MarkupStyles.shared.style(for: .censor)
         let capturedAt = Date()
         let screens = frozen.map(\.screen)
-        let displays = frozen.compactMap { fd -> CapturedCanvasDisplay? in
-            guard let id = fd.screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else { return nil }
-            return CapturedCanvasDisplay(display: .init(id: id, frame: fd.screen.frame, scaleFactor: fd.screen.backingScaleFactor),
-                image: fd.output(hdr: true))
-        }
+        let displays = frozen.compactMap(\.canvasDisplay)
         var excluded = Set(overlayCtrl.panels.map(\.windowNumber))
         excluded.formUnion(overlayCtrl.toolbarPanels.values.map(\.windowNumber))
         excluded.formUnion(overlayCtrl.recBubblePanels.values.map(\.windowNumber))
@@ -45,7 +42,7 @@ extension AppDelegate {
                     : displays
                 var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius ?? 0,
                     annotations: annotations, windowCapture: windowID != nil,
-                    images: images, canvases: canvases)
+                    images: images, canvases: canvases, embedded: embedded)
                 if keepWindows {
                     // a capture failure keeps the window's flat pixels, so it
                     // still occludes what the flat displays show behind it

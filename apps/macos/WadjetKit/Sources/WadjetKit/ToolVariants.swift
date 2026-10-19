@@ -22,6 +22,7 @@ extension ToolID {
         case .draw: DrawVariant.allCases.map(\.variant)
         case .shapes: ShapeVariant.allCases.map(\.variant)
         case .censor: CensorMethod.methods.map(\.variant)
+        case .freezeRegion: FreezeVariant.allCases.map(\.variant)
         default: []
         }
     }

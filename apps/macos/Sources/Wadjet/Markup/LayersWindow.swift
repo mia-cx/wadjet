@@ -178,7 +178,8 @@ extension AnnotationKind {
                 : String(d.string.split(separator: "\n").first!)
         case .window: "Window"
         case .image: "Image"
-        case .canvas: "Screenshot"
+        case .canvas(.linked, _): "Screenshot"
+        case .canvas(.embedded, _): "Frozen Region"
         }
     }
 }

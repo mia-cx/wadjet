@@ -57,8 +57,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     case window(layerID: UUID, frame: CGRect)
     /// the asset id names image bytes held outside annotations.json, in the package's images/
     case image(asset: UUID, ImagePlacement)
-    /// a nested, linked Canvas shown through a crop
-    case canvas(CanvasLink, ImagePlacement)
+    /// a nested Canvas, linked or embedded, shown through a crop
+    case canvas(NestedCanvas, ImagePlacement)
 
     enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify, text, window, image, canvas }
     enum LineKeys: String, CodingKey { case start, end, bend }
@@ -66,8 +66,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     enum ShapeKeys: String, CodingKey { case kind, rect }
     enum CounterKeys: String, CodingKey { case center, radius, value, format }
     enum WindowKeys: String, CodingKey { case layer, frame }
-    /// image and canvas share their placement keys; each adds one of `asset`/`link`
-    enum ImageKeys: String, CodingKey { case asset, link, frame, crop, cornerRadius, border }
+    /// image and canvas share their placement keys; each adds one of `asset`/`link`/`embedded`
+    enum ImageKeys: String, CodingKey { case asset, link, embedded, frame, crop, cornerRadius, border }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if c.contains(.line) {
@@ -105,8 +105,10 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
                           try ImagePlacement(decoding: i))
         } else if c.contains(.canvas) {
             let n = try c.nestedContainer(keyedBy: ImageKeys.self, forKey: .canvas)
-            self = .canvas(try n.decode(CanvasLink.self, forKey: .link),
-                           try ImagePlacement(decoding: n))
+            let nested: NestedCanvas = try n.contains(.embedded)
+                ? .embedded(n.decode(String.self, forKey: .embedded))
+                : .linked(n.decode(CanvasLink.self, forKey: .link))
+            self = .canvas(nested, try ImagePlacement(decoding: n))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
@@ -149,12 +151,23 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             var i = c.nestedContainer(keyedBy: ImageKeys.self, forKey: .image)
             try i.encode(asset, forKey: .asset)
             try placement.encode(into: &i)
-        case let .canvas(link, placement):
+        case let .canvas(nested, placement):
             var n = c.nestedContainer(keyedBy: ImageKeys.self, forKey: .canvas)
-            try n.encode(link, forKey: .link)
+            switch nested {
+            case let .linked(link): try n.encode(link, forKey: .link)
+            case let .embedded(name): try n.encode(name, forKey: .embedded)
+            }
             try placement.encode(into: &n)
         }
     }
+}
+
+/// where a nested Canvas's pixels live: another package it links to, or a
+/// package embedded in the host under `embedded/` (Freeze region)
+public enum NestedCanvas: Hashable, Sendable {
+    case linked(CanvasLink)
+    /// the host's `embeddedCanvases` key, a package filename like `<uuid>.wadjet`
+    case embedded(String)
 }
 
 /// where an image or nested Canvas sits on screen and which part of its source shows
@@ -407,7 +420,7 @@ extension Annotation {
             guard let p = newValue else { return }
             switch kind {
             case let .image(asset, _): kind = .image(asset: asset, p)
-            case let .canvas(link, _): kind = .canvas(link, p)
+            case let .canvas(nested, _): kind = .canvas(nested, p)
             case .line, .path, .censor, .shape, .counter, .magnify, .text, .window: break
             }
         }

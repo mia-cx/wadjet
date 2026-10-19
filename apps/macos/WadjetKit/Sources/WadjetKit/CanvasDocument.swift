@@ -47,7 +47,7 @@ public struct CanvasWindowLayer {
 }
 
 /// A reference only: opening a Canvas never resolves links or security-scoped bookmarks.
-public struct CanvasLink: Codable, Equatable, Sendable {
+public struct CanvasLink: Codable, Hashable, Sendable {
     public var url: URL
     public var bookmarkData: Data?
 
@@ -192,7 +192,7 @@ public struct CanvasDocument {
         // the package carried — all merged here without mutating self
         var assets = images
         for a in layerStack.annotations {
-            guard case let .canvas(link, placement) = a.kind,
+            guard case let .canvas(.linked(link), placement) = a.kind,
                   var child = linkedDocuments[link.url] else { continue }
             child.cornerRadius = 0 // the Annotation's own radius rounds it
             let k = max(placement.frame.width / placement.crop.width,

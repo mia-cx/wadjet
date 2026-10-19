@@ -245,7 +245,7 @@ struct LayerStackTests {
                                crop: CGRect(x: 0, y: 0, width: 200, height: 100), cornerRadius: 4)),
             style: red4))
         expected.add(Annotation(id: UUID(uuidString: "7A2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A")!,
-            kind: .canvas(CanvasLink(url: URL(fileURLWithPath: "/tmp/linked.wadjet")),
+            kind: .canvas(.linked(CanvasLink(url: URL(fileURLWithPath: "/tmp/linked.wadjet"))),
                 ImagePlacement(frame: CGRect(x: 0, y: 0, width: 80, height: 80),
                                crop: CGRect(x: 5, y: 5, width: 40, height: 40), border: .colour)),
             style: red4))

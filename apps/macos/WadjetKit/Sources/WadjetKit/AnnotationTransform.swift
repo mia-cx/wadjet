@@ -89,9 +89,9 @@ extension AnnotationKind {
         case let .image(asset, p):
             var p = p; p.frame = p.frame.mapCorners(f)
             return .image(asset: asset, p)
-        case let .canvas(link, p):
+        case let .canvas(nested, p):
             var p = p; p.frame = p.frame.mapCorners(f)
-            return .canvas(link, p)
+            return .canvas(nested, p)
         }
     }
     /// resizes with one scale on both axes so it keeps its shape — counters

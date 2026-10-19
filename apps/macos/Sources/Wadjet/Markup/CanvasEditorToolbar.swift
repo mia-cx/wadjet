@@ -37,8 +37,9 @@ struct CanvasEditorToolbar: View {
     @State var radiusStart: CGFloat = 0
 
     var markup: MarkupController { doc.markup }
-    /// the screen toolbar's catalogue without More — its menu arms screen Tools
-    var tools: [Tool] { Tool.allCases.filter { $0.kind == .markup && $0 != .moreMarkup } }
+    /// the screen toolbar's catalogue without More (its menu arms screen
+    /// Tools) or Freeze region (it picks on the screen's Freeze Frame only)
+    var tools: [Tool] { Tool.allCases.filter { $0.kind == .markup && $0 != .moreMarkup && $0 != .freezeRegion } }
     var maxRadius: Double { Double(doc.canvas.maxCornerRadius) }
 
     var body: some View {

@@ -80,27 +80,32 @@ final class CanvasEditorDocument: NSDocument {
 
     /// the Canvas plus the live Markup stack and its image assets — what Save,
     /// Copy, Export, and Share all act on. `.image` payloads and `.canvas`
-    /// snapshots persist only while the stack references them; nested Canvases
-    /// go into `linkedDocuments` so `fileWrapper` writes their snapshots, and
-    /// `linkedCanvases` keeps the package's own links plus every Annotation's.
+    /// snapshots persist only while the stack references them; linked Canvases
+    /// go into `linkedDocuments` so `fileWrapper` writes their snapshots,
+    /// `linkedCanvases` keeps the package's own links plus every Annotation's,
+    /// and `embeddedCanvases` the Canvases the stack's `.embedded` Annotations name.
     var current: CanvasDocument {
         var canvas = canvas
         guard let markupCached else { return canvas }
         canvas.layerStack = markupCached.stack
         var used = Set<UUID>()
         var links = canvas.linkedCanvases
+        var embedded: [String: CanvasDocument] = [:]
         for a in canvas.layerStack.annotations {
             switch a.kind {
             case let .image(asset, _): used.insert(asset)
-            case let .canvas(link, _):
+            case let .canvas(.linked(link), _):
                 used.insert(a.id)
                 if !links.contains(link) { links.append(link) }
+            case let .canvas(.embedded(name), _):
+                if let doc = markupCached.assets.embedded[name] { embedded[name] = doc }
             default: break
             }
         }
         canvas.images = markupCached.assets.images.filter { used.contains($0.key) }
         canvas.linkedDocuments = markupCached.assets.canvases
         canvas.linkedCanvases = links
+        canvas.embeddedCanvases = embedded
         return canvas
     }
 
@@ -110,6 +115,7 @@ final class CanvasEditorDocument: NSDocument {
     private func seedAssets(into m: MarkupController) {
         m.assets.removeAll() // the reload's payload replaces everything, cached flattens too
         m.assets.images = canvas.images
+        m.assets.embedded = canvas.embeddedCanvases
         for link in canvas.linkedCanvases where FileManager.default.fileExists(atPath: link.url.path) {
             m.assets.canvases[link.url] = try? CanvasDocument.read(from: link.url)
         }
