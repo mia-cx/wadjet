@@ -306,19 +306,11 @@ final class MarkupController {
             let snapped = snapper?.offset(rect: PathGeometry.path(for: moved).boundingBoxOfPath) ?? .zero
             stack.replace(moved.moved(by: snapped))
         case let .handle(h, start, from):
-            var to = p
-            if case .resize = h {
-                // the grip at drag start, moved by the pointer's delta, is the snapping point
-                let grip = start.handles(minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset)
-                    .filter { $0.handle == h }
-                    .min { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) }?.at
-                if let grip {
-                    let proposed = CGPoint(x: grip.x + p.x - from.x, y: grip.y + p.y - from.y)
-                    let so = snapper?.offset(points: [proposed]) ?? .zero
-                    to = CGPoint(x: p.x + so.dx, y: p.y + so.dy)
-                }
-            }
-            stack.replace(start.dragging(h, from: from, to: to))
+            // the grip follows the pointer's delta whether or not it snaps
+            stack.replace(snapper?.dragging(start, h, from: from, to: p)
+                ?? start.dragging(h, from: from, to: p,
+                                  minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset,
+                                  targets: [], range: 0, skip: true).annotation)
         case nil:
             return
         }

@@ -27,6 +27,15 @@ public struct SnapResult: Equatable, Sendable {
     public let guides: [SnapGuide]
 }
 
+/// the axes `snap` may move along — an axis not listed gets offset 0 and no guide
+public struct SnapAxes: OptionSet, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+    public static let x = SnapAxes(rawValue: 1)
+    public static let y = SnapAxes(rawValue: 2)
+    public static let both: SnapAxes = [.x, .y]
+}
+
 /// Stateless alignment for drawing points and moving Annotation bounds.
 public enum SnappingEngine {
     /// Snaps each axis independently to the nearest target within `range` points,
@@ -34,15 +43,21 @@ public enum SnappingEngine {
     /// min/centre/max anchors, then point order. Rectangles are standardized.
     /// Exclude the moving Annotation from targets. Coordinates must be finite.
     /// `skip` implements Control or the Snapping toggle without discarding targets.
+    /// `axes` limits snapping to the listed axes — a grip that can't move along
+    /// one gets no offset and no guide there.
     public static func snap(
         rect: CGRect? = nil, points: [CGPoint] = [], targets: [SnapTarget],
-        range: CGFloat = 6, skip: Bool = false
+        range: CGFloat = 6, skip: Bool = false, axes: SnapAxes = .both
     ) -> SnapResult {
         guard !skip, range >= 0 else { return SnapResult(offset: .zero, guides: []) }
-        let x = nearest(moving: features(rect: rect, points: points, xAxis: true),
-                        targets: targets.map { features(target: $0, xAxis: true) }, range: range)
-        let y = nearest(moving: features(rect: rect, points: points, xAxis: false),
-                        targets: targets.map { features(target: $0, xAxis: false) }, range: range)
+        let x = axes.contains(.x)
+            ? nearest(moving: features(rect: rect, points: points, xAxis: true),
+                      targets: targets.map { features(target: $0, xAxis: true) }, range: range)
+            : nil
+        let y = axes.contains(.y)
+            ? nearest(moving: features(rect: rect, points: points, xAxis: false),
+                      targets: targets.map { features(target: $0, xAxis: false) }, range: range)
+            : nil
         let offset = CGPoint(x: x?.offset ?? 0, y: y?.offset ?? 0)
         var guides: [SnapGuide] = []
         if let x { guides.append(guide(x, perpendicularOffset: offset.y, xAxis: true)) }

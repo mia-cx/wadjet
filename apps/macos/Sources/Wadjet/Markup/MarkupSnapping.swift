@@ -29,6 +29,18 @@ import WadjetKit
         guides = r.guides
         return CGVector(dx: r.offset.x, dy: r.offset.y)
     }
+
+    /// a grip drag through the targets; the WadjetKit function keeps the
+    /// press offset and snaps only the axes the grip can move
+    mutating func dragging(_ a: Annotation, _ h: SelectionHandle, from: CGPoint, to: CGPoint) -> Annotation {
+        let r = a.dragging(h, from: from, to: to,
+                           minExtent: MarkupController.handleMinExtent,
+                           rotateOffset: MarkupController.rotateOffset,
+                           targets: targets, range: range,
+                           skip: NSEvent.modifierFlags.contains(.control))
+        guides = r.guides
+        return r.annotation
+    }
 }
 
 extension MarkupView {
