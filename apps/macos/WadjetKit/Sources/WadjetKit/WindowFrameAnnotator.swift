@@ -30,10 +30,30 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
         clip = CGRect(x: c.minX, y: frame.height - c.maxY, width: c.width, height: c.height)
     }
 
-    /// draws `annotations` into a 32BGRA pixel buffer in place; no-op for an empty list
-    public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer) {
+    /// draws `annotations` into a 32BGRA pixel buffer in place; no-op for an empty list.
+    /// `source` supplies the clean pixels Blur and Pixelate sample — never the buffer being drawn on.
+    public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer, source: CVPixelBuffer) {
         guard !annotations.isEmpty else { return }
         let w = CVPixelBufferGetWidth(pixelBuffer), h = CVPixelBufferGetHeight(pixelBuffer)
+        // the frame's content under the clip as a CensorSource, only when a Blur or Pixelate can use it
+        var sources: [CensorSource] = []
+        if annotations.contains(where: { a in
+            guard !a.hidden, case let .censor(_, method) = a.kind else { return false }
+            return method.samplesBeneath
+        }) {
+            CVPixelBufferLockBaseAddress(source, .readOnly)
+            defer { CVPixelBufferUnlockBaseAddress(source, .readOnly) }
+            if let b = CVPixelBufferGetBaseAddress(source),
+               let raw = CGContext(data: b, width: w, height: h, bitsPerComponent: 8,
+                   bytesPerRow: CVPixelBufferGetBytesPerRow(source),
+                   space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                   bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue),
+               let whole = raw.makeImage(),
+               let cropped = whole.cropping(to: CGRect(x: clip.minX, y: CGFloat(h) - clip.maxY,
+                                                       width: clip.width, height: clip.height)) {
+                sources = [CensorSource(image: cropped, frame: clip.applying(transform.inverted()))]
+            }
+        }
         CVPixelBufferLockBaseAddress(pixelBuffer, [])
         defer { CVPixelBufferUnlockBaseAddress(pixelBuffer, []) }
         guard let base = CVPixelBufferGetBaseAddress(pixelBuffer),
@@ -44,6 +64,6 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
         else { return }
         context.clip(to: clip)
         context.concatenate(transform)
-        for annotation in annotations { context.draw(annotation) }
+        for annotation in annotations { context.draw(annotation, sources: sources) }
     }
 }

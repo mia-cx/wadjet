@@ -81,7 +81,7 @@ struct WindowFrameAnnotatorTests {
                                              contentRect: row.contentRect, scaleFactor: row.scaleFactor,
                                              frame: row.frame)
         #expect(annotator != nil)
-        annotator?.draw([row.line], on: pb)
+        annotator?.draw([row.line], on: pb, source: pb)
         let hit = Self.pixel(pb, x: row.red.x, yFromTop: row.red.y)
         #expect(hit.b < 30 && hit.g < 30 && hit.r > 220 && hit.a == 255,
                 "\(row.name): expected red at (\(row.red.x), \(row.red.y)), got \(hit)")

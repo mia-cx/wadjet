@@ -29,7 +29,7 @@ public final class WindowFrameCompositor {
                                              frame: frame)
         guard !annotations.isEmpty, let annotator, let out = outputBuffer(size: frame) else { return base }
         copy(base: base, to: out)
-        annotator.draw(annotations, on: out)
+        annotator.draw(annotations, on: out, source: base)
         return out
     }
 
