@@ -22,6 +22,24 @@ public struct FrecencyRanker<Item: Hashable & Codable>: Codable {
         self.halfLife = halfLife
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case halfLife, pinnedItems, rankedItems, usage
+    }
+
+    /// Rejects edited config values that would make decay undefined.
+    public init(from decoder: any Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        let halfLife = try container.decode(TimeInterval.self, forKey: .halfLife)
+        guard halfLife.isFinite && halfLife > 0 else {
+            throw DecodingError.dataCorruptedError(forKey: .halfLife, in: container,
+                                                    debugDescription: "halfLife must be finite and positive")
+        }
+        self.halfLife = halfLife
+        pinnedItems = try container.decode([Item].self, forKey: .pinnedItems)
+        rankedItems = try container.decode([Item].self, forKey: .rankedItems)
+        usage = try container.decode([Item: Usage].self, forKey: .usage)
+    }
+
     /// Records a use without changing either published list.
     public mutating func recordUse(of item: Item, at date: Date = .now) {
         let previous = usage[item]

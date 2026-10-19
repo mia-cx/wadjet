@@ -3,6 +3,17 @@ import Testing
 import WadjetKit
 
 struct FrecencyRankerTests {
+    // Proves an edited config cannot load a half-life that breaks ranking arithmetic.
+    @Test(arguments: [0, -1])
+    func rejectsInvalidPersistedHalfLife(halfLife: Int) {
+        let json = """
+        {"halfLife":\(halfLife),"pinnedItems":[],"rankedItems":[],"usage":{}}
+        """
+        #expect(throws: DecodingError.self) {
+            try JSONDecoder().decode(FrecencyRanker<String>.self, from: Data(json.utf8))
+        }
+    }
+
     // Proves repeated use wins at equal age, and recent use can beat old frequency.
     @Test(arguments: [0.0, 30.0])
     func frequencyAndRecency(age: TimeInterval) {
