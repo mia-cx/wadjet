@@ -40,9 +40,9 @@ public enum SnappingEngine {
     ) -> SnapResult {
         guard !skip, range >= 0 else { return SnapResult(offset: .zero, guides: []) }
         let x = nearest(moving: features(rect: rect, points: points, xAxis: true),
-                        targets: targets.flatMap { features(target: $0, xAxis: true) }, range: range)
+                        targets: targets.map { features(target: $0, xAxis: true) }, range: range)
         let y = nearest(moving: features(rect: rect, points: points, xAxis: false),
-                        targets: targets.flatMap { features(target: $0, xAxis: false) }, range: range)
+                        targets: targets.map { features(target: $0, xAxis: false) }, range: range)
         let offset = CGPoint(x: x?.offset ?? 0, y: y?.offset ?? 0)
         var guides: [SnapGuide] = []
         if let x { guides.append(guide(x, perpendicularOffset: offset.y, xAxis: true)) }
@@ -84,15 +84,19 @@ public enum SnappingEngine {
         }
     }
 
-    private static func nearest(moving: [Feature], targets: [Feature], range: CGFloat) -> Match? {
+    private static func nearest(moving: [Feature], targets: [[Feature]], range: CGFloat) -> Match? {
         var best: Match?
-        for target in targets {
+        // Keep each target's features together so ties prefer the original target,
+        // then the moving anchor, before choosing a target edge or centre.
+        for targetFeatures in targets {
             for feature in moving {
-                let match = Match(moving: feature, target: target)
-                let distance = abs(match.offset)
-                guard distance <= range else { continue }
-                if let best, distance >= abs(best.offset) { continue }
-                best = match
+                for target in targetFeatures {
+                    let match = Match(moving: feature, target: target)
+                    let distance = abs(match.offset)
+                    guard distance <= range else { continue }
+                    if let best, distance >= abs(best.offset) { continue }
+                    best = match
+                }
             }
         }
         return best
