@@ -194,6 +194,7 @@ final class MarkupController {
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
+            closeScroll() // an open phased scroll is its own step too
             gesture = nil; selection = nil; cmdHeld = false; snapper = nil; counterNext = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
@@ -604,6 +605,11 @@ final class MarkupController {
     /// the phased scroll in flight, if any — set on `.began`, cleared on end
     @ObservationIgnored private var scrolling: Annotation.ID?
     func scroll(_ e: NSEvent, at p: CGPoint) -> Bool {
+        if scrolling != nil, e.phase == .began {
+            // a fresh sequence began while ours was still open: the stale
+            // one closes as its undo step, then the guard below re-qualifies
+            closeScroll()
+        }
         if let id = scrolling {
             if e.momentumPhase != [] { return true }
             if e.phase == .ended || e.phase == .cancelled {
