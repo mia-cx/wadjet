@@ -55,6 +55,17 @@ struct ShortcutsTests {
         #expect(throws: (any Error).self) { _ = try JSONDecoder().decode(KeyCombo.self, from: Data(#""wat""#.utf8)) }
     }
 
+    @Test func confirmOptionDecodesAndRoundTrips() throws {
+        let off = try JSONDecoder().decode(Shortcut.self, from: Data(
+            #"{"keys":"cmd+1","tool":"captureScreen","options":{"confirm":false}}"#.utf8))
+        #expect(off.options.confirm == false)
+        let none = try JSONDecoder().decode(Shortcut.self, from: Data(
+            #"{"keys":"cmd+1","tool":"captureScreen"}"#.utf8))
+        #expect(none.options.confirm == nil)
+        let back = try JSONDecoder().decode(Shortcut.self, from: JSONEncoder().encode(off))
+        #expect(back == off)
+    }
+
     @Test func defaultConfigHasNoShortcuts() {
         let c = WadjetConfig()
         #expect(c.shortcuts.isEmpty)

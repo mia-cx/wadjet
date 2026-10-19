@@ -111,6 +111,10 @@ enum SettingsPanes: String, CaseIterable {
             LabeledContent("Screenshots") { FolderRow(key: \.screenshots) }
             LabeledContent("Recordings") { FolderRow(key: \.recordings) }
         }
+        Section("Capture") {
+            Toggle("Freeze the screen while selecting", isOn: cfgBinding(\.capture.freeze))
+            Toggle("Capture the cursor", isOn: cfgBinding(\.capture.cursor))
+        }
         Section {
             Button("Reveal config.json") {
                 NSWorkspace.shared.activateFileViewerSelecting([AppState.shared.config.file])
@@ -121,15 +125,37 @@ enum SettingsPanes: String, CaseIterable {
 
 // MARK: - Shortcuts
 
+/// every Tool listed like OBS's hotkey settings; Shortcuts get added under
+/// their Tool with the + — several per Tool stay possible, each with its own
+/// Workflow and options
 @MainActor struct ShortcutsPane: View {
-    @State private var pending = false
+    @State private var pendingTool: Tool? = nil // the block currently holding a new-Shortcut recorder
+    var body: some View {
+        Section("Screenshots") { ForEach(Tool.allCases.filter { $0.kind == .shot }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Recordings") { ForEach(Tool.allCases.filter { $0.kind == .rec }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Utilities") { ForEach(Tool.allCases.filter { $0.kind == .util }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+    }
+}
+
+/// one Tool's header plus its Shortcuts; + starts recording a new Shortcut
+/// for this Tool
+@MainActor struct ToolShortcuts: View {
+    let tool: Tool
+    @Binding var pendingTool: Tool?
     var body: some View {
         let cfg = AppState.shared.config.value
-        Section("Shortcuts") {
-            ForEach(Array(cfg.shortcuts.indices), id: \.self) { i in
-                ShortcutRow(i: i)
+        let mine = cfg.shortcuts.indices.filter { cfg.shortcuts[$0].tool == tool.toolID }
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Label(tool.title, systemImage: tool.symbol)
+                Spacer()
+                Button { pendingTool = tool } label: { Image(systemName: "plus.circle") }
+                    .buttonStyle(.plain).foregroundStyle(.secondary)
+                    .help("Add Shortcut")
+                    .accessibilityLabel("Add Shortcut for \(tool.title)")
             }
-            if pending {
+            ForEach(mine, id: \.self) { ShortcutRow(i: $0) }
+            if pendingTool == tool {
                 HStack {
                     KeyboardShortcuts.Recorder(for: .init("settings.newShortcut")) { ks in
                         guard let ks else { return }
@@ -138,15 +164,14 @@ enum SettingsPanes: String, CaseIterable {
                             KeyboardShortcuts.reset(.init("settings.newShortcut"))
                             return
                         }
-                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: .captureRegion)) }
+                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: tool.toolID)) }
                         KeyboardShortcuts.reset(.init("settings.newShortcut"))
-                        pending = false
+                        pendingTool = nil
                     }
                     Spacer()
-                    Button("Cancel") { pending = false }
+                    Button("Cancel") { pendingTool = nil }
                 }
-            } else {
-                Button("Add Shortcut") { pending = true }
+                .padding(.leading, 28)
             }
         }
     }
@@ -171,22 +196,6 @@ enum SettingsPanes: String, CaseIterable {
                         AppLog.line("shortcut \(i): recorded key isn't a config KeyCombo — keeping the old one")
                     }
                 }
-                // changing the Tool drops a Workflow the new Tool can't run,
-                // or any Workflow on a util Tool — else the file won't decode
-                Picker("Tool", selection: Binding(get: { sc.tool }, set: { newID in
-                    edit { c in guard i < c.shortcuts.count else { return }
-                        c.shortcuts[i].tool = newID
-                        if let wf = c.shortcuts[i].workflow {
-                            let ok = newID.produces.map { k in
-                                c.workflows.contains { w in w.name == wf && (k.isRecording ? w.takes.isRecording : w.takes == .screenshot) }
-                            } ?? false
-                            if !ok { c.shortcuts[i].workflow = nil }
-                        }
-                    }
-                })) {
-                    ForEach(Tool.allCases, id: \.rawValue) { Text($0.title).tag($0.toolID) }
-                }
-                .labelsHidden()
                 Spacer()
                 Button { edit { guard i < $0.shortcuts.count else { return }; $0.shortcuts.remove(at: i) } }
                     label: { Image(systemName: "minus.circle") }
@@ -200,6 +209,15 @@ enum SettingsPanes: String, CaseIterable {
                     ForEach(workflows, id: \.self) { Text($0).tag($0) }
                 }
             }
+            if tool?.confirmOptional == true {
+                Toggle(tool!.kind == .rec ? "Confirm before recording" : "Confirm before capture",
+                       isOn: Binding(get: { sc.options.confirm ?? true }, set: { v in
+                           edit { guard i < $0.shortcuts.count else { return }
+                               // on is the default — write nil so the file stays tidy
+                               $0.shortcuts[i].options.confirm = v ? nil : false
+                           }
+                       }))
+            }
             if tool?.kind == .rec {
                 DisclosureGroup("Options") {
                     Picker("Countdown", selection: opt(\.countdown, i: i)) {
@@ -212,7 +230,8 @@ enum SettingsPanes: String, CaseIterable {
                     optionRow("Click circles", \.clickCircles)
                 }
             }
-        })
+        }
+        .padding(.leading, 28))
     }
     // 0=Default(nil) 1=On 2=Off
     func opt(_ key: WritableKeyPath<ShortcutOptions, Int?>, i: Int) -> Binding<Int> {
@@ -248,47 +267,44 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
 }
 
 @MainActor struct WorkflowsPane: View {
-    @State private var sel: Int? = 0
+    @State private var sel = 0
     var body: some View {
         let cfg = AppState.shared.config.value
-        HSplitView {
-            VStack(spacing: 0) {
-                List(selection: $sel) {
+        // config.json can shrink under us — clamp the selection on read
+        let i = cfg.workflows.isEmpty ? 0 : min(sel, cfg.workflows.count - 1)
+        Section {
+            HStack {
+                Picker("Workflow", selection: $sel) {
                     ForEach(Array(cfg.workflows.indices), id: \.self) { i in
                         Text(cfg.workflows[i].name).tag(i)
                     }
                 }
-                HStack {
-                    Menu("+") {
-                        ForEach(CaptureKind.allCases, id: \.self) { k in
-                            Button(k.title) {
-                                edit {
-                                    $0.workflows.append(Workflow(name: uniqueName("New \(k.title) Workflow", in: $0), takes: k, steps: [.showToast]))
-                                }
+                Menu("+") {
+                    ForEach(CaptureKind.allCases, id: \.self) { k in
+                        Button(k.title) {
+                            edit {
+                                $0.workflows.append(Workflow(name: uniqueName("New \(k.title) Workflow", in: $0), takes: k, steps: [.showToast]))
+                                sel = $0.workflows.count - 1
                             }
                         }
                     }
-                    Button("−") {
-                        guard let sel, sel < cfg.workflows.count else { return }
-                        edit {
-                            let name = $0.workflows[sel].name
-                            $0.workflows.remove(at: sel)
-                            for s in $0.shortcuts.indices where $0.shortcuts[s].workflow == name {
-                                $0.shortcuts[s].workflow = nil // don't leave a dangling reference
-                            }
-                        }
-                    }
-                    .disabled(sel.map { isDefault($0) } ?? true)
-                    Spacer()
                 }
-                .padding(6)
+                Button("−") {
+                    guard i < cfg.workflows.count else { return }
+                    edit {
+                        let name = $0.workflows[i].name
+                        $0.workflows.remove(at: i)
+                        for s in $0.shortcuts.indices where $0.shortcuts[s].workflow == name {
+                            $0.shortcuts[s].workflow = nil // don't leave a dangling reference
+                        }
+                    }
+                    sel = max(0, i - 1)
+                }
+                .disabled(isDefault(i))
             }
-            .frame(minWidth: 160, maxWidth: 200)
-            if let sel, sel < cfg.workflows.count {
-                WorkflowDetail(i: sel).id(cfg.workflows[sel].name) // rebuild when the picked Workflow or its name changes
-            } else {
-                Text("Select a Workflow").foregroundStyle(.secondary).frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
+        }
+        if !cfg.workflows.isEmpty {
+            WorkflowDetail(i: i).id(cfg.workflows[i].name) // rebuild when the picked Workflow or its name changes
         }
     }
     func isDefault(_ i: Int) -> Bool {
@@ -306,7 +322,7 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
         let cfg = AppState.shared.config.value
         guard i < cfg.workflows.count else { return AnyView(EmptyView()) }
         let wf = cfg.workflows[i]
-        return AnyView(Form {
+        return AnyView(Group {
             Section {
                 TextField("Name", text: $name)
                     .onSubmit {
@@ -314,17 +330,34 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                         edit { $0.renameWorkflow(from: wf.name, to: uniqueName(name, in: $0, skipping: i)) }
                     }
                     .onAppear { name = wf.name }
-                Text(wf.takes.title).foregroundStyle(.secondary)
+                LabeledContent("Takes", value: wf.takes.title)
             }
+            // .onMove/.onDelete don't work in a macOS grouped Form — explicit
+            // up/down/remove buttons instead
             Section("Steps") {
-                List {
-                    ForEach(Array(wf.steps.indices), id: \.self) { s in
+                ForEach(Array(wf.steps.indices), id: \.self) { s in
+                    HStack {
                         StepRow(wf: i, step: s)
+                        Spacer()
+                        Group {
+                        Button { edit { guard s > 0, i < $0.workflows.count else { return }
+                            $0.workflows[i].steps.swapAt(s, s - 1) } }
+                            label: { Image(systemName: "arrow.up") }
+                            .accessibilityLabel("Move Up")
+                            .disabled(s == 0)
+                        Button { edit { guard i < $0.workflows.count, s + 1 < $0.workflows[i].steps.count else { return }
+                            $0.workflows[i].steps.swapAt(s, s + 1) } }
+                            label: { Image(systemName: "arrow.down") }
+                            .accessibilityLabel("Move Down")
+                            .disabled(s == wf.steps.count - 1)
+                        Button { edit { guard i < $0.workflows.count, s < $0.workflows[i].steps.count else { return }
+                            $0.workflows[i].steps.remove(at: s) } }
+                            label: { Image(systemName: "minus.circle") }
+                            .accessibilityLabel("Remove Step")
+                        }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
                     }
-                    .onMove { from, to in edit { $0.workflows[i].steps.move(fromOffsets: from, toOffset: to) } }
-                    .onDelete { at in edit { $0.workflows[i].steps.remove(atOffsets: at) } }
                 }
-                .frame(minHeight: 140)
                 Menu("Add Step") {
                     ForEach(Array(Step.allowed(for: wf.takes).indices), id: \.self) { s in
                         Button(Step.allowed(for: wf.takes)[s].title) {
@@ -333,10 +366,12 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
                     }
                 }
             }
-            if wf.takes == .screenshot {
-                defaultPicker("Default Screenshot Workflow", \.defaultWorkflows.screenshot)
-            } else {
-                defaultPicker("Default Recording Workflow", \.defaultWorkflows.recording)
+            Section {
+                if wf.takes == .screenshot {
+                    defaultPicker("Default Screenshot Workflow", \.defaultWorkflows.screenshot)
+                } else {
+                    defaultPicker("Default Recording Workflow", \.defaultWorkflows.recording)
+                }
             }
         })
     }

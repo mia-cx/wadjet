@@ -34,6 +34,9 @@ enum Tool: String, CaseIterable {
         }
     }
     var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; default: .util } }
+    /// Tools that can skip the pick: one obvious target (the pointer's display
+    /// or the focused window) — a Shortcut can capture them without confirming
+    var confirmOptional: Bool { [.capWindow, .capScreen, .recWindow, .recScreen].contains(self) }
     var symbol: String {
         switch self {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
@@ -70,6 +73,15 @@ final class AppState: ObservableObject {
     static let shared = AppState()
     @Published var phase: Phase = .desktop
     @Published var recActive = false // a Recording is running (independent of the overlay)
+    // Screenshot options, toggled live on an open Freeze Frame — session state
+    // like the recording toggles, not persisted. Each fresh capture starts
+    // from Settings' cursor default, so these are per-capture overrides.
+    @Published var shotCursor = true { didSet { AppDelegate.shared?.overlayCtrl.swapFrozenImages() } }
+    @Published var shotWadjet = true { didSet { AppDelegate.shared?.overlayCtrl.swapFrozenImages() } }
+    func applyCaptureDefaults() {
+        shotCursor = config.value.capture.cursor
+        cursor = config.value.capture.cursor
+    }
     @Published var bubblesDying = false // set while a recording bubble merges back into the island
     @Published var tool: Tool? = nil
     @Published var workflowByTool: [Tool: String] = [:]
@@ -98,6 +110,7 @@ final class AppState: ObservableObject {
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
     @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
+    @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
@@ -137,6 +150,31 @@ struct FrozenDisplay {
     /// cursor-free SDR frame; every pixel read — Pick Colour, the loupe, Measure — uses it so the frozen cursor never shows up in a reading
     let clean: CGImage
     var hdrImage: CGImage?      // extended-sRGB variant when the display is HDR
+    var cleanHDR: CGImage?      // cursor-free HDR pair, for cursor-off Screenshots
+    /// the whole-display variants with EVERY Wadjet window excluded — captured
+    /// at freeze time only when we had more than the always-excluded compact
+    /// chrome on this display; nil means "share the regular images"
+    var bare: CGImage?, bareHDR: CGImage?, bareClean: CGImage?, bareCleanHDR: CGImage?
+    var bareCaptured = false
+    /// the image the overlay shows and a Screenshot saves, picked by the
+    /// Cursor/Wadjet toggles — for a Utility it's always the regular scene,
+    /// whose pixels `clean` reads (a Wadjet-off image would show different
+    /// pixels than the loupe/Pick Colour report)
+    @MainActor var outputHDR: CGImage? {
+        let s = AppState.shared
+        if s.tool?.kind == .util { return hdrImage }
+        return s.shotWadjet
+            ? (s.shotCursor ? hdrImage : cleanHDR)
+            : (s.shotCursor ? bareHDR ?? hdrImage : bareCleanHDR ?? cleanHDR)
+    }
+    @MainActor func output(hdr: Bool) -> CGImage {
+        let s = AppState.shared
+        if s.tool?.kind == .util { return (hdr ? hdrImage : nil) ?? image }
+        let sdr = s.shotWadjet
+            ? (s.shotCursor ? image : clean)
+            : (s.shotCursor ? bare ?? image : bareClean ?? clean)
+        return (hdr ? outputHDR : nil) ?? sdr
+    }
     var bitmap: UnsafePointer<UInt8>? // sRGB, premultiplied ARGB, pixel coords
     var bitmapWidth = 0, bitmapHeight = 0
     var pixels: PixelBuffer? { bitmap.map { PixelBuffer(base: $0, width: bitmapWidth, height: bitmapHeight) } }
@@ -147,6 +185,20 @@ struct WinEntry {
     let id: CGWindowID
     let frame: CGRect
 }
+/// the pointer in global screen coords while an overlay is up — glass
+/// shaders read it as their light position. Only views that apply the
+/// effects observe it; nothing heavy re-renders on mouse move.
+@MainActor
+final class PointerLight: ObservableObject {
+    static let shared = PointerLight()
+    @Published var screen: CGPoint?
+    var debugHoldUntil = Date.distantPast
+    func feed(_ p: CGPoint) {
+        if Date() < debugHoldUntil { return }
+        screen = p
+    }
+}
+
 @MainActor
 final class Freeze {
     static let shared = Freeze()
@@ -171,10 +223,13 @@ final class Freeze {
     func crop(rect: CGRect, on d: Int, hdr: Bool = false) -> CGImage? {
         guard d < displays.count else { return nil }
         let f = displays[d]
-        let src = (hdr ? f.hdrImage : nil) ?? f.image
-        let sx = CGFloat(src.width) / f.screen.frame.width
-        let sy = CGFloat(src.height) / f.screen.frame.height
-        let r = CGRect(x: rect.origin.x * sx, y: (f.screen.frame.height - rect.origin.y - rect.height) * sy,
+        return Freeze.pixelCrop(of: f.output(hdr: hdr), rect: rect, in: f.screen)
+    }
+    /// view-rect (bottom-left) -> pixel crop of a full-display image
+    static func pixelCrop(of src: CGImage, rect: CGRect, in screen: NSScreen) -> CGImage? {
+        let sx = CGFloat(src.width) / screen.frame.width
+        let sy = CGFloat(src.height) / screen.frame.height
+        let r = CGRect(x: rect.origin.x * sx, y: (screen.frame.height - rect.origin.y - rect.height) * sy,
                        width: rect.width * sx, height: rect.height * sy).integral
         return src.cropping(to: r)
     }
@@ -309,6 +364,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         ClearGlassPatch.install()
         #endif
         NSApp.setActivationPolicy(.accessory)
+        NSApp.mainMenu = buildMainMenu() // accessory ignores it; it shows while .regular
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         statusItem.button?.image = NSImage(systemSymbolName: "eye", accessibilityDescription: "wadjet")
         rebuildMenu()
@@ -388,6 +444,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "audio": s.sysAudio = val == "on"
             case "mic": s.mic = val == "on"
             case "cursor": s.cursor = val == "on"
+            case "shotcursor": s.shotCursor = val == "on"
+            case "shotwadjet": s.shotWadjet = val == "on"
             case "clicks": s.clickCircles = val == "on"
             case "island": s.showIslandWhileRecording = val == "on"
             case "colourFormat": s.colourFmt = val
@@ -400,6 +458,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
         case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
             s.debugTap = Tool(rawValue: String(parts[1]))
+        case "hold" where parts.count > 1: // debug: keep the pressed lens up for inspection
+            s.debugHold = Tool(rawValue: String(parts[1])) // "off" -> nil
         case "record" where parts.count > 1 && parts[1] == "screen": // debug: a Record Screen pick on the pointer's display
             if s.phase == .desktop && !s.recActive {
                 let di = overlayCtrl.mouseDisplay()
@@ -417,9 +477,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         case "upload" where parts.count > 1:
             s.uploadMode = ["succeed": 0, "fail": 1, "offline": 2][parts[1]] ?? s.uploadMode
             rebuildMenu()
+        case "light" where parts.count > 2: // debug: pin the glass light for 5 s
+            if let x = Double(parts[1]), let y = Double(parts[2]) {
+                PointerLight.shared.screen = CGPoint(x: x, y: y)
+                PointerLight.shared.debugHoldUntil = Date().addingTimeInterval(5)
+            }
+        case "now" where parts.count > 1: // debug: a confirm-off Shortcut press
+            if let t = Tool(rawValue: parts[1]) { trigger(t, immediate: true) }
+        case "capture": // debug: a full-display shot on the pointer's display
+            if s.phase == .frozen, s.tool?.kind == .shot {
+                AppLog.line("capture: pointer at \(Int(NSEvent.mouseLocation.x)),\(Int(NSEvent.mouseLocation.y))")
+                let di = overlayCtrl.mouseDisplay()
+                didSelect(CGRect(origin: .zero, size: Freeze.shared.displays[di].screen.frame.size), on: di)
+            }
         case "stop": if s.recActive { stopRecording() }
         case "pause": if s.recActive { togglePause() }
         case "settings": openSettings()
+        case "closesettings": settingsWindow?.close()
         case "esc": handleEsc()
         default: AppLog.line("cmd: unhandled \(cmd)")
         }
@@ -499,17 +573,57 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc func openScreenRecordingSettings() {
         NSWorkspace.shared.open(URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture")!)
     }
+    /// the Dock/⌘-Tab-visible app's minimal menu, shown only while .regular
+    /// — standard Edit selectors with nil targets reach the first responder
+    /// (⌘C/⌘V work in Settings' text fields)
+    func buildMainMenu() -> NSMenu {
+        func mi(_ title: String, _ action: Selector, _ key: String = "") -> NSMenuItem {
+            NSMenuItem(title: title, action: action, keyEquivalent: key)
+        }
+        let main = NSMenu()
+        let app = NSMenuItem(); app.submenu = NSMenu()
+        app.submenu!.addItem(mi("Settings…", #selector(openSettings), ","))
+        app.submenu!.addItem(.separator())
+        app.submenu!.addItem(mi("Hide Wadjet", #selector(NSApplication.hide(_:)), "h"))
+        app.submenu!.addItem(mi("Quit Wadjet", #selector(NSApplication.terminate(_:)), "q"))
+        let editM = NSMenuItem(); editM.submenu = NSMenu(title: "Edit")
+        editM.submenu!.addItem(mi("Undo", Selector(("undo:")), "z"))
+        editM.submenu!.addItem(mi("Redo", Selector(("redo:")), "Z"))
+        editM.submenu!.addItem(.separator())
+        editM.submenu!.addItem(mi("Cut", #selector(NSText.cut(_:)), "x"))
+        editM.submenu!.addItem(mi("Copy", #selector(NSText.copy(_:)), "c"))
+        editM.submenu!.addItem(mi("Paste", #selector(NSText.paste(_:)), "v"))
+        editM.submenu!.addItem(mi("Select All", #selector(NSText.selectAll(_:)), "a"))
+        let win = NSMenuItem(); win.submenu = NSMenu(title: "Window")
+        win.submenu!.addItem(mi("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"))
+        win.submenu!.addItem(mi("Close", #selector(NSWindow.performClose(_:)), "w"))
+        main.items = [app, editM, win]
+        return main
+    }
+    /// a Dock-icon click (or ⌘-Tab back) reopens Settings
+    func applicationShouldHandleReopen(_ a: NSApplication, hasVisibleWindows f: Bool) -> Bool {
+        openSettings()
+        return true
+    }
     var settingsWindow: NSWindow?
     @objc func openSettings() {
         if settingsWindow == nil {
             let w = NSWindow(contentViewController: NSHostingController(rootView: SettingsView()))
             w.title = "Wadjet Settings"
             w.isReleasedWhenClosed = false
+            // back to menu-bar-only when Settings closes
+            NotificationCenter.default.addObserver(self, selector: #selector(settingsClosed(_:)),
+                name: NSWindow.willCloseNotification, object: w)
             settingsWindow = w
         }
+        NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
         settingsWindow?.makeKeyAndOrderFront(nil)
-        AppLog.line("settings: window opened")
+        AppLog.line("settings: window opened (regular)")
+    }
+    @objc func settingsClosed(_ n: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+        AppLog.line("settings: closed")
     }
 
     // MARK: folder bookmarks
@@ -661,24 +775,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // a Record Shortcut always stops the Recording, Freeze Frame or not —
         // and must not touch the Recording's options or its stored Workflow
         if s.recActive && tool.kind == .rec { stopRecording(); return }
+        // a fresh capture starts from Settings' defaults; the Shortcut's own
+        // options and any menu toggles then override on top. Toolbar triggers
+        // do the same in trigger() — never mid-capture (the Recording reads
+        // cursor after the overlay closes).
+        if s.phase == .desktop { s.applyCaptureDefaults() }
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
-        if let v = sc.options.cursor { s.cursor = v }
+        if let v = sc.options.cursor { if tool.kind == .shot { s.shotCursor = v } else { s.cursor = v } }
         if let v = sc.options.clickCircles { s.clickCircles = v }
         s.triggerWorkflow = sc.workflow
-        trigger(tool, at: ContinuousClock.now) // Shortcut press -> Freeze Frame latency starts here
+        trigger(tool, at: ContinuousClock.now, applyDefaults: false,
+                immediate: sc.options.confirm == false && tool.confirmOptional) // Shortcut press -> Freeze Frame latency starts here
     }
 
     // MARK: trigger
-    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now) {
+    func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
         if s.phase == .frozen {
             if s.tool != tool {
                 guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
-                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); AppLog.line("tool switched to \(tool.title)")
+                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.applyFreezeVisibility(); overlayCtrl.swapFrozenImages(); AppLog.line("tool switched to \(tool.title)")
             }
             return
         }
@@ -686,7 +806,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.phase == .desktop && s.recActive && tool.kind == .rec { stopRecording(); return }
         if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
-        Task { await overlayCtrl.freezeAndShow(tool: tool, start: start) }
+        if applyDefaults { s.applyCaptureDefaults() }
+        Task { await overlayCtrl.freezeAndShow(tool: tool, start: start, immediate: immediate) }
     }
     func permissionNeeded() {
         _ = CGRequestScreenCaptureAccess()
@@ -703,14 +824,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: selection -> capture or recording
     // a live shot of one window, "through" the Freeze Frame; nil if SCK can't
     // find it anymore — callers fall back to cropping the frozen image
-    func captureWindow(id: CGWindowID, screen: NSScreen) async -> CGImage? {
+    func captureWindow(id: CGWindowID, screen: NSScreen, cursor: Bool) async -> CGImage? {
         guard let scw = overlayCtrl.scWindows[id] else { return nil }
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
         let sc = screen.backingScaleFactor
         let cfg = SCScreenshotConfiguration()
         cfg.width = Int((scw.frame.width * sc).rounded())
         cfg.height = Int((scw.frame.height * sc).rounded())
-        cfg.showsCursor = false
+        cfg.showsCursor = cursor
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         do {
             let out = try await SCScreenshotManager.captureScreenshot(
@@ -721,22 +842,72 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return nil
         }
     }
+    /// the frontmost app's first window that's also in the frozen window list —
+    /// nil when nothing matches (window numbers are compared as Int;
+    /// CGWindowID() traps on bad values). Settings counts — it's a normal window.
+    func focusedWindow() -> (id: CGWindowID, frame: CGRect, display: Int)? {
+        guard let front = NSWorkspace.shared.frontmostApplication else { return nil }
+        let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
+        for w in infos {
+            guard (w[kCGWindowLayer as String] as? Int) == 0,
+                  (w[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
+                  let wn = w[kCGWindowNumber as String] as? Int else { continue }
+            // every display's windowFrames holds all windows in its own view
+            // coords — keep the display whose copy overlaps that screen most
+            var best: (id: CGWindowID, frame: CGRect, display: Int, area: CGFloat)?
+            for (di, fd) in Freeze.shared.displays.enumerated() {
+                guard let e = fd.windowFrames.first(where: { Int($0.id) == wn }) else { continue }
+                let inter = e.frame.intersection(CGRect(origin: .zero, size: fd.screen.frame.size))
+                let area = inter.isNull ? 0 : inter.width * inter.height
+                if area > (best?.area ?? 0) { best = (e.id, e.frame, di, area) }
+            }
+            if let best {
+                AppLog.line("focused window \(wn) on d\(best.display)")
+                return (best.id, best.frame, best.display)
+            }
+        }
+        return nil
+    }
+    /// a confirm-off Shortcut: shoot without the overlay — Screen Tools take
+    /// the pointer's display, Window Tools the focused window. Anything
+    /// ambiguous falls back to the normal pick. Doesn't activate Wadjet, so
+    /// the focused window keeps focus.
+    func captureImmediately(_ tool: Tool) {
+        AppState.shared.tool = tool // didSelect/didSelectWindow/showsFrozen read it
+        switch tool {
+        case .capScreen, .recScreen:
+            let di = overlayCtrl.mouseDisplay()
+            didSelect(CGRect(origin: .zero, size: Freeze.shared.displays[di].screen.frame.size), on: di)
+        case .capWindow, .recWindow:
+            if let w = focusedWindow() {
+                AppLog.line("immediate: window \(w.id) on d\(w.display)")
+                didSelectWindow(id: w.id, frame: w.frame, on: w.display)
+            } else {
+                AppLog.line("immediate: no focused window — falling back to the pick")
+                overlayCtrl.showPanels(tool: tool)
+            }
+        default:
+            overlayCtrl.showPanels(tool: tool)
+        }
+    }
     func didSelectWindow(id: CGWindowID, frame: CGRect, on display: Int) {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
-            // read the screen and the frozen-crop fallback before closeAll
-            // clears the Freeze Frame — afterwards both would be gone
+            // snapshot the context before closeAll — a second Shortcut could
+            // change shot toggles/the tool/the one-shot Workflow mid-capture
+            let shotWorkflow = takeShotWorkflow()
+            let cursor = s.shotCursor
             let screen = Freeze.shared.displays[display].screen
             let fallback = Freeze.shared.crop(rect: frame, on: display, hdr: true)
             overlayCtrl.closeAll()
             Task { @MainActor in
-                var thumb = await captureWindow(id: id, screen: screen)
+                var thumb = await captureWindow(id: id, screen: screen, cursor: cursor)
                 if thumb == nil {
                     AppLog.line("window \(id) not capturable; falling back to frozen crop")
                     thumb = fallback
                 }
-                runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
+                runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))", workflow: shotWorkflow)
             }
         } else {
             recordingWindowID = id
@@ -747,10 +918,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
+            // snapshot the context before closeAll — a second Shortcut could
+            // change shot toggles/the tool/the one-shot Workflow mid-capture
+            let shotWorkflow = takeShotWorkflow()
+            let cursor = s.shotCursor, wadjet = s.shotWadjet
+            if !overlayCtrl.showsFrozen {
+                // the Screenshot is taken at confirm — collect every overlay-
+                // session window before teardown so it can be left out
+                let screen = Freeze.shared.displays[display].screen
+                var ids = Set(overlayCtrl.panels.map(\.windowNumber))
+                ids.formUnion(overlayCtrl.toolbarPanels.values.map(\.windowNumber))
+                ids.formUnion(overlayCtrl.recBubblePanels.values.map(\.windowNumber))
+                ids.formUnion(overlayCtrl.dyingBubbles.values.map(\.windowNumber))
+                if let m = overlayCtrl.menuPanel { ids.insert(m.windowNumber) }
+                overlayCtrl.closeAll()
+                Task { @MainActor in
+                    let thumb = await overlayCtrl.liveShot(rect: rect, screen: screen, excluding: ids, cursor: cursor, wadjet: wadjet)
+                    self.runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: shotWorkflow)
+                }
+                return
+            }
             // screenshots keep HDR pixels when the display provides them
             let thumb = Freeze.shared.crop(rect: rect, on: display, hdr: true)
             overlayCtrl.closeAll()
-            runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))")
+            runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: shotWorkflow)
         } else {
             startRecording(rect: rect, display: display)
         }
@@ -759,9 +950,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var captureFiles = CaptureFiles(directory: Self.capturesDir)
     lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
 
+    /// the Screenshot Workflow for the current Tool, resolved at confirm —
+    /// consumes the Shortcut's one-shot pick
+    func takeShotWorkflow() -> String {
+        let s = AppState.shared
+        defer { s.triggerWorkflow = nil }
+        return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+    }
     // Screenshots write a temp file, then run the Workflow picked for the Tool —
     // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
-    func runCapture(thumb: CGImage?, label: String) {
+    func runCapture(thumb: CGImage?, label: String, workflow: String) {
         guard let img = thumb else {
             AppLog.line("capture: no image — window capture and frozen crop both failed")
             return
@@ -778,9 +976,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
             return
         }
-        let state = AppState.shared
-        let workflow = state.workflowFor(state.tool) ?? state.config.value.defaultWorkflows.screenshot
-        state.triggerWorkflow = nil // the Shortcut's pick is one-shot; consumed
         runCapture(file: file, kind: .screenshot, label: label, workflow: workflow)
     }
     /// Run a finished capture file through `workflow` (resolved by the caller
@@ -1362,6 +1557,25 @@ final class OverlayController {
     /// an overlay is up, the live screens while only a Recording runs (the
     /// Freeze Frame is gone then, so nothing else can supply them)
     var chromeScreens: [NSScreen] = []
+    var frozenImageViews: [NSView] = [] // each Freeze panel's picture layer
+    /// whether the frozen picture shows over the desktop — off when Settings
+    /// has Freeze disabled, except for Utilities, which read the frozen pixels
+    var showsFrozen: Bool {
+        AppState.shared.config.value.capture.freeze || AppState.shared.tool?.kind == .util
+    }
+    /// the Cursor/Wadjet toggles act on the Freeze Frame already up — swap every
+    /// panel's picture to the new pick, keeping HDR where the variant has it
+    func swapFrozenImages() {
+        let s = AppState.shared
+        for (i, v) in frozenImageViews.enumerated() {
+            guard i < Freeze.shared.displays.count else { continue }
+            let fd = Freeze.shared.displays[i]
+            v.layer?.contents = fd.output(hdr: true)
+            v.layer?.preferredDynamicRange = fd.outputHDR != nil ? .high : .standard
+        }
+        if s.openMenu != nil { syncMenu() } // the menu's frost crops the frozen image
+        AppLog.line("freeze swap: cursor=\(s.shotCursor ? "on" : "off") wadjet=\(s.shotWadjet ? "on" : "off")")
+    }
     var recBubblePanels: [Int: NSPanel] = [:] // the detached recording bubble, one per display
     var bubbleSizes: [Int: CGSize] = [:]
     var dyingBubbles: [Int: NSPanel] = [:]   // mid-merge bubbles awaiting their close
@@ -1371,6 +1585,7 @@ final class OverlayController {
     var menuPanel: NSPanel?
     var menuMonitor: Any?
     var keyMonitor: Any?
+    var lightMonitor: Any?
     init(app: AppDelegate) { self.app = app }
 
     // the Freeze display under the mouse, fallback 0
@@ -1378,10 +1593,13 @@ final class OverlayController {
         let m = NSEvent.mouseLocation
         return Freeze.shared.displays.firstIndex { NSMouseInRect(m, $0.screen.frame, false) } ?? 0
     }
-    // the *visible* toolbar shape in screen coords — the click-through panel is
-    // much bigger, so hit-testing must use this, not the panel frame
-    func toolbarShapeScreenRect(on di: Int) -> CGRect? {
-        guard let p = toolbarPanels[di], let cv = p.contentView, let r = ToolbarHit.rects[di] else { return nil }
+    // the toolbar's rect in screen coords — `visible: true` gives the bar
+    // shape; the default is the hover rect (expanded on a non-notch display
+    // also covers the collapsed-island ghost and the bridge strip, which is
+    // right for hit-testing but wrong for "click outside the toolbar")
+    func toolbarShapeScreenRect(on di: Int, visible: Bool = false) -> CGRect? {
+        let map = visible ? ToolbarHit.shapes : ToolbarHit.rects
+        guard let p = toolbarPanels[di], let cv = p.contentView, let r = map[di] else { return nil }
         return p.convertToScreen(cv.convert(r, to: nil))
     }
     var pointerOverUI: Bool {
@@ -1393,6 +1611,14 @@ final class OverlayController {
         if let mp = menuPanel, mp.frame.contains(m) { return true }
         if let tp = TipPanel.panel, tp.frame.contains(m) { return true }
         return false
+    }
+    /// the pointer in a panel layer's top-down coords; when it isn't tracked
+    /// the light sits far above the shape, which reproduces the top-lit look
+    func lightPoint(in panel: NSPanel?, height: CGFloat, above mid: CGPoint) -> CGPoint {
+        guard let sc = PointerLight.shared.screen, let p = panel,
+              let cv = p.contentView else { return CGPoint(x: mid.x, y: mid.y - 10000) }
+        let v = p.convertPoint(fromScreen: sc)
+        return CGPoint(x: v.x, y: cv.frame.height - v.y)
     }
     /// re-apply each overlay's cursor when the Tool changes under a still pointer
     func refreshCursors() {
@@ -1438,7 +1664,7 @@ final class OverlayController {
         // darkened, under .regular glass for the rim — nil without a Freeze
         var backdrop: CGImage? = nil
         #if CLEAR_GLASS_PATCH
-        if di < Freeze.shared.displays.count {
+        if showsFrozen, di < Freeze.shared.displays.count {
             backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: f.minY - scr.minY,
                                                      width: f.width, height: f.height - headroom), on: di)
         }
@@ -1456,7 +1682,7 @@ final class OverlayController {
             guard let self, let mp = self.menuPanel else { return e }
             // clicks inside the toolbar are the toolbar's own business —
             // the tap lands in its gesture and toggles the menu from there
-            if toolbarShapeScreenRect(on: di)?.contains(NSEvent.mouseLocation) == true { return e }
+            if toolbarShapeScreenRect(on: di, visible: true)?.contains(NSEvent.mouseLocation) == true { return e }
             // the panel's top 40 pt is scale-in headroom — clicks there count as outside
             let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
             if !body.contains(NSEvent.mouseLocation) {
@@ -1482,7 +1708,7 @@ final class OverlayController {
         init(_ description: String) { errorDescription = description }
     }
 
-    func freezeAndShow(tool: Tool, start: ContinuousClock.Instant) async {
+    func freezeAndShow(tool: Tool, start: ContinuousClock.Instant, immediate: Bool = false) async {
         func ms(_ d: Duration) -> Int { Int(d / .milliseconds(1)) }
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
@@ -1505,6 +1731,14 @@ final class OverlayController {
             // the same per-display work as the screenshots
             let tCapture = start.duration(to: .now)
             await MainActor.run {
+                // a confirm-off Shortcut: the captures above filled the displays,
+                // windows and corners the select paths need — shoot without the
+                // overlay and leave the latency/phase logging out, it's wrong here
+                if immediate {
+                    AppLog.line("freeze \(ms(start.duration(to: .now))) ms → immediate \(tool.title)")
+                    AppDelegate.shared?.captureImmediately(tool)
+                    return
+                }
                 self.showPanels(tool: tool)
                 CATransaction.flush() // commit the Freeze Frame layers, then stop the clock
                 let total = start.duration(to: .now)
@@ -1515,7 +1749,7 @@ final class OverlayController {
                 for (i, fd) in Freeze.shared.displays.enumerated() {
                     let img = fd.hdrImage ?? fd.image
                     let f = fd.screen.frame
-                    AppLog.line("freeze d\(i) \(fd.screen.localizedName): \(Int(f.width))×\(Int(f.height)) pt @\(Int(fd.screen.backingScaleFactor))x → \(img.width)×\(img.height) px\(fd.hdrImage != nil ? " HDR" : "")")
+                    AppLog.line("freeze d\(i) \(fd.screen.localizedName): \(Int(f.width))×\(Int(f.height)) pt @\(Int(fd.screen.backingScaleFactor))x → \(img.width)×\(img.height) px\(fd.hdrImage != nil ? " HDR" : "") bare=\(fd.bareCaptured ? "captured" : "shared")")
                 }
                 if let p50 = self.freezeLatencies.percentile(50), let p95 = self.freezeLatencies.percentile(95) {
                     AppLog.line("freeze p50 \(Int(p50)) ms, p95 \(Int(p95)) ms over \(self.freezeLatencies.count) opens (target p95 ≤ 200 ms)")
@@ -1540,24 +1774,60 @@ final class OverlayController {
         let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
         let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        // the standard shot leaves out only the compact chrome (island, notch,
+        // bubble); the bare shot leaves out every Wadjet window, and is taken
+        // only if we have a window up beyond that chrome — otherwise the bare
+        // fields just share the regular images
+        let chromeExcluded = frozenExcludedWindows(from: content)
+        let stdFilter = SCContentFilter(display: disp, excludingWindows: chromeExcluded)
+        let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+        let bareFilter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        let chromeIDs = Set(chromeExcluded.map(\.windowID))
+        let primaryH = NSScreen.screens[0].frame.height
+        let scrTL = CGRect(x: screen.frame.minX, y: primaryH - screen.frame.maxY,
+                           width: screen.frame.width, height: screen.frame.height)
+        // our status item windows are SCK-visible but never render into a
+        // screenshot and would keep `needBare` permanently true — exclude
+        // exactly them (a PID/layer filter would catch the .floating toast
+        // and pin panels)
+        let statusish: Set<CGWindowID> = Set([AppDelegate.shared?.statusItem?.button?.window,
+                                              AppDelegate.shared?.recStatusItem?.button?.window]
+            .compactMap { $0?.windowNumber }.map { CGWindowID(truncatingIfNeeded: $0) })
+        let ownWindow = { (w: SCWindow) in w.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
+            && !statusish.contains(w.windowID) }
+        let ownWindows = content.windows.filter { w in
+            ownWindow(w) && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
+        }
+        // bare images only feed the frozen display swap — skip them when the
+        // Freeze Frame isn't shown (the live shot at confirm decides then)
+        let needBare = AppState.shared.config.value.capture.freeze && !ownWindows.isEmpty
+        if !ownWindows.isEmpty {
+            AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\($0.frame)" })")
+        }
         // MainActor-inheriting tasks created on the actor itself: the SCK
-        // calls suspend off-actor so the two captures overlap, while `disp`
+        // calls suspend off-actor so the captures overlap, while `disp`
         // never leaves its region (no SCK type is Sendable, so `async let`
         // can't carry them itself)
-        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, content: content) }
-        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: false, content: content) }
+        let shot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, filter: stdFilter) }
+        let cleanShot = Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: hdr, filter: stdFilter) }
+        let bareShot = needBare ? Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: true, hdr: hdr, filter: bareFilter) } : nil
+        let bareCleanShot = needBare ? Task { @MainActor in try await screenshot(disp, width: w, height: h, cursor: false, hdr: hdr, filter: bareFilter) } : nil
         let (out, cleanOut) = try await (shot.value, cleanShot.value)
+        let (bareOut, bareCleanOut) = (try await bareShot?.value, try await bareCleanShot?.value)
         guard let img = out.sdr ?? out.hdr, let clean = cleanOut.sdr else { throw CaptureError("screenshot returned no image") }
         var fd = FrozenDisplay(screen: screen, image: img, clean: clean)
-        fd.hdrImage = out.hdr
+        fd.hdrImage = out.hdr; fd.cleanHDR = cleanOut.hdr
+        fd.bare = bareOut?.sdr ?? bareOut?.hdr; fd.bareHDR = bareOut?.hdr
+        fd.bareClean = bareCleanOut?.sdr ?? bareCleanOut?.hdr; fd.bareCleanHDR = bareCleanOut?.hdr
+        fd.bareCaptured = needBare
         // CGWindowList is front-to-back, so first-hit is the frontmost
         // window — SCShareableContent's windows list isn't ordered
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
         let sy = screen.frame
-        let primaryH = NSScreen.screens[0].frame.height
+        // our own layer-0 windows (Settings) ARE capturable; every overlay
+        // panel rides at a non-zero level, so the layer check excludes them
         fd.windowFrames = infos.compactMap { w in
             guard (w[kCGWindowLayer as String] as? Int) == 0,
-                  (w[kCGWindowOwnerPID as String] as? Int32) != ProcessInfo.processInfo.processIdentifier,
                   (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
                   let wn = w[kCGWindowNumber as String] as? Int else { return nil }
@@ -1600,14 +1870,13 @@ final class OverlayController {
         let set = Set(nums)
         return content.windows.filter { set.contains($0.windowID) }
     }
-    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool, content: SCShareableContent) async throws -> (sdr: CGImage?, hdr: CGImage?) {
+    func screenshot(_ disp: SCDisplay, width: Int, height: Int, cursor: Bool, hdr: Bool, filter: SCContentFilter) async throws -> (sdr: CGImage?, hdr: CGImage?) {
         let cfg = SCScreenshotConfiguration()
         cfg.width = width; cfg.height = height
         cfg.showsCursor = cursor; cfg.displayIntent = .local
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         let out = try await SCScreenshotManager.captureScreenshot(
-            contentFilter: SCContentFilter(display: disp, excludingWindows: frozenExcludedWindows(from: content)),
-            configuration: cfg)
+            contentFilter: filter, configuration: cfg)
         return (out.sdrImage, out.hdrImage)
     }
     // measure each window's real corner radius from a corner screenshot, so the
@@ -1677,17 +1946,20 @@ final class OverlayController {
         for (i, fd) in Freeze.shared.displays.enumerated() {
             let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver; p.hasShadow = false
+            p.animationBehavior = .none // no system scale-in: the Freeze Frame must sit exactly on the screen it copies
+            p.isOpaque = false; p.backgroundColor = .clear // live desktop shows through when the Freeze Frame is off
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.ignoresMouseEvents = false; p.acceptsMouseMovedEvents = true
             p.hidesOnDeactivate = false
             // the frozen frame lives in its own layer under the overlay drawing so
             // HDR captures can render with extended dynamic range
-            let img = fd.hdrImage ?? fd.image
             let imageView = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
             imageView.wantsLayer = true
-            imageView.layer?.contents = img
+            imageView.layer?.contents = fd.output(hdr: true)
             imageView.layer?.contentsGravity = .resize
-            if fd.hdrImage != nil { imageView.layer?.preferredDynamicRange = .high }
+            if fd.outputHDR != nil { imageView.layer?.preferredDynamicRange = .high }
+            imageView.isHidden = !showsFrozen
+            frozenImageViews.append(imageView)
             let ov = OverlayNSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size), displayIndex: i, controller: self)
             let container = NSView(frame: NSRect(origin: .zero, size: fd.screen.frame.size))
             container.addSubview(imageView); container.addSubview(ov)
@@ -1710,6 +1982,10 @@ final class OverlayController {
         }
         // borderless nonactivating panels can't be key windows, so keyDown on
         // the view never fires — route keys through a local monitor instead
+        lightMonitor = NSEvent.addLocalMonitorForEvents(matching: [.mouseMoved, .leftMouseDragged]) { e in
+            PointerLight.shared.feed(NSEvent.mouseLocation)
+            return e
+        }
         keyMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
             guard let self else { return e }
             for p in self.panels {
@@ -1735,7 +2011,7 @@ final class OverlayController {
                                                 width: size.width, height: size.height),
                             styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
             p.level = .screenSaver + 1; p.isOpaque = false; p.backgroundColor = .clear
-            p.hasShadow = false
+            p.hasShadow = false; p.animationBehavior = .none
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
             p.acceptsMouseMovedEvents = true; p.hidesOnDeactivate = false
             p.contentView = hosting; p.orderFront(nil)
@@ -1770,6 +2046,13 @@ final class OverlayController {
         for (di, _) in recBubblePanels { layoutBubble(on: di) }
     }
 
+    /// hide/show the frozen picture for the current Tool — a mid-session
+    /// switch to a Utility reveals it, switching back hides it again
+    func applyFreezeVisibility() {
+        let hidden = !showsFrozen
+        for v in frozenImageViews { v.isHidden = hidden }
+        markOverlaysDirty()
+    }
     /// the island pill's midline and height on a display — the same maths the
     /// ToolbarView uses (islandH/gap/pillH), so the bubble stays centred on the
     /// pill whatever shape the toolbar is in
@@ -1781,6 +2064,34 @@ final class OverlayController {
         let gap: CGFloat = hasNotch ? 0 : 3
         let pillH = islandH - 2 * gap
         return (sc.frame.maxY - gap - pillH / 2, pillH)
+    }
+    /// a Screenshot taken at confirm, not at freeze — the desktop has moved on
+    /// by then. Called after closeAll, so our session windows are already down;
+    /// their window numbers leave the shot when Wadjet windows stay in.
+    func liveShot(rect: CGRect, screen: NSScreen, excluding: Set<Int>, cursor: Bool, wadjet: Bool) async -> CGImage? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let disp = content.displays.first(where: { $0.displayID == num }) else {
+            AppLog.line("live shot: no shareable display")
+            return nil
+        }
+        let filter: SCContentFilter
+        if wadjet {
+            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluding.contains(Int($0.windowID)) })
+        } else {
+            let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        }
+        let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
+        let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
+        let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        guard let out = try? await screenshot(disp, width: w, height: h, cursor: cursor, hdr: hdr, filter: filter),
+              let img = out.hdr ?? out.sdr else {
+            AppLog.line("live shot: capture failed")
+            return nil
+        }
+        AppLog.line("live shot \(img.width)x\(img.height)")
+        return Freeze.pixelCrop(of: img, rect: rect, in: screen)
     }
     /// leading edge 8 pt off the right edge of whatever shape is up (island or
     /// expanded bar), centred on the island pill — called on every
@@ -1837,10 +2148,12 @@ final class OverlayController {
     }
     func closeAllPanelsOnly() {
         panels.forEach { $0.close() }
-        panels = []
+        panels = []; frozenImageViews = []
         hideMenu()
         if AppState.shared.openMenu != nil { AppState.shared.openMenu = nil }
         if let m = keyMonitor { NSEvent.removeMonitor(m); keyMonitor = nil }
+        if let m = lightMonitor { NSEvent.removeMonitor(m); lightMonitor = nil }
+        PointerLight.shared.screen = nil
         TipPanel.hide()
         toolbarPanels.values.forEach { $0.close() }; toolbarPanels = [:]
         let merge = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
@@ -2141,6 +2454,7 @@ final class OverlayNSView: NSView {
     }
     func drawLoupe(_ ctx: CGContext) {
         guard tool != .capScreen && tool != .recScreen else { return }
+        guard ctrl?.showsFrozen != false else { return } // no frozen pixels on a live desktop
         guard NSEvent.mouseLocation.x != 0 || hoverPt != .zero else { return }
         let pt = mouseInView()
         guard bounds.contains(pt) else { return } // one loupe, on the pointer's display
@@ -2475,7 +2789,8 @@ final class PassthroughHostingView<Content: View>: NSHostingView<Content> {
 }
 
 enum ToolbarHit {
-    nonisolated(unsafe) static var rects: [Int: CGRect] = [:] // per display index
+    nonisolated(unsafe) static var rects: [Int: CGRect] = [:] // hover rect, per display index
+    nonisolated(unsafe) static var shapes: [Int: CGRect] = [:] // the visible bar, per display index
     nonisolated(unsafe) static var lastHit: [Int: Bool] = [:]
 }
 // measured button frames in each toolbar panel's coordinate space, reported by
@@ -2585,6 +2900,7 @@ struct ToolbarView: View {
 
     func syncHit() {
         ToolbarHit.rects[displayIndex] = hoverRect
+        ToolbarHit.shapes[displayIndex] = shapeRectInView
         ctrl.layoutBubble(on: displayIndex)
         if expanded {
             let xs = visibleTools.sorted { $0.rawValue < $1.rawValue }
@@ -2644,6 +2960,12 @@ struct ToolbarView: View {
             .onChange(of: s.debugTap) { // cmd.sh tap — same path as a tap release
                 if let t = s.debugTap, expanded, t != s.tool { s.debugTap = nil; travelTap(t) }
                 else if s.debugTap != nil { s.debugTap = nil }
+            }
+            .onChange(of: s.debugHold) { // cmd.sh hold — snap the lens to the cell, pressed
+                guard expanded else { return }
+                if let t = s.debugHold, let c = cellCentres[t] {
+                    snapLens(to: c); pressing = true
+                } else if s.debugHold == nil { pressing = false }
             }
             .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
     }
@@ -2753,9 +3075,13 @@ struct ToolbarView: View {
     let toolD: CGFloat = 72
     let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
+    // the capsule overhangs its cell by (selW − toolD)/2 on each side; the
+    // dividers pad past that so they never touch the highlight
+    let sepMargin: CGFloat = 6
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
-    let lensOverhang: CGFloat = 7
+    let lensOverhang: CGFloat = 4
+    let lensIconBoost: CGFloat = 0.15 // icons seen through the lens are this much bigger
     var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
     var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
     var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
@@ -2949,9 +3275,10 @@ struct ToolbarView: View {
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
         HStack(spacing: cellGap) {
             ForEach(Tool.Kind.allCases, id: \.self) { k in
-                if k != .shot { // thin divider between groups
+                if k != .shot { // thin divider between groups, clear of the highlight capsule
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
+                        .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
                 }
                 // every group always renders all three Tools (stable identity,
                 // no inserts/removals): closed groups give EVERY slot zero
@@ -3014,7 +3341,7 @@ struct ToolbarView: View {
     @State var lensBg: CGImage?
     func syncLensBg() {
         #if CLEAR_GLASS_PATCH
-        guard let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
+        guard ctrl.showsFrozen, let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
               displayIndex < Freeze.shared.displays.count else { return }
         let local = CGRect(x: p.frame.minX - sc.frame.minX, y: p.frame.minY - sc.frame.minY,
                            width: p.frame.width, height: p.frame.height)
@@ -3030,8 +3357,11 @@ struct ToolbarView: View {
     var lensCentreInRow: CGPoint {
         CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
     }
+    /// the lens's icon copy — every icon always grown about its own centre;
+    /// the copy only shows inside the lens, so the real row never scales
     func iconStrip(_ color: Color) -> some View {
-        rowContent(iconCell).foregroundStyle(color)
+        rowContent { t, collapsed in iconCell(t, collapsed: collapsed).scaleEffect(1 + lensIconBoost) }
+            .foregroundStyle(color)
     }
     /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
@@ -3048,14 +3378,13 @@ struct ToolbarView: View {
                     .blur(radius: 5)
             }
         }
-        .layerEffect(
-            // under a notch the bar hangs from the screen's top edge: extend the
-            // glass rect above the panel so the top has no rounded corners,
-            // rim or edge bend — only the sides and bottom are glass edges
-            ShaderLibrary.barGlass(.float2((panelW - shapeW) / 2, shapeTop - (hasNotch ? notchOverscan : 0)),
-                                   .float2(shapeW, shapeH + (hasNotch ? notchOverscan : 0)),
-                                   .float(selH / 2 + d), .float2(panelW, panelH)),
-            maxSampleOffset: CGSize(width: 32, height: 32))
+        // under a notch the bar hangs from the screen's top edge: extend the
+        // glass rect above the panel so the top has no rounded corners,
+        // rim or edge bend — only the sides and bottom are glass edges
+        .modifier(BarGlassEffect(ctrl: ctrl, di: displayIndex,
+                                 rect: CGRect(x: (panelW - shapeW) / 2, y: shapeTop - (hasNotch ? notchOverscan : 0),
+                                              width: shapeW, height: shapeH + (hasNotch ? notchOverscan : 0)),
+                                 radius: selH / 2 + d, bounds: CGSize(width: panelW, height: panelH)))
         .mask(alignment: .top) {
             shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
         }
@@ -3072,18 +3401,7 @@ struct ToolbarView: View {
                     .resizable()
                     .frame(width: panelW, height: panelH)
             }
-            ZStack(alignment: .top) {
-                barSurface
-                ZStack {
-                    iconStrip(.white)
-                    iconStrip(Color.wadjetAccent)
-                        .mask(Capsule().frame(width: lensW, height: lensH)
-                              .scaleEffect(x: stretchX, y: stretchY)
-                              .position(lensCentreInRow))
-                }
-                .frame(width: shapeW, height: shapeH, alignment: .top)
-                .padding(.top, shapeTop + contentTop)
-            }
+            barSurface
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -3091,9 +3409,24 @@ struct ToolbarView: View {
     /// through LensEffect so the mask, rim and SDF share the same
     /// interpolated values every frame (shader args don't animate on
     /// their own — the mask would run ahead of them during the springs)
+    /// the icons, kept out of the shader so they read like the real row —
+    /// grown about their own centres in this copy only, so a Tool swells as
+    /// it passes into the lens. Same panel-space spot it had in lensSource.
+    var lensIcons: some View {
+        ZStack {
+            iconStrip(.white)
+            iconStrip(Color.wadjetAccent)
+                .mask(Capsule().frame(width: lensW, height: lensH)
+                      .scaleEffect(x: stretchX, y: stretchY)
+                      .position(lensCentreInRow))
+        }
+        .frame(width: shapeW, height: shapeH, alignment: .top)
+        .padding(.top, shapeTop + contentTop)
+        .frame(width: panelW, height: panelH, alignment: .top)
+    }
     var lensLayer: some View {
         lensSource
-            .modifier(LensEffect(bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
+            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, icons: lensIcons, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
                                  stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
@@ -3316,7 +3649,32 @@ struct ToolbarView: View {
 #if CLEAR_GLASS_PATCH
 /// The pressed-lens effect as one animatable unit: shader, capsule mask and
 /// glass body/rim all read the same interpolated centre/size/stretch.
-struct LensEffect: ViewModifier, @preconcurrency Animatable {
+/// barGlass with the pointer as its light — observing PointerLight here (a
+/// tiny modifier) keeps ToolbarView's body from re-rendering per mouse move
+struct BarGlassEffect: ViewModifier {
+    let ctrl: OverlayController
+    let di: Int
+    var rect: CGRect
+    var radius: CGFloat
+    var bounds: CGSize
+    @ObservedObject var light = PointerLight.shared
+    func body(content: Content) -> some View {
+        let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height,
+                                 above: CGPoint(x: rect.midX, y: rect.midY))
+        content.layerEffect(
+            ShaderLibrary.barGlass(.float2(rect.minX, rect.minY), .float2(rect.width, rect.height),
+                                   .float(radius), .float2(bounds.width, bounds.height),
+                                   .float2(Float(lp.x), Float(lp.y)),
+                                   .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
+            maxSampleOffset: CGSize(width: 32, height: 32))
+    }
+}
+
+struct LensEffect<Icons: View>: ViewModifier, @preconcurrency Animatable {
+    let ctrl: OverlayController
+    let di: Int
+    let icons: Icons // rides above the refraction, inside the same mask
+    @ObservedObject var light = PointerLight.shared
     var bounds: CGSize = .zero // the source layer's size; samples clamp to it
     var centre: CGPoint
     var size: CGSize
@@ -3338,8 +3696,14 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
                 ShaderLibrary.lens(.float2(centre.x, centre.y),
                                    .float2(size.width, size.height),
                                    .float2(stretch.width, stretch.height),
-                                   .float2(bounds.width, bounds.height)),
+                                   .float2(bounds.width, bounds.height),
+                                   {
+                                       let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height, above: centre)
+                                       return .float2(Float(lp.x), Float(lp.y))
+                                   }(),
+                                   .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
                 maxSampleOffset: CGSize(width: 64, height: 64))
+            .overlay { icons }
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
                     .scaleEffect(x: stretch.width, y: stretch.height)
@@ -3514,6 +3878,29 @@ enum TipPanel {
     static func hide() { task?.cancel(); task = nil; current = nil; panel?.close(); panel = nil }
 }
 
+/// the menu's pointer-lit rim — system glass can't move its highlight, so a
+/// radial stroke follows the pointer instead. The only PointerLight observer
+/// in the menu.
+struct MenuRimLight: View {
+    let ctrl: OverlayController
+    @ObservedObject var light = PointerLight.shared
+    var body: some View {
+        GeometryReader { g in
+            if let sc = light.screen, let mp = ctrl.menuPanel, let cv = mp.contentView {
+                let v = mp.convertPoint(fromScreen: sc)
+                let gf = g.frame(in: .global)
+                let local = CGPoint(x: v.x - gf.minX, y: cv.frame.height - v.y - gf.minY)
+                RoundedRectangle(cornerRadius: 26, style: .continuous)
+                    .strokeBorder(RadialGradient(colors: [.white.opacity(0.45), .clear],
+                        center: UnitPoint(x: local.x / max(g.size.width, 1),
+                                          y: local.y / max(g.size.height, 1)),
+                        startRadius: 0, endRadius: 180), lineWidth: 1)
+            }
+        }
+        .allowsHitTesting(false)
+    }
+}
+
 // a Tool's dropdown menu: its own dark panel under the button. Radio rows
 // close it; toggles leave it open.
 struct ToolMenuView: View {
@@ -3525,27 +3912,31 @@ struct ToolMenuView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
+            // what goes in → how it starts → what happens after
             case .shot:
-                workflowRows()
-                if tool == .capRegion { divider(); confirmRow() }
+                tileRow(shotTiles)
+                if tool == .capRegion { section("Start") { confirmRow() } }
+                section("Workflow") { workflowRows() }
             case .rec:
                 tileRow(recTiles)
-                divider()
-                workflowRows()
-                if tool == .recRegion { confirmRow() }
-                divider()
-                countdownRows()
-            case .util where tool == .pickColour:
-                ForEach(ColourFormat.allCases.map(\.rawValue), id: \.self) { f in
-                    row(f, icon: f == "Hex" ? "number" : f == "SwiftUI" ? "swift" : "function", on: f == s.colourFmt) { s.colourFmt = f }
+                section("Start") {
+                    if tool == .recRegion { confirmRow() }
+                    countdownRows()
                 }
+                section("Workflow") { workflowRows() }
+            case .util where tool == .pickColour:
+                colourRows([.hex, .rgb, .hsl, .oklch, .lab])
+                section("Code") { colourRows([.swiftUI]) }
             case .util where tool == .measure:
                 tileRow(measureTiles)
             default: EmptyView()
             }
         }
-        .padding(.horizontal, 6).padding(.vertical, 8)
+        .padding(Self.inset)
         .frame(width: 280)
+        // row and tile highlights take ConcentricRectangle from this, so
+        // their corners nest inside the menu's
+        .containerShape(Self.shape)
         // heavy frost like the reference menu: the frozen world behind, hard
         // blurred and darkened, under the glass's rim and highlight
         .background {
@@ -3555,10 +3946,11 @@ struct ToolMenuView: View {
                         .blur(radius: 24, opaque: true)
                     Color.black.opacity(0.28)
                 }
-                .clipShape(RoundedRectangle(cornerRadius: 26, style: .continuous))
+                .clipShape(Self.shape)
             }
         }
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 26, style: .continuous))
+        .overlay { MenuRimLight(ctrl: ctrl) }
+        .glassEffect(.regular, in: Self.shape)
         .scaleEffect(shown ? 1 : 0.85, anchor: .top)
         .opacity(shown ? 1 : 0)
         .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
@@ -3570,12 +3962,36 @@ struct ToolMenuView: View {
             s.openMenu = nil; ctrl.syncMenu()
         }
     }
-    func tileRow(_ tiles: [MenuTile]) -> some View {
-        HStack(spacing: 0) { ForEach(tiles, id: \.caption) { $0 } }
+    static let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
+    /// one inset on every side, so the concentric corners stay even
+    static let inset: CGFloat = 6
+    /// tiles in groups, a hairline between groups
+    func tileRow(_ groups: [[MenuTile]]) -> some View {
+        HStack(spacing: 0) {
+            ForEach(groups.indices, id: \.self) { i in
+                if i > 0 { Rectangle().fill(.white.opacity(0.15)).frame(width: 0.5, height: 36) }
+                ForEach(groups[i], id: \.caption) { $0 }
+            }
+        }
     }
     func divider() -> some View {
         Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
             .padding(.horizontal, 20).padding(.vertical, 3)
+    }
+    /// a titled group of rows under a divider, like a native menu section
+    func section(_ title: String, @ViewBuilder _ rows: () -> some View) -> some View {
+        Group {
+            divider()
+            Text(title).font(.system(size: 12, weight: .semibold)).foregroundStyle(.white.opacity(0.5))
+                .padding(.horizontal, 14).padding(.top, 4).padding(.bottom, 2)
+                .accessibilityAddTraits(.isHeader)
+            rows()
+        }
+    }
+    func colourRows(_ formats: [ColourFormat]) -> some View {
+        ForEach(formats, id: \.self) { f in
+            row(f.rawValue, icon: f == .hex ? "number" : f == .swiftUI ? "swift" : "function", on: f.rawValue == s.colourFmt) { s.colourFmt = f.rawValue }
+        }
     }
     /// Workflow radio rows, subtitled with each Workflow's Steps
     @ViewBuilder func workflowRows() -> some View {
@@ -3594,26 +4010,35 @@ struct ToolMenuView: View {
             s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
         }
     }
+    /// the Screenshot options — they swap the frozen image live and keep the
+    /// menu open
+    var shotTiles: [[MenuTile]] {
+        [[
+            MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.shotCursor, isToggle: true) { s.shotCursor.toggle() },
+            MenuTile(icon: "eye", caption: "Wadjet", on: s.shotWadjet, isToggle: true) { s.shotWadjet.toggle() },
+        ]]
+    }
     /// the recording options as tiles, like the reference's top icon row —
-    /// they keep the menu open
-    var recTiles: [MenuTile] {
-        [
-            MenuTile(icon: "speaker.wave.2", filledIcon: "speaker.wave.2.fill", caption: "Audio", on: s.sysAudio, isToggle: true) { s.sysAudio.toggle() },
-            MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
+    /// picture, then sound. They keep the menu open
+    var recTiles: [[MenuTile]] {
+        [[
             MenuTile(icon: "cursorarrow", caption: "Cursor", on: s.cursor, isToggle: true) { s.cursor.toggle() },
             MenuTile(icon: "cursorarrow.click.2", caption: "Clicks", on: s.clickCircles, isToggle: true) { s.clickCircles.toggle() },
-            MenuTile(icon: "capsule", caption: "Island", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
-        ]
+            MenuTile(icon: "eye", caption: "Wadjet", on: s.showIslandWhileRecording, isToggle: true) { s.showIslandWhileRecording.toggle() },
+        ], [
+            MenuTile(icon: "speaker.wave.2", filledIcon: "speaker.wave.2.fill", caption: "Audio", on: s.sysAudio, isToggle: true) { s.sysAudio.toggle() },
+            MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
+        ]]
     }
-    /// Measure's four modes as pick tiles — they close the menu
-    var measureTiles: [MenuTile] {
+    /// Measure's four modes as pick tiles, areas then lines — they close the menu
+    var measureTiles: [[MenuTile]] {
         func tile(_ mode: String, _ icon: String) -> MenuTile {
             MenuTile(icon: icon, caption: mode, on: s.measureMode == mode) {
                 s.measureMode = mode; s.openMenu = nil; ctrl.syncMenu()
             }
         }
-        return [tile("Bounds", "square.dashed"), tile("Spacing", "arrow.left.and.right.square"),
-                tile("Horizontal", "arrow.left.and.right"), tile("Vertical", "arrow.up.and.down")]
+        return [[tile("Bounds", "square.dashed"), tile("Spacing", "arrow.left.and.right.square")],
+                [tile("Horizontal", "arrow.left.and.right"), tile("Vertical", "arrow.up.and.down")]]
     }
     @ViewBuilder func countdownRows() -> some View {
         ForEach(["Off", "3 s", "5 s", "10 s"], id: \.self) { v in
@@ -3623,6 +4048,13 @@ struct ToolMenuView: View {
             }
         }
     }
+}
+
+/// a menu row's or tile's hover fill: concentric with the menu where it
+/// meets the menu's corners, 14 pt elsewhere
+func menuHighlight(_ on: Bool) -> some View {
+    ConcentricRectangle(corners: .concentric(minimum: .fixed(14)), isUniform: false)
+        .fill(.white.opacity(on ? 0.1 : 0))
 }
 
 // a menu row: 22 pt leading column (checkmark when on, an icon otherwise, or
@@ -3655,7 +4087,7 @@ struct MenuRow: View {
             }
             .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
             .padding(.horizontal, 14)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(hovering ? 0.1 : 0)))
+            .background(menuHighlight(hovering))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
@@ -3684,7 +4116,7 @@ struct MenuTile: View {
             }
             .foregroundStyle(on ? Color.wadjetAccent : .white)
             .frame(maxWidth: .infinity).frame(height: 64)
-            .background(RoundedRectangle(cornerRadius: 14, style: .continuous).fill(.white.opacity(hovering ? 0.1 : 0)))
+            .background(menuHighlight(hovering))
             .contentShape(Rectangle())
             .onHover { hovering = $0 }
         }
@@ -3794,6 +4226,7 @@ final class ToastItem: ObservableObject, Identifiable {
     @Published var showCancel = false
     @Published var progress: Double = 0
     var remaining: TimeInterval = 5; var timer: Timer?; var t0 = Date()
+    var dragging = false // a file drag is in progress — hover must not restart the timer
     init(cap: Capture) { self.cap = cap }
 }
 
@@ -3849,8 +4282,10 @@ final class ToastController: ObservableObject {
             Task { @MainActor in self.dismiss(t) }
         }
     }
+    /// idempotent: a drag pause after a hover pause must not subtract twice
     func pauseTimer(_ t: ToastItem) {
-        t.timer?.invalidate(); t.timer = nil
+        guard let timer = t.timer else { return }
+        timer.invalidate(); t.timer = nil
         t.remaining -= Date().timeIntervalSince(t.t0)
     }
     func dismiss(_ t: ToastItem) { items.removeAll { $0 === t }; relayout(); AppDelegate.shared?.updateEscHotkey() }
@@ -3865,6 +4300,42 @@ final class ToastController: ObservableObject {
         let t = pending(text)
         if let sw = swatch { t.sub = sw }
         startTimer(t)
+    }
+}
+
+/// an AppKit drag source over the thumbnail — dragging it hands the saved
+/// file to whatever it's dropped on, like macOS's screenshot thumbnail
+struct ToastDragSource: NSViewRepresentable {
+    let url: URL
+    let thumb: CGImage?
+    let onClick: () -> Void
+    let onDragStart: () -> Void
+    let onEnd: (NSDragOperation, NSPoint) -> Void
+    func makeNSView(context: Context) -> DragView { let v = DragView(); v.rep = self; return v }
+    func updateNSView(_ v: DragView, context: Context) { v.rep = self }
+    final class DragView: NSView, NSDraggingSource {
+        var rep: ToastDragSource?
+        var downPt: NSPoint?
+        var didDrag = false
+        override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
+        override func mouseDown(with e: NSEvent) { downPt = convert(e.locationInWindow, from: nil); didDrag = false }
+        override func mouseDragged(with e: NSEvent) {
+            guard !didDrag, let down = downPt, let rep else { return }
+            let pt = convert(e.locationInWindow, from: nil)
+            guard hypot(pt.x - down.x, pt.y - down.y) > 3 else { return }
+            didDrag = true
+            rep.onDragStart()
+            let item = NSDraggingItem(pasteboardWriter: rep.url as NSURL)
+            let img = rep.thumb.map { NSImage(cgImage: $0, size: bounds.size) }
+                ?? NSWorkspace.shared.icon(forFile: rep.url.path)
+            item.setDraggingFrame(bounds, contents: img)
+            beginDraggingSession(with: [item], event: e, source: self)
+        }
+        override func mouseUp(with e: NSEvent) { if !didDrag { rep?.onClick() }; downPt = nil }
+        func draggingSession(_ s: NSDraggingSession, sourceOperationMaskFor context: NSDraggingContext) -> NSDragOperation { .copy }
+        func draggingSession(_ s: NSDraggingSession, endedAt p: NSPoint, operation: NSDragOperation) {
+            rep?.onEnd(operation, p)
+        }
     }
 }
 
@@ -3891,19 +4362,41 @@ struct ToastView: View {
         .gesture(DragGesture().onChanged { offset = max(0, $0.translation.width) }
             .onEnded { if $0.translation.width > 80 { ctrl.dismiss(item) } else { offset = 0 } })
         .onTapGesture { open() }
-        .onHover { h in h ? ctrl.pauseTimer(item) : ctrl.startTimer(item) }
+        .onHover { h in
+            if h { ctrl.pauseTimer(item) }
+            else if !item.dragging { ctrl.startTimer(item) }
+        }
         .transition(.move(edge: .trailing).combined(with: .opacity))
         .animation(.smooth(duration: 0.35), value: offset)
     }
     var card: some View {
         ZStack(alignment: .bottom) {
             if let cg = item.cap.thumb {
+                // sized to the capture's own aspect so the rim hugs the image
+                let k = min(220 / CGFloat(cg.width), 160 / CGFloat(cg.height), 1)
                 Image(cg, scale: 1, label: Text(""))
-                    .resizable().aspectRatio(contentMode: .fit)
-                    .frame(maxWidth: 220, maxHeight: 160)
+                    .resizable()
+                    .frame(width: CGFloat(cg.width) * k, height: CGFloat(cg.height) * k)
                     .clipShape(RoundedRectangle(cornerRadius: 12))
                     .overlay(RoundedRectangle(cornerRadius: 12).stroke(.white.opacity(0.9), lineWidth: 2))
                     .shadow(radius: 10, y: 4)
+                    .overlay {
+                        if let url = item.cap.url {
+                            ToastDragSource(url: url, thumb: cg,
+                                onClick: { open() },
+                                onDragStart: {
+                                    item.dragging = true; ctrl.pauseTimer(item)
+                                },
+                                onEnd: { op, pt in
+                                    item.dragging = false
+                                    // a landed drop, or a fling off the right edge, dismisses
+                                    let gone = op != [] || (ctrl.panel?.screen ?? .main)
+                                        .map { pt.x >= $0.frame.maxX - 40 } ?? false
+                                    if gone { ctrl.dismiss(item) } else { ctrl.startTimer(item) }
+                                    AppLog.line("toast drag ended op=\(op.rawValue) → \(gone ? "dismissed" : "kept")")
+                                })
+                        }
+                    }
             } else {
                 HStack(spacing: 6) {
                     Image(systemName: "text.viewfinder").font(.system(size: 11))
