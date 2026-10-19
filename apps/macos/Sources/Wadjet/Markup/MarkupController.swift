@@ -16,12 +16,23 @@ final class MarkupController {
     static let handleMinExtent: CGFloat = 12
     static let hitTolerance: CGFloat = 4
 
+    /// true for the screen's shared Markup; an Editor's draws on its own surface
+    private let isScreen: Bool
     private(set) var stack = LayerStack()
     private(set) var armed: Tool?
     /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
     @ObservationIgnored private var gesture: Gesture?
     /// every committed change is one undo step
     @ObservationIgnored private var history = LayerHistory()
+    /// an Editor's canvas view; the screen draws on its per-display panels instead
+    @ObservationIgnored weak var surface: MarkupView?
+    /// an Editor's undo steps go to its document; the screen keeps LayerHistory
+    @ObservationIgnored weak var undoManager: UndoManager?
+    /// on-screen points per Annotation point — the Editor's zoom; grips and hit
+    /// slop divide by it so they keep their on-screen size
+    @ObservationIgnored var zoom: CGFloat = 1
+    /// an Editor's snap targets end at the Canvas bounds; nil snaps against the live screen
+    @ObservationIgnored var snapBounds: CGRect?
     /// the stack when the drag in flight began — its one undo step
     @ObservationIgnored private var gestureStart: LayerStack?
     enum Gesture {
@@ -35,7 +46,7 @@ final class MarkupController {
     @ObservationIgnored private var counterNext: Int?
     private(set) var selection: Annotation.ID? {
         didSet {
-            if selection == nil, AppState.shared.openMenu?.kind == .markup {
+            if isScreen, selection == nil, AppState.shared.openMenu?.kind == .markup {
                 AppState.shared.openMenu = nil
                 AppDelegate.shared?.overlayCtrl.syncMenu()
             }
@@ -60,25 +71,48 @@ final class MarkupController {
     /// what the panels drew last — the Recording reads it off the main actor for window-frame compositing
     nonisolated static let onScreen = AnnotationSnapshot()
 
-    init() {
+    private init() {
+        isScreen = true
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.screensChanged() }
         }
     }
 
+    /// an Editor's Markup over one Canvas's stack: it draws on `surface` and
+    /// records undo steps in `undoManager` (its document's), never the screen panels
+    init(editing stack: LayerStack) {
+        isScreen = false
+        self.stack = stack
+    }
+
     /// one action = one undo step; every mutation of `stack` goes through here
     private func edit(_ change: (inout LayerStack) -> Void) {
         let before = stack
         change(&stack)
-        history.record(from: before, to: stack)
-        endHistoryIfClosed()
+        record(from: before)
         render()
     }
     /// the drag in flight becomes its one undo step, if it changed anything
     private func commitGesture() {
-        if let gestureStart { history.record(from: gestureStart, to: stack) }
+        if let gestureStart { record(from: gestureStart) }
         gestureStart = nil
+    }
+    /// one undo step: the screen's LayerHistory, or the Editor document's undo manager
+    private func record(from before: LayerStack) {
+        guard isScreen else { return registerUndo(restoring: before) }
+        history.record(from: before, to: stack)
+        endHistoryIfClosed()
+    }
+    private func registerUndo(restoring before: LayerStack) {
+        guard before != stack, let undoManager else { return }
+        undoManager.registerUndo(withTarget: self) { c in
+            MainActor.assumeIsolated {
+                let after = c.stack
+                c.restore(before)
+                c.registerUndo(restoring: after)
+            }
+        }
     }
     /// history ends once the stack is empty and the session is closed — Clear
     /// can run after the toolbar closes (Clear after Screenshot), so edits check too
@@ -106,6 +140,16 @@ final class MarkupController {
         // gone, hidden, or locked: none of those can stay the selection
         if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
         syncPanels(); render()
+    }
+    /// replaces the whole stack — a reverted document
+    func load(_ s: LayerStack) { gesture = nil; gestureStart = nil; restore(s) }
+
+    /// arms a Tool on an Editor; the screen follows AppState through syncArmed
+    func arm(_ tool: Tool?) {
+        commitGesture(); gesture = nil
+        if tool == nil { selection = nil; cmdHeld = false }
+        armed = tool
+        render()
     }
 
     /// the want from AppState: a Markup Tool armed while the toolbar is up —
@@ -179,6 +223,7 @@ final class MarkupController {
 
     /// panels exist only while there's something to show or take clicks for
     func syncPanels() {
+        guard isScreen else { return }
         guard armed != nil || draft != nil || !stack.isEmpty else {
             panels.forEach { $0.close() }; panels = []; return
         }
@@ -283,22 +328,23 @@ final class MarkupController {
         gestureStart = stack
         if armed == .select || command {
             if let sel = selected {
-                if let h = sel.handle(at: p, radius: Self.handleHitRadius,
-                                      minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset) {
-                    snapper = MarkupSnapper(stack: stack, excluding: sel.id)
+                if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
+                                      minExtent: Self.handleMinExtent / zoom,
+                                      rotateOffset: Self.rotateOffset / zoom) {
+                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds)
                     gesture = .handle(h, sel, from: p)
                     return
                 }
-                if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
-                    snapper = MarkupSnapper(stack: stack, excluding: sel.id)
+                if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
+                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds)
                     gesture = .moving(sel, from: p)
                     return
                 }
             }
-            if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance) {
+            if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom) {
                 selection = hit.id
                 AppLog.line("markup: selected")
-                snapper = MarkupSnapper(stack: stack, excluding: hit.id)
+                snapper = MarkupSnapper(stack: stack, excluding: hit.id, canvasBounds: snapBounds)
                 gesture = .moving(hit, from: p)
             } else {
                 selection = nil
@@ -323,7 +369,7 @@ final class MarkupController {
         default:
             return
         }
-        snapper = MarkupSnapper(stack: stack, excluding: nil)
+        snapper = MarkupSnapper(stack: stack, excluding: nil, canvasBounds: snapBounds)
         let so = snapper?.offset(points: [p]) ?? .zero
         gesture = .drawing(a.moved(by: so), from: CGPoint(x: p.x + so.dx, y: p.y + so.dy))
         render()
@@ -414,6 +460,7 @@ final class MarkupController {
 
     func render() {
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
+        guard isScreen else { surface?.show(shown, selection: selected); surface?.showGuides(guides); return }
         Self.onScreen.annotations = shown
         AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
         for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
