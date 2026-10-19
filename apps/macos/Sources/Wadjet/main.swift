@@ -950,8 +950,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var captureFiles = CaptureFiles(directory: Self.capturesDir)
     lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
 
-    // Screenshots write a temp file, then run the Workflow picked for the Tool —
-    // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
     /// the Screenshot Workflow for the current Tool, resolved at confirm —
     /// consumes the Shortcut's one-shot pick
     func takeShotWorkflow() -> String {
@@ -959,6 +957,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         defer { s.triggerWorkflow = nil }
         return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
     }
+    // Screenshots write a temp file, then run the Workflow picked for the Tool —
+    // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
     func runCapture(thumb: CGImage?, label: String, workflow: String) {
         guard let img = thumb else {
             AppLog.line("capture: no image — window capture and frozen crop both failed")
