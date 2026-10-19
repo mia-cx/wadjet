@@ -85,15 +85,20 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     }
     /// `freeze` — take a Freeze Frame when a Tool opens; off leaves the desktop
     /// live and shoots at confirm (Utilities always freeze — they read pixels).
+    /// `freezeWhileRecording` — the same during a Recording; nil inherits
+    /// `freeze` (Markup falls back to live drawing instead).
     /// `cursor` — the cursor's default in Screenshots and Recordings; the Tool
     /// menu overrides it per capture.
     public struct Capture: Codable, Equatable, Sendable {
         public var freeze = true
+        /// nil inherits `freeze`; set only while a Recording runs
+        public var freezeWhileRecording: Bool? = nil
         public var cursor = true
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             freeze = try c.decodeIfPresent(Bool.self, forKey: .freeze) ?? true
+            freezeWhileRecording = try c.decodeIfPresent(Bool.self, forKey: .freezeWhileRecording)
             cursor = try c.decodeIfPresent(Bool.self, forKey: .cursor) ?? true
         }
     }
