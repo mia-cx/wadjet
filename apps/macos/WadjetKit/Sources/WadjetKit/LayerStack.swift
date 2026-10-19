@@ -9,7 +9,11 @@ public struct LayerStack: Codable, Equatable, Sendable {
     public var isEmpty: Bool { annotations.isEmpty }
     /// on top
     public mutating func add(_ a: Annotation) { annotations.append(a) }
-    public mutating func remove(id: Annotation.ID) { annotations.removeAll { $0.id == id } }
+    /// a removed counter's sequence counts down to close the gap
+    public mutating func remove(id: Annotation.ID) {
+        renumberCounters(removing: id)
+        annotations.removeAll { $0.id == id }
+    }
     public mutating func clear() { annotations.removeAll() }
     /// the front-most annotation under `point`, if any
     public func topmost(at point: CGPoint, tolerance: CGFloat) -> Annotation? {

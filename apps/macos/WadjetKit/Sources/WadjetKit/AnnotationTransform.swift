@@ -23,16 +23,20 @@ public enum SelectionHandle: Hashable, Sendable {
 }
 
 extension AnnotationKind {
-    /// the points that define the geometry — a Censor's or shape's are its rect's min and
-    /// max corners, so mapping them resizes the rect
+    /// the points that define the geometry — a Censor's, shape's or counter's
+    /// are its rect's min and max corners, so mapping them resizes
     var points: [CGPoint] {
         switch self {
         case let .line(start, end): [start, end]
         case let .censor(rect, _), let .shape(_, rect):
             [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
+        case let .counter(center, radius, _, _):
+            [CGPoint(x: center.x - radius, y: center.y - radius),
+             CGPoint(x: center.x + radius, y: center.y + radius)]
         }
     }
-    /// the same kind with every defining point mapped
+    /// the same kind with every defining point mapped — a counter rebuilds
+    /// from its mapped box so it stays a circle
     func mapPoints(_ f: (CGPoint) -> CGPoint) -> AnnotationKind {
         switch self {
         case let .line(start, end): return .line(start: f(start), end: f(end))
@@ -40,6 +44,19 @@ extension AnnotationKind {
             return .censor(rect: rect.mapCorners(f), method: method)
         case let .shape(kind, rect):
             return .shape(kind, rect: rect.mapCorners(f))
+        case let .counter(center, radius, value, format):
+            let a = f(CGPoint(x: center.x - radius, y: center.y - radius)),
+                b = f(CGPoint(x: center.x + radius, y: center.y + radius))
+            return .counter(center: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2),
+                            radius: min(abs(a.x - b.x), abs(a.y - b.y)) / 2,
+                            value: value, format: format)
+        }
+    }
+    /// resizes with one scale on both axes so it keeps its shape
+    var keepsAspect: Bool {
+        switch self {
+        case .counter: true
+        case .line, .censor, .shape: false
         }
     }
     /// an upright box that mapPoints re-standardizes, so a negative resize
@@ -47,7 +64,7 @@ extension AnnotationKind {
     var isBox: Bool {
         switch self {
         case .line: false
-        case .censor, .shape: true
+        case .censor, .shape, .counter: true
         }
     }
     /// bounding box of `points` — may have zero width or height
@@ -86,8 +103,15 @@ extension Annotation {
             let anchor = CGPoint(x: b.midX - CGFloat(x) * b.width / 2, y: b.midY - CGFloat(y) * b.height / 2)
             let grip = CGPoint(x: b.midX + CGFloat(x) * b.width / 2, y: b.midY + CGFloat(y) * b.height / 2)
             // a 0 component leaves that axis alone; dragging past the anchor mirrors (negative scale)
-            let sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
-            let sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
+            var sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
+            var sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
+            if kind.keepsAspect {
+                // a counter stays a circle: one scale from the grip's moving
+                // axis, the larger on a corner, so the mapped box stays square
+                let u = x == 0 ? abs(sy) : y == 0 ? abs(sx) : max(abs(sx), abs(sy))
+                sx = x == 0 ? u : (sx < 0 ? -u : u)
+                sy = y == 0 ? u : (sy < 0 ? -u : u)
+            }
             var new = self
             new.kind = kind.mapPoints { CGPoint(x: anchor.x + ($0.x - anchor.x) * sx,
                                                 y: anchor.y + ($0.y - anchor.y) * sy) }

@@ -36,11 +36,13 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     /// filtered
     case censor(rect: CGRect, method: CensorMethod)
     case shape(ShapeKind, rect: CGRect)
+    case counter(center: CGPoint, radius: CGFloat, value: Int, format: CounterFormat)
 
-    enum CodingKeys: String, CodingKey { case line, censor, shape }
+    enum CodingKeys: String, CodingKey { case line, censor, shape, counter }
     enum LineKeys: String, CodingKey { case start, end }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
+    enum CounterKeys: String, CodingKey { case center, radius, value, format }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if c.contains(.line) {
@@ -55,10 +57,16 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             let s = try c.nestedContainer(keyedBy: ShapeKeys.self, forKey: .shape)
             self = .shape(try s.decode(ShapeKind.self, forKey: .kind),
                           rect: try s.decodeRect(forKey: .rect))
+        } else if c.contains(.counter) {
+            let n = try c.nestedContainer(keyedBy: CounterKeys.self, forKey: .counter)
+            self = .counter(center: try n.decodePoint(forKey: .center),
+                            radius: try n.decode(CGFloat.self, forKey: .radius),
+                            value: try n.decode(Int.self, forKey: .value),
+                            format: try n.decode(CounterFormat.self, forKey: .format))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line, a censor, or a shape"))
+                                      debugDescription: "an AnnotationKind is a line, a censor, a shape, or a counter"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -76,6 +84,12 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             var s = c.nestedContainer(keyedBy: ShapeKeys.self, forKey: .shape)
             try s.encode(kind, forKey: .kind)
             try s.encodeRect(rect, forKey: .rect)
+        case let .counter(center, radius, value, format):
+            var n = c.nestedContainer(keyedBy: CounterKeys.self, forKey: .counter)
+            try n.encodePoint(center, forKey: .center)
+            try n.encode(radius, forKey: .radius)
+            try n.encode(value, forKey: .value)
+            try n.encode(format, forKey: .format)
         }
     }
 }
@@ -204,16 +218,17 @@ extension Annotation {
         switch kind {
         case .line: style.colour
         case .shape: style.stroked ? style.colour : nil
-        case .censor: nil
+        case .censor, .counter: nil
         }
     }
     /// what the inside fills with: a shape's `style.fill`, a Black out's opaque
-    /// black whatever the style, nil otherwise
+    /// black or a counter's `style.colour` whatever the style, nil otherwise
     public var fillColour: RGBAColour? {
         switch kind {
         case .line: nil
         case .shape: style.fill
         case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
+        case .counter: style.colour
         }
     }
 }

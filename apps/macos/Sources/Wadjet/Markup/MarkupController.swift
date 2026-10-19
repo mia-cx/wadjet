@@ -31,6 +31,8 @@ final class MarkupController {
     }
     /// the in-progress stroke, for syncPanels/render
     var draft: Annotation? { if case let .drawing(a, _) = gesture { a } else { nil } }
+    /// set by Option-click on a counter: the value the next click places
+    @ObservationIgnored private var counterNext: Int?
     private(set) var selection: Annotation.ID? {
         didSet {
             if selection == nil, AppState.shared.openMenu?.kind == .markup {
@@ -117,7 +119,7 @@ final class MarkupController {
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
-            gesture = nil; selection = nil; cmdHeld = false; snapper = nil
+            gesture = nil; selection = nil; cmdHeld = false; snapper = nil; counterNext = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
         } else if flagsMon == nil {
@@ -196,7 +198,7 @@ final class MarkupController {
     func clear() {
         commitGesture()
         edit { $0.clear() }
-        gesture = nil; snapper = nil; selection = nil; syncPanels()
+        gesture = nil; snapper = nil; selection = nil; counterNext = nil; syncPanels()
     }
 
     /// the selected Annotation's style; setting restyles it alone — the seam the
@@ -281,6 +283,9 @@ final class MarkupController {
             a = Annotation(kind: .censor(rect: CGRect(origin: p, size: .zero),
                                          method: MarkupStyles.shared.censorMethod),
                            style: MarkupStyles.shared.style(for: .censor))
+        case .counter:
+            placeCounter(at: p)
+            return
         default:
             return
         }
@@ -288,6 +293,29 @@ final class MarkupController {
         let so = snapper?.offset(points: [p]) ?? .zero
         gesture = .drawing(a.moved(by: so), from: CGPoint(x: p.x + so.dx, y: p.y + so.dy))
         render()
+    }
+
+    /// a Step counter click places on the spot — there's no drag. ⌥-click on a
+    /// counter makes the next click continue from it; ⌥-click elsewhere starts
+    /// a new sequence at 1/A.
+    private func placeCounter(at p: CGPoint) {
+        let option = NSEvent.modifierFlags.contains(.option)
+        if option, case let .counter(_, _, v, f)? = stack.topmost(at: p, tolerance: Self.hitTolerance)?.kind {
+            counterNext = v + 1
+            // nothing is selected here, so this writes the Tool's format
+            AppState.shared.config.update { $0.markup.tools["counter", default: .init()].format = f }
+            AppLog.line("markup: counter continues from \(f.label(v))")
+            return
+        }
+        let format = MarkupCounter.format
+        let value = option ? 1 : counterNext ?? stack.nextCounterValue(format)
+        counterNext = nil
+        // the click's own gesture snapshot (begin → end) makes this one undo step
+        stack.add(Annotation(kind: .counter(center: p, radius: MarkupCounter.size / 2,
+                                          value: value, format: format),
+                             style: MarkupStyles.shared.style(for: .counter)))
+        render()
+        AppLog.line("markup: placed counter \(format.label(value))")
     }
     func drag(to p: CGPoint) {
         switch gesture {
@@ -306,6 +334,7 @@ final class MarkupController {
             case let .censor(_, method):
                 a.kind = .censor(rect: CGRect(x: from.x, y: from.y, width: p.x - from.x,
                                               height: p.y - from.y).standardized, method: method)
+            case .counter: break // counters place on the click — never a draft
             }
             gesture = .drawing(a, from: from)
         case let .moving(start, from):
@@ -330,6 +359,8 @@ final class MarkupController {
                 hypot(end.x - start.x, end.y - start.y) >= Self.minDraftSize
             case let .shape(_, rect), let .censor(rect, _):
                 rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
+            case .counter:
+                false // counters place on the click — never a draft
             }
             if drawn { stack.add(d) }
         }

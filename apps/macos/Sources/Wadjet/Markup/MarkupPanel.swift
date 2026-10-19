@@ -67,7 +67,10 @@ final class MarkupView: NSView {
         super.viewDidChangeBackingProperties()
         guard let s = window?.backingScaleFactor, s != scale else { return }
         scale = s
-        for l in Array(shapeLayers.values) + [frameLayer, handlesLayer, guidesLayer] { l.contentsScale = s }
+        for l in Array(shapeLayers.values) + [frameLayer, handlesLayer, guidesLayer] {
+            l.contentsScale = s
+            l.sublayers?.forEach { $0.contentsScale = s }
+        }
     }
 
     /// one CAShapeLayer per Annotation, keyed by id so strokes can persist
@@ -84,9 +87,23 @@ final class MarkupView: NSView {
             l.strokeColor = a.strokeColour.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
             // Black out stays opaque whatever the style
             if case .censor = a.kind { l.opacity = 1 } else { l.opacity = Float(a.style.opacity) }
+            l.allowsGroupOpacity = true // opacity fades a counter's circle and label together
             l.lineWidth = a.style.width
             l.lineCap = .round; l.lineJoin = .round
             l.contentsScale = scale
+            // a counter's label: one white child layer, gone when there's no label
+            let label = PathGeometry.labelPath(for: a)
+            let sub = l.sublayers?.first as? CAShapeLayer
+            if let label {
+                let s = sub ?? CAShapeLayer()
+                s.path = label
+                s.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+                s.strokeColor = nil
+                s.contentsScale = scale
+                if s.superlayer == nil { l.addSublayer(s) }
+            } else if sub != nil {
+                l.sublayers = nil
+            }
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }

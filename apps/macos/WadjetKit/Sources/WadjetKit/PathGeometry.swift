@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 
 /// Builds each Annotation's drawable path and hit-tests it — the stroked
@@ -16,9 +17,48 @@ public enum PathGeometry {
             p.addRect(rect)
         case let .shape(kind, rect):
             p.addPath(kind.path(in: rect))
+        case let .counter(center, radius, _, _):
+            p.addPath(CGPath(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
+                                               width: 2 * radius, height: 2 * radius),
+                             transform: nil))
         }
         var t = a.affineTransform
         return p.copy(using: &t) ?? p
+    }
+    /// a counter's label as glyph outlines, filled white over the circle: bold
+    /// system font at 1.1 × radius, scaled down to fit 1.4 × radius wide,
+    /// centred on the glyphs' bounding box. It turns with the counter's
+    /// rotation but never mirrors. nil for other kinds.
+    public static func labelPath(for a: Annotation) -> CGPath? {
+        guard case let .counter(center, radius, value, format) = a.kind else { return nil }
+        guard let font = CTFontCreateUIFontForLanguage(.emphasizedSystem, 1.1 * radius, nil) else {
+            return nil
+        }
+        let line = CTLineCreateWithAttributedString(
+            NSAttributedString(string: format.label(value), attributes: [.font: font]))
+        let glyphs = CGMutablePath()
+        for run in CTLineGetGlyphRuns(line) as! [CTRun] {
+            let n = CTRunGetGlyphCount(run)
+            var glyphIDs = [CGGlyph](repeating: 0, count: n)
+            var positions = [CGPoint](repeating: .zero, count: n)
+            CTRunGetGlyphs(run, CFRange(), &glyphIDs)
+            CTRunGetPositions(run, CFRange(), &positions)
+            for i in 0..<n {
+                if let g = CTFontCreatePathForGlyph(font, glyphIDs[i], nil) {
+                    glyphs.addPath(g, transform: CGAffineTransform(translationX: positions[i].x,
+                                                                   y: positions[i].y))
+                }
+            }
+        }
+        // centre the glyph bounding box on the counter, then rotate about it —
+        // the label never mirrors, so the flip components don't apply
+        let bb = glyphs.boundingBox
+        let s = bb.width > 0 ? min(1, 1.4 * radius / bb.width) : 1
+        var t = CGAffineTransform(translationX: -bb.midX, y: -bb.midY)
+            .concatenating(CGAffineTransform(scaleX: s, y: s))
+            .concatenating(CGAffineTransform(rotationAngle: a.transform.rotation))
+            .concatenating(CGAffineTransform(translationX: center.x, y: center.y))
+        return glyphs.copy(using: &t) ?? glyphs
     }
     /// whether `point` lands on the filled area, or on the stroked outline
     /// widened by `tolerance` on each side
