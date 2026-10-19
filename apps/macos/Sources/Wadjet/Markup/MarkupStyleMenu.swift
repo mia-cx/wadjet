@@ -168,11 +168,12 @@ struct MarkupColourRow: View {
     @ObservedObject var s = AppState.shared
     var styles: MarkupStyles { .shared }
 
-    var style: AnnotationStyle { styles.style(for: tool) }
-    var colour: RGBAColour { style.colour(for: target) }
+    var colour: RGBAColour { styles.colour(for: tool, target: target) }
     var open: Bool { styles.wheel == target }
-    /// VoiceOver names the fill row's controls "Fill …"
-    var voiceOver: String { target == .fill ? "Fill " : "" }
+    /// VoiceOver names the non-stroke rows' controls "Fill …" / "Border …"
+    var voiceOver: String {
+        switch target { case .fill: "Fill "; case .border: "Border "; case .stroke: "" }
+    }
 
     var body: some View {
         colourRow
@@ -230,7 +231,7 @@ struct MarkupColourRow: View {
             MenuCell { styles.beginEyedropper(for: tool, target: target) } content: {
                 Image(systemName: "eyedropper").font(.system(size: 15)).foregroundStyle(.white)
             }
-            .accessibilityLabel("Pick \(target == .fill ? "fill " : "")colour from screen")
+            .accessibilityLabel("Pick \(voiceOver.lowercased())colour from screen")
         }
         .frame(minHeight: 40)
     }
@@ -383,8 +384,8 @@ struct ColourWheelView: View {
                 dragMode = nil
                 commit()
             })
-        .onAppear { seed(from: styles.style(for: tool).colour(for: target)) }
-        .onChange(of: styles.style(for: tool).colour(for: target)) { _, c in seed(from: c) }
+        .onAppear { seed(from: styles.colour(for: tool, target: target)) }
+        .onChange(of: styles.colour(for: tool, target: target)) { _, c in seed(from: c) }
     }
 
     /// the S/L triangle in fixed orientation (H at unit angle 0, W 120°, K
