@@ -23,11 +23,12 @@ public enum SelectionHandle: Hashable, Sendable {
 }
 
 extension AnnotationKind {
-    /// the points that define the geometry
+    /// the points that define the geometry — a Censor's or shape's are its rect's min and
+    /// max corners, so mapping them resizes the rect
     var points: [CGPoint] {
         switch self {
         case let .line(start, end): [start, end]
-        case let .censor(rect, _):
+        case let .censor(rect, _), let .shape(_, rect):
             [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
         }
     }
@@ -36,11 +37,9 @@ extension AnnotationKind {
         switch self {
         case let .line(start, end): return .line(start: f(start), end: f(end))
         case let .censor(rect, method):
-            // a negative resize scale mirrors the corners, so re-standardize
-            let a = f(CGPoint(x: rect.minX, y: rect.minY))
-            let b = f(CGPoint(x: rect.maxX, y: rect.maxY))
-            return .censor(rect: CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y).standardized,
-                           method: method)
+            return .censor(rect: rect.mapCorners(f), method: method)
+        case let .shape(kind, rect):
+            return .shape(kind, rect: rect.mapCorners(f))
         }
     }
     /// bounding box of `points` — may have zero width or height
@@ -160,5 +159,14 @@ extension Annotation {
             .map { ($0.handle, hypot($0.at.x - p.x, $0.at.y - p.y)) }
             .filter { $0.1 <= radius }
             .min { $0.1 < $1.1 }?.0
+    }
+}
+
+private extension CGRect {
+    /// the rect through two mapped corners — a negative resize scale mirrors
+    /// them, so it re-standardizes
+    func mapCorners(_ f: (CGPoint) -> CGPoint) -> CGRect {
+        let a = f(CGPoint(x: minX, y: minY)), b = f(CGPoint(x: maxX, y: maxY))
+        return CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y).standardized
     }
 }

@@ -28,16 +28,18 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// What an Annotation is; later slices add cases (shapes, pen, text, images…)
+/// What an Annotation is; later slices add cases (pen, text, images…)
 public enum AnnotationKind: Codable, Equatable, Sendable {
     case line(start: CGPoint, end: CGPoint)
     /// the filled rect in untransformed geometry space; Black out draws opaque
     /// black whatever the style
     case censor(rect: CGRect, method: CensorMethod)
+    case shape(ShapeKind, rect: CGRect)
 
-    enum CodingKeys: String, CodingKey { case line, censor }
+    enum CodingKeys: String, CodingKey { case line, censor, shape }
     enum LineKeys: String, CodingKey { case start, end }
     enum CensorKeys: String, CodingKey { case rect, method }
+    enum ShapeKeys: String, CodingKey { case kind, rect }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if c.contains(.line) {
@@ -48,10 +50,14 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             let n = try c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
             self = .censor(rect: try n.decodeRect(forKey: .rect),
                            method: try n.decode(CensorMethod.self, forKey: .method))
+        } else if c.contains(.shape) {
+            let s = try c.nestedContainer(keyedBy: ShapeKeys.self, forKey: .shape)
+            self = .shape(try s.decode(ShapeKind.self, forKey: .kind),
+                          rect: try s.decodeRect(forKey: .rect))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line or a censor"))
+                                      debugDescription: "an AnnotationKind is a line, a censor, or a shape"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -65,6 +71,10 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             var n = c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
             try n.encodeRect(rect, forKey: .rect)
             try n.encode(method, forKey: .method)
+        case let .shape(kind, rect):
+            var s = c.nestedContainer(keyedBy: ShapeKeys.self, forKey: .shape)
+            try s.encode(kind, forKey: .kind)
+            try s.encodeRect(rect, forKey: .rect)
         }
     }
 }
@@ -103,22 +113,52 @@ private extension KeyedEncodingContainer {
     }
 }
 
-/// How an Annotation draws: stroke colour, width, and opacity.
+/// How an Annotation draws: stroke colour, width, and opacity — shapes add a
+/// fill and can drop their stroke.
 public struct AnnotationStyle: Codable, Equatable, Sendable {
     public var colour: RGBAColour
     public var width: CGFloat // stroke width, points
     /// whole-Annotation opacity, separate from colour alpha
     public var opacity: Double
-    public init(colour: RGBAColour, width: CGFloat, opacity: Double = 1) {
+    /// shapes only: the inside's colour, nil = unfilled
+    public var fill: RGBAColour?
+    /// shapes only: false leaves just the fill
+    public var stroked: Bool
+    public init(colour: RGBAColour, width: CGFloat, opacity: Double = 1,
+                fill: RGBAColour? = nil, stroked: Bool = true) {
         self.colour = colour
         self.width = width
         self.opacity = opacity
+        self.fill = fill
+        self.stroked = stroked
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         colour = try c.decode(RGBAColour.self, forKey: .colour)
         width = try c.decode(CGFloat.self, forKey: .width)
         opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1 // saved before opacity existed
+        fill = try c.decodeIfPresent(RGBAColour.self, forKey: .fill) // saved before shapes existed
+        stroked = try c.decodeIfPresent(Bool.self, forKey: .stroked) ?? true
+    }
+}
+
+extension Annotation {
+    /// what the outline strokes with: Lines always, shapes while `style.stroked`
+    public var strokeColour: RGBAColour? {
+        switch kind {
+        case .line: style.colour
+        case .shape: style.stroked ? style.colour : nil
+        case .censor: nil
+        }
+    }
+    /// what the inside fills with: a shape's `style.fill`, a Black out's opaque
+    /// black whatever the style, nil otherwise
+    public var fillColour: RGBAColour? {
+        switch kind {
+        case .line: nil
+        case .shape: style.fill
+        case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
+        }
     }
 }
 
