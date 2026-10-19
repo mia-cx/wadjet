@@ -35,12 +35,10 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
     public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer, source: CVPixelBuffer) {
         guard !annotations.isEmpty else { return }
         let w = CVPixelBufferGetWidth(pixelBuffer), h = CVPixelBufferGetHeight(pixelBuffer)
-        // the frame's content under the clip as a CensorSource, only when a Blur or Pixelate can use it
+        // the frame's content under the clip as a CensorSource, only when an
+        // Annotation samples it — a Blur/Pixelate Censor or a Magnify's viewport
         var sources: [CensorSource] = []
-        if annotations.contains(where: { a in
-            guard !a.hidden, case let .censor(_, method) = a.kind else { return false }
-            return method.samplesBeneath
-        }) {
+        if annotations.contains(where: { !$0.hidden && $0.sampledRect != nil }) {
             CVPixelBufferLockBaseAddress(source, .readOnly)
             defer { CVPixelBufferUnlockBaseAddress(source, .readOnly) }
             if let b = CVPixelBufferGetBaseAddress(source),
