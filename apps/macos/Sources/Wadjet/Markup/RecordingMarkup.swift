@@ -55,26 +55,26 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
               let contentRect = CGRect(dictionaryRepresentation: contentDict as CFDictionary),
               let scaleFactor = (attachments.first?[.scaleFactor] as? NSNumber)?.doubleValue
         else {
-            if let t = clock.stamp(pts) { writer.append(pb, at: t) }
+            if clock.admit(pts) { writer.append(pb, at: pts) }
             return
         }
         compositor.capture(pb, contentRect: contentRect, scaleFactor: CGFloat(scaleFactor))
         self.contentRect = contentRect
         self.scaleFactor = CGFloat(scaleFactor)
         frameSize = CGSize(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
-        guard let t = clock.stamp(pts) else {
-            dirty = true // a refresh took this slot: catch up with these pixels in the next one
+        guard clock.admit(pts) else {
+            dirty = true // a refresh went out within this frame interval: catch up with these pixels next
             return schedule()
         }
         dirty = false // a written captured frame already carries the current Annotations
-        writer.append(compose() ?? pb, at: t)
+        writer.append(compose() ?? pb, at: pts)
     }
 
     /// the Annotations changed, or the Recording resumed: rewrite the last frame with them
-    /// in the next free slot. Safe from any thread.
+    /// in the next free frame interval. Safe from any thread.
     func refresh() { queue.async { [self] in dirty = true; schedule() } }
 
-    /// one pending catch-up write at a time, in the next free frame slot
+    /// one pending catch-up write at a time, in the next free frame interval
     private func schedule() {
         guard !scheduled else { return }
         scheduled = true
@@ -82,9 +82,10 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
         queue.asyncAfter(deadline: .now() + wait) { [self] in
             scheduled = false
             guard dirty, let out = compose() else { return }
-            guard let t = clock.stamp(CMClockGetTime(CMClockGetHostTimeClock())) else { return schedule() }
+            let now = CMClockGetTime(CMClockGetHostTimeClock())
+            guard clock.admit(now) else { return schedule() }
             dirty = false
-            writer.append(out, at: t)
+            writer.append(out, at: now)
         }
     }
 
