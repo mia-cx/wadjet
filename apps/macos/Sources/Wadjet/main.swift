@@ -737,7 +737,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             // ImageIO thumbnail at ~64px (32pt @2x); MP4s go through
             // AVAssetImageGenerator instead — ImageIO can't read video. Async:
             // the item lands first and the image fills in when it's ready.
-            if let file = e.existingFile {
+            if let file = e.thumbnailFile(in: canvasStore) {
                 let item = it
                 Task { @MainActor in
                     guard let cg = await captureThumbnail(file) else { return }

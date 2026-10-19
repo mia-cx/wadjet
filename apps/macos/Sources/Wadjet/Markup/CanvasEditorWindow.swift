@@ -91,6 +91,7 @@ final class CanvasEditorWindowController: NSWindowController, NSWindowDelegate {
         rebuild()
         zoomToFit(nil)
         window.makeFirstResponder(canvasView)
+        installToolbar()
         // restoration at launch: the window already exists when the policy syncs
         DispatchQueue.main.async { AppDelegate.shared?.syncActivationPolicy() }
     }

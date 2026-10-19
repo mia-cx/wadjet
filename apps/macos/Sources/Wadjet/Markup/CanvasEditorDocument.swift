@@ -42,6 +42,14 @@ final class CanvasEditorDocument: NSDocument {
         return m
     }
 
+    /// the Canvas plus the live Markup stack — what Save, Copy, Export, and
+    /// Share all act on
+    var current: CanvasDocument {
+        var canvas = canvas
+        if let markupCached { canvas.layerStack = markupCached.stack }
+        return canvas
+    }
+
     // read/write run off the main actor in the macOS 26 SDK; AppKit still calls
     // them on the main thread, so the Canvas and Markup stay MainActor state
     override func read(from fileWrapper: FileWrapper, ofType typeName: String) throws {
@@ -58,9 +66,7 @@ final class CanvasEditorDocument: NSDocument {
     override func fileWrapper(ofType typeName: String) throws -> FileWrapper {
         // FileWrapper can't cross the isolation boundary even synchronously
         try MainActor.assumeIsolated {
-            var canvas = canvas
-            if let markupCached { canvas.layerStack = markupCached.stack }
-            return UnsafeSendable(value: try canvas.fileWrapper())
+            UnsafeSendable(value: try current.fileWrapper())
         }.value
     }
 
@@ -92,6 +98,11 @@ final class CanvasEditorDocument: NSDocument {
     }
 
     override func validateUserInterfaceItem(_ item: NSValidatedUserInterfaceItem) -> Bool {
+        // Copy is the Canvas's only while no Annotation is selected — a selected
+        // Annotation's Copy belongs to its view
+        if item.action == #selector(CanvasEditorDocument.copy(_:)) {
+            return markupCached?.selection == nil
+        }
         if isStorePackage,
            item.action == #selector(NSDocument.rename(_:))
             || item.action == #selector(NSDocument.move(_:)) {
