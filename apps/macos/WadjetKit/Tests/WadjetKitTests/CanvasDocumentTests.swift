@@ -433,6 +433,35 @@ struct CanvasDocumentTests {
         #expect(try pixel(4, document.flatten(scale: 1)) == [1, 0, 0, 1]) // now red
     }
 
+    // Proves a fractional, non-square Censor box is sampled fully: the beneath
+    // render snaps its source frame to the output grid, so no pixel inside the
+    // Censor falls back to black.
+    @Test func censorSamplesFractionalBoxFully() throws {
+        var document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 4), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 8, height: 4),
+            displayImages: [1: try solidImage([0, 0, 1, 1], width: 8, height: 4)])
+        document.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 4, y: 0, width: 4, height: 4),
+                           image: try solidImage([1, 0, 0, 1], width: 4, height: 4)),
+        ])
+        let red = try #require(document.layerStack.annotations.last)
+        document.layerStack.replace(red.moved(by: CGVector(dx: -4, dy: 0))) // window now at (0,0,4,4)
+        for method in [CensorMethod.pixelate(blockSize: 1), .blur(radius: 1)] {
+            var doc = document
+            doc.layerStack.add(Annotation(
+                kind: .censor(rect: CGRect(x: 0.4, y: 0.1, width: 2.2, height: 3.7), method: method),
+                style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 0)))
+            let px = try linearPixels(doc.flatten(scale: 1))
+            func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * 8 + x)..<4 * (y * 8 + x) + 4]) }
+            // deep inside the Censor: the unsnapped source would mis-scale these
+            for y in [1, 2] {
+                #expect(zip(pixel(1, y), [1, 0, 0, 1] as [Float]).allSatisfy { abs($0 - $1) < 0.01 },
+                        "\(method) row \(y)")
+            }
+        }
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])
