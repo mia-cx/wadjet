@@ -429,6 +429,7 @@ final class MarkupController {
         if armed == .select || command {
             if clickCount == 2, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
                case .text = hit.kind {
+                gestureStart = nil // the text session records its own one step
                 startEditing(hit.id)
                 return
             }
@@ -480,6 +481,7 @@ final class MarkupController {
         }
         selection = nil // a new Annotation takes the Tool's style and options, not the selection's
         if armed == .text {
+            gestureStart = nil // the text session records its own one step
             textEditStart = stack
             let a = Annotation(
                 kind: .text(TextData(string: "", origin: p,
