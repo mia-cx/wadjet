@@ -6,6 +6,25 @@ import Testing
 import WadjetKit
 
 struct CanvasStoreTests {
+    // Proves saving omits deleted window images from disk while retaining their
+    // live source pixels, so Undo can restore a window and save/export it again.
+    @Test func archivingKeepsWindowSourcesForUndo() throws {
+        var live = try fixtureCanvas()
+        let id = UUID()
+        live.windowLayers = [.init(frame: live.crop, zOrder: 0, imageFileName: "window.heic",
+            image: try rasterFixture(hdr: false), id: id)]
+        let original = LayerStack([Annotation(kind: .window(layerID: id, frame: live.crop),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))])
+        live.layerStack = original
+        live.layerStack.clear()
+        let saved = try live.archiveLinkedCanvases()
+        #expect(try CanvasDocument(fileWrapper: saved).windowLayers.isEmpty)
+        #expect(saved.fileWrappers?["window.heic"] == nil)
+        live.layerStack = original // the Editor's Undo restores the layer stack
+        #expect(try live.flatten().width > 0)
+        #expect(try CanvasDocument(fileWrapper: live.archiveLinkedCanvases()).windowLayers.map(\.id) == [id])
+    }
+
     // Proves Save file keeps full recroppable sources after both History
     // packages expire, including links inside embedded hosts and Editor resaves.
     @Test(arguments: [false, true]) func savedCanvasOutlivesLinkedHistory(embedded: Bool) async throws {

@@ -83,7 +83,6 @@ public struct CanvasDocument {
     /// Caller-opened or archived sources, keyed by link URL, so flatten draws
     /// `.canvas` Annotations live. fileWrapper writes cropped image snapshots;
     /// archiveLinkedCanvases also retains full sources for later recropping.
-    /// instead, so a reopened package still renders
     public var linkedDocuments: [URL: CanvasDocument] = [:]
     // Travels with Editor saves so History retention never restarts after an edit.
     var storeMetadata: CanvasStoreMetadata?

@@ -7,8 +7,26 @@ extension CanvasDocument {
     @discardableResult
     public mutating func archiveLinkedCanvases() throws -> FileWrapper {
         let wrapper = try Self.preservingLinks(in: fileWrapper(), visiting: [])
-        self = try CanvasDocument(fileWrapper: wrapper)
+        retainArchives(from: try CanvasDocument(fileWrapper: wrapper))
         return wrapper
+    }
+
+    // Serialization prunes unreferenced images/windows from the saved package.
+    // Keep those live sources for Undo; merge only dependency archive state.
+    private mutating func retainArchives(from archived: CanvasDocument) {
+        preservedLinks = archived.preservedLinks
+        for (name, child) in archived.embeddedCanvases {
+            if var existing = embeddedCanvases[name] {
+                existing.retainArchives(from: child)
+                embeddedCanvases[name] = existing
+            } else { embeddedCanvases[name] = child }
+        }
+        for (url, child) in archived.linkedDocuments {
+            if var existing = linkedDocuments[url] {
+                existing.retainArchives(from: child)
+                linkedDocuments[url] = existing
+            } else { linkedDocuments[url] = child }
+        }
     }
 
     /// Copies an existing package with its full linked sources, preserving image
