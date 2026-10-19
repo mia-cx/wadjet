@@ -31,6 +31,8 @@ struct MarkupStyleControls: View {
     var styles: MarkupStyles { .shared }
     @State var width: Double = 0
     @State var opacity: Double = 0
+    /// a slider is mid-drag — re-seeding then would fight the user's thumb
+    @State var editing = false
 
     var style: AnnotationStyle { styles.style(for: tool) }
     var colour: Color { Color(red: style.colour.red, green: style.colour.green, blue: style.colour.blue) }
@@ -59,6 +61,13 @@ struct MarkupStyleControls: View {
             styles.refreshSwatches()
             width = Double(style.width)
             opacity = style.opacity
+        }
+        // the selection can change under an open menu — follow it unless a
+        // slider is mid-drag
+        .onChange(of: style) { _, st in
+            guard !editing else { return }
+            width = Double(st.width)
+            opacity = st.opacity
         }
     }
 
@@ -133,8 +142,9 @@ struct MarkupStyleControls: View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.system(size: 15))
                 .foregroundStyle(.white).frame(width: 22)
-            Slider(value: value, in: range, step: step) { editing in
-                if !editing { commit() }
+            Slider(value: value, in: range, step: step) { e in
+                editing = e
+                if !e { commit() }
             }
             .tint(.wadjetAccent)
             .controlSize(.small)

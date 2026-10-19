@@ -15,14 +15,21 @@ final class MarkupStyles {
 
     private var config: ConfigStore<WadjetConfig> { AppState.shared.config }
 
+    /// the selected Annotation's style if there is one, else the Tool's
+    /// configured default — the #107 selection seam
     func style(for tool: Tool) -> AnnotationStyle {
-        config.value.markup.tools[tool.rawValue]?.style ?? tool.defaultStyle
+        MarkupController.shared.selectedStyle ?? config.value.markup.tools[tool.rawValue]?.style ?? tool.defaultStyle
     }
 
-    /// With nothing selected, the change becomes the Tool's default for new
-    /// Annotations. #107's selection seam plugs in here (and in `style(for:)`):
-    /// while an Annotation is selected, read and restyle that Annotation instead.
+    /// While an Annotation is selected this restyles that Annotation alone
+    /// (via MarkupController.selectedStyle); with nothing selected the change
+    /// becomes the Tool's default for new Annotations.
     func restyle(_ tool: Tool, _ change: (inout AnnotationStyle) -> Void) {
+        if var selected = MarkupController.shared.selectedStyle {
+            change(&selected)
+            MarkupController.shared.selectedStyle = selected
+            return
+        }
         config.update {
             var style = $0.markup.tools[tool.rawValue]?.style ?? tool.defaultStyle
             change(&style)
@@ -30,16 +37,12 @@ final class MarkupStyles {
         }
     }
 
-    /// restyles the Tool's colour (opaque: transparency is the opacity slider's)
-    /// and pushes it into the recent-colour ranking
+    /// restyles the colour (opaque: transparency is the opacity slider's) on
+    /// the selection or Tool default, and always records it in the ranking
     func useColour(_ c: RGBAColour, for tool: Tool) {
         let colour = RGBAColour(red: c.red, green: c.green, blue: c.blue, alpha: 1)
-        config.update {
-            var style = $0.markup.tools[tool.rawValue]?.style ?? tool.defaultStyle
-            style.colour = colour
-            $0.markup.tools[tool.rawValue, default: WadjetConfig.MarkupTool()].style = style
-            $0.markup.recentColours.recordUse(of: colour.hex)
-        }
+        restyle(tool) { $0.colour = colour }
+        config.update { $0.markup.recentColours.recordUse(of: colour.hex) }
     }
 
     /// the colour row's swatch cells: recent colours first, presets filling in
@@ -57,15 +60,16 @@ final class MarkupStyles {
 
     // MARK: eyedropper — reuses Pick Colour itself, its loupe included
 
-    /// a pending eyedropper pick: which Markup Tool takes the colour, and
+    /// a pending eyedropper pick: which Markup Tool takes the colour, which
+    /// Annotation it restyles (the selection Pick Colour's disarm clears), and
     /// whether it started on the live toolbar (a Freeze Frame it must drop)
-    private(set) var eyedropper: (tool: Tool, live: Bool)?
+    private(set) var eyedropper: (tool: Tool, annotation: Annotation.ID?, live: Bool)?
 
     /// hands the pointer to Pick Colour: from .frozen it switches Tool on the
     /// same Freeze Frame, from .toolbar it takes one and opens Pick Colour
     func beginEyedropper(for tool: Tool) {
         let s = AppState.shared
-        eyedropper = (tool, live: s.phase == .toolbar)
+        eyedropper = (tool, annotation: MarkupController.shared.selection, live: s.phase == .toolbar)
         s.openMenu = nil; AppDelegate.shared?.overlayCtrl.syncMenu()
         AppDelegate.shared?.trigger(.pickColour)
     }
@@ -73,7 +77,13 @@ final class MarkupStyles {
     /// the pixel Pick Colour read; true when an eyedropper pick consumed it
     func pick(_ c: RGB8) -> Bool {
         guard let e = eyedropper else { return false }
-        useColour(RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1), for: e.tool)
+        let colour = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
+        if let id = e.annotation {
+            MarkupController.shared.restyle(id) { $0.colour = colour }
+            config.update { $0.markup.recentColours.recordUse(of: colour.hex) }
+        } else {
+            useColour(colour, for: e.tool)
+        }
         restore()
         return true
     }

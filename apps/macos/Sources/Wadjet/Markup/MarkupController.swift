@@ -152,6 +152,14 @@ final class MarkupController {
         }
     }
 
+    /// restyles one Annotation by id — the eyedropper's target, whose selection Pick Colour's disarm cleared
+    func restyle(_ id: Annotation.ID, _ change: (inout AnnotationStyle) -> Void) {
+        guard var a = stack.annotations.first(where: { $0.id == id }) else { return }
+        change(&a.style)
+        stack.replace(a); render()
+        AppLog.line("markup: restyled selection")
+    }
+
     /// apply a value transform (rotate/flip) to the selection
     func transformSelection(_ f: (Annotation) -> Annotation) {
         guard let a = selected else { return }

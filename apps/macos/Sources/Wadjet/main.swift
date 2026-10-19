@@ -4021,8 +4021,8 @@ struct ToolMenuView: View {
             case .util where tool == .measure:
                 tileRow(measureTiles)
             case .markup:
-                selectionRows()
                 MarkupStyleControls(tool: tool, ctrl: ctrl)
+                selectionRows()
                 divider()
                 clearAfterScreenshotRow()
             default: EmptyView()

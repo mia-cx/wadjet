@@ -2,16 +2,10 @@ import SwiftUI
 import WadjetKit
 
 extension ToolMenuView {
-    /// the top of a Markup Tool's menu while an Annotation is selected:
-    /// restyle and transform that Annotation alone
+    /// the Transform rows while an Annotation is selected — its section brings
+    /// its own leading divider
     @ViewBuilder func selectionRows() -> some View {
-        if let style = MarkupController.shared.selectedStyle {
-            tileRow([[2, 4, 8].map { w in
-                MenuTile(icon: "lineweight", caption: "\(w) pt", on: style.width == CGFloat(w)) {
-                    MarkupController.shared.selectedStyle?.width = CGFloat(w)
-                    s.openMenu = nil; ctrl.syncMenu()
-                }
-            }])
+        if MarkupController.shared.selectedStyle != nil {
             // these act on the canvas — keep the menu open
             section("Transform") {
                 MenuRow(title: "Rotate Left", icon: "rotate.left", on: false) {
@@ -29,7 +23,6 @@ extension ToolMenuView {
                     MarkupController.shared.transformSelection { $0.flipped(horizontally: false) }
                 }
             }
-            divider()
         }
     }
 }
