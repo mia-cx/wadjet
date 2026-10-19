@@ -139,4 +139,14 @@ extension Annotation {
                                      y: c.y + v * cos(transform.rotation))))
         return out
     }
+
+    /// the grip nearest `p`, if within `radius` — nearest, not first, so grips
+    /// crowded closer than `radius` resolve to the one the press meant
+    public func handle(at p: CGPoint, radius: CGFloat, minExtent: CGFloat,
+                       rotateOffset: CGFloat) -> SelectionHandle? {
+        handles(minExtent: minExtent, rotateOffset: rotateOffset)
+            .map { ($0.handle, hypot($0.at.x - p.x, $0.at.y - p.y)) }
+            .filter { $0.1 <= radius }
+            .min { $0.1 < $1.1 }?.0
+    }
 }

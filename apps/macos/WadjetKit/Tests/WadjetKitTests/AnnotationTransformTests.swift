@@ -91,16 +91,27 @@ struct AnnotationTransformTests {
         }
     }
 
-    // shrunk below minExtent the corner grips stay — and still resize back
-    @Test func shrinkThenEnlarge() {
-        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 50)), style: style)
-        let small = a.dragging(.resize(x: 1, y: 1), from: .zero, to: CGPoint(x: 5, y: 3))
-        guard case let .line(s1, e1) = small.kind else { Issue.record(); return }
-        #expect(near(s1, .zero) && near(e1, CGPoint(x: 5, y: 3)))
-        #expect(small.handles(minExtent: 12, rotateOffset: 20)
-            .contains { $0.handle == .resize(x: 1, y: 1) && near($0.at, CGPoint(x: 5, y: 3)) })
-        let back = small.dragging(.resize(x: 1, y: 1), from: .zero, to: CGPoint(x: 100, y: 50))
-        guard case let .line(s2, e2) = back.kind else { Issue.record(); return }
-        #expect(near(s2, .zero) && near(e2, CGPoint(x: 100, y: 50)))
+    // a press resolves to the NEAREST grip, not the first in array order:
+    // on (0,0)->(100,5) the press at (100,5) means resize(1,1)@(100,5), not
+    // resize(1,-1)@(100,0); a shrunken Line keeps its corner grips working
+    @Test(arguments: [
+        (CGPoint(x: 100, y: 5), CGPoint(x: 100, y: 5), SelectionHandle.resize(x: 1, y: 1),
+         CGPoint(x: 150, y: 50), CGPoint(x: 150, y: 50)),
+        (CGPoint(x: 5, y: 3), CGPoint(x: 5, y: 3), .resize(x: 1, y: 1),
+         CGPoint(x: 100, y: 50), CGPoint(x: 100, y: 50)),
+    ])
+    func handlePick(end: CGPoint, press: CGPoint, handle: SelectionHandle,
+                    to: CGPoint, endAfter: CGPoint) {
+        let a = Annotation(kind: .line(start: .zero, end: end), style: style)
+        let h = a.handle(at: press, radius: 6, minExtent: 12, rotateOffset: 20)
+        #expect(h == handle)
+        let r = a.dragging(h!, from: press, to: to)
+        guard case let .line(s, e) = r.kind else { Issue.record(); return }
+        #expect(near(s, .zero) && near(e, endAfter))
+    }
+
+    @Test func handlePickMiss() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 5)), style: style)
+        #expect(a.handle(at: CGPoint(x: 50, y: 50), radius: 6, minExtent: 12, rotateOffset: 20) == nil)
     }
 }

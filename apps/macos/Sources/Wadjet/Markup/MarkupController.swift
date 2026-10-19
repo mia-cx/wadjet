@@ -180,9 +180,9 @@ final class MarkupController {
     func begin(at p: CGPoint, command: Bool) {
         if armed == .select || command {
             if let sel = selected {
-                if let h = sel.handles(minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset)
-                    .first(where: { hypot($0.at.x - p.x, $0.at.y - p.y) <= Self.handleHitRadius }) {
-                    gesture = .handle(h.handle, sel, from: p)
+                if let h = sel.handle(at: p, radius: Self.handleHitRadius,
+                                      minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset) {
+                    gesture = .handle(h, sel, from: p)
                     return
                 }
                 if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
