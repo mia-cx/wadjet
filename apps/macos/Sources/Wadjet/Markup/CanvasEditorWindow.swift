@@ -334,8 +334,9 @@ final class EditorCanvasView: NSView {
         if e.modifierFlags.contains(.command) {
             let shift = e.modifierFlags.contains(.shift)
             switch e.charactersIgnoringModifiers ?? "" {
-            case "]": doc.markup.restackSelection(shift ? .front : .up); return true
-            case "[": doc.markup.restackSelection(shift ? .back : .down); return true
+            // charactersIgnoringModifiers keeps Shift: ⇧] types } on US layouts
+            case "]", "}": doc.markup.restackSelection(shift ? .front : .up); return true
+            case "[", "{": doc.markup.restackSelection(shift ? .back : .down); return true
             default: break
             }
         }
