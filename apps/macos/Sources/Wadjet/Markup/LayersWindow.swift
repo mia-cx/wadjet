@@ -142,7 +142,6 @@ extension AnnotationKind {
     var title: String {
         switch self {
         case .line: "Line"
-        case .counter: "Step Counter"
         case let .censor(_, method): method.title
         case let .shape(kind, _): kind.variant.rawValue.capitalized
         case let .counter(_, _, value, format): "\(format.label(value))"

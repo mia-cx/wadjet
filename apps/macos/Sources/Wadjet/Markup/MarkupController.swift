@@ -303,7 +303,7 @@ final class MarkupController {
     func select(_ id: Annotation.ID?) {
         guard let id else { deselect(); return }
         guard let a = stack.annotations.first(where: { $0.id == id }), !a.hidden, !a.locked else { return }
-        if armed == nil { onScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
+        if armed == nil { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
         if armed != nil { selection = id }
     }
 
