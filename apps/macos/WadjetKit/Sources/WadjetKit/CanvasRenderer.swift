@@ -44,82 +44,16 @@ extension CanvasDocument {
             context.draw(window.image, in: window.frame)
             context.restoreGState()
         }
-        for annotation in layerStack.annotations where !annotation.hidden {
-            context.saveGState()
-            if case let .censor(_, method) = annotation.kind, method.samplesBeneath {
-                // black underneath first: the fallback for parts off every display
-                let path = PathGeometry.path(for: annotation)
-                context.addPath(path)
-                context.clip()
-                context.setFillColor(CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                             components: [0, 0, 0, 1])!)
-                context.fill(path.boundingBox)
-                let box = path.boundingBox
-                for display in layout where display.frame.intersects(box) {
-                    guard let cg = displayImages[display.id],
-                          let (image, rect) = CensorFilter.render(
-                            method, region: box.intersection(display.frame),
-                            source: CIImage(cgImage: cg), sourceRect: display.frame,
-                            format: .RGBAh,
-                            colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!) else { continue }
-                    context.draw(image, in: rect)
-                }
-                context.restoreGState()
-                continue
-            }
-            // PathGeometry applies transforms. Composite fill and stroke together
-            // at the panel's whole-Annotation opacity; Black out stays opaque.
-            if case .censor = annotation.kind { context.setAlpha(1) }
-            else { context.setAlpha(annotation.style.opacity) }
-            context.beginTransparencyLayer(auxiliaryInfo: nil)
-            if case .line = annotation.kind {
-                // a Line strokes its trimmed drawing and fills its ends,
-                // dash pattern scaled to the stroke width
-                let cg = annotation.style.colour.cgColor
-                let drawing = PathGeometry.drawing(for: annotation)
-                context.setStrokeColor(cg)
-                context.setFillColor(cg)
-                context.setLineWidth(annotation.style.width)
-                context.setLineCap(.round)
-                context.setLineJoin(.round)
-                context.setLineDash(phase: 0, lengths: annotation.style.dash.pattern(width: annotation.style.width) ?? [])
-                context.addPath(drawing.stroke)
-                context.strokePath()
-                context.addPath(drawing.ends)
-                context.fillPath()
-            } else {
-                let path = PathGeometry.path(for: annotation)
-                if let fill = annotation.fillColour {
-                    context.setFillColor(fill.cgColor)
-                    context.addPath(path)
-                    context.fillPath()
-                }
-                if let stroke = annotation.strokeColour {
-                    context.setStrokeColor(stroke.cgColor)
-                    context.setLineWidth(annotation.style.width)
-                    context.setLineCap(.round)
-                    context.setLineJoin(.round)
-                    context.addPath(path)
-                    context.strokePath()
-                }
-            }
-            if let label = PathGeometry.labelPath(for: annotation) {
-                context.setFillColor(RGBAColour(red: 1, green: 1, blue: 1, alpha: 1).cgColor)
-                context.addPath(label)
-                context.fillPath()
-            }
-            context.endTransparencyLayer()
-            context.restoreGState()
+        // the pixels Blur and Pixelate sample: each display's image beneath the Censor
+        let sources = layout.compactMap { d in
+            displayImages[d.id].map { CensorSource(image: $0, frame: d.frame) }
+        }
+        for annotation in layerStack.annotations {
+            context.draw(annotation, sources: sources, format: .RGBAh,
+                         colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)
         }
         context.endTransparencyLayer()
         guard let image = context.makeImage() else { throw CanvasDocumentError.renderFailed }
         return image
-    }
-}
-
-private extension RGBAColour {
-    var cgColor: CGColor {
-        CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-                components: [red, green, blue, alpha])!
     }
 }
