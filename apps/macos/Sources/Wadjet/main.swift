@@ -4026,6 +4026,7 @@ struct ToolMenuView: View {
             // what goes in → how it starts → what happens after
             case .shot:
                 tileRow(shotTiles)
+                keepWindowsRow()
                 autoRedactRow()
                 if tool == .capRegion { section("Start") { confirmRow() } }
                 section("Workflow") { workflowRows() }

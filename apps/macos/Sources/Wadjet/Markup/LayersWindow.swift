@@ -33,6 +33,8 @@ struct LayersView: View {
     @Binding var selection: Annotation.ID?
     let move: (Annotation.ID, Int) -> Void        // to a back-to-front index
     let update: (Annotation) -> Void
+    /// a `.window` row's name and thumbnail come from the layer it names
+    var windowLayers: [UUID: CanvasWindowLayer] = [:]
 
     var rows: [Annotation] { annotations.reversed() } // front first
 
@@ -42,7 +44,7 @@ struct LayersView: View {
         } else {
             List(selection: $selection) {
                 ForEach(rows) { a in
-                    LayerRow(annotation: a, update: update)
+                    LayerRow(annotation: a, update: update, windowLayers: windowLayers)
                         .tag(a.id)
                         .selectionDisabled(a.hidden || a.locked)
                 }
@@ -65,14 +67,24 @@ struct LayersView: View {
 struct LayerRow: View {
     let annotation: Annotation
     let update: (Annotation) -> Void
+    var windowLayers: [UUID: CanvasWindowLayer] = [:]
     @State private var hovering = false
+
+    /// a window row is its app and title — "App — Title", whichever exists
+    var name: String {
+        guard case let .window(id, _) = annotation.kind else { return annotation.kind.title }
+        let l = windowLayers[id]
+        let parts = [l?.app, l?.title].compactMap { $0 }
+        return parts.isEmpty ? "Window" : parts.joined(separator: " — ")
+    }
 
     var body: some View {
         HStack(spacing: 8) {
-            LayerThumbnail(annotation: annotation)
+            LayerThumbnail(annotation: annotation,
+                           windowImage: annotation.windowLayerID.flatMap { windowLayers[$0]?.image })
                 .frame(width: 28, height: 28)
                 .opacity(annotation.hidden ? 0.45 : 1)
-            Text(annotation.kind.title)
+            Text(name)
                 .lineLimit(1)
                 .opacity(annotation.hidden ? 0.45 : 1)
             Spacer(minLength: 4)
@@ -109,9 +121,21 @@ struct LayerRow: View {
 /// screen points, the Canvas is y-down, so the fit flips y
 struct LayerThumbnail: View {
     let annotation: Annotation
+    var windowImage: CGImage? = nil
 
     var body: some View {
         Canvas { ctx, size in
+            if case .window = annotation.kind {
+                if let windowImage {
+                    let s = min(size.width / CGFloat(windowImage.width),
+                                size.height / CGFloat(windowImage.height))
+                    let w = CGFloat(windowImage.width) * s, h = CGFloat(windowImage.height) * s
+                    ctx.draw(Image(decorative: windowImage, scale: 1),
+                             in: CGRect(x: (size.width - w) / 2, y: (size.height - h) / 2,
+                                        width: w, height: h))
+                }
+                return
+            }
             let path = PathGeometry.path(for: annotation)
             let b = path.boundingBoxOfPath
             let side = min(size.width, size.height)
@@ -152,7 +176,16 @@ extension AnnotationKind {
             String(d.string.split(separator: "\n").first ?? "")
                 .trimmingCharacters(in: .whitespaces).isEmpty ? "Text"
                 : String(d.string.split(separator: "\n").first!)
+        case .window: "Window"
         }
+    }
+}
+
+extension Annotation {
+    /// the window layer a `.window` Annotation names; nil for other kinds
+    var windowLayerID: UUID? {
+        guard case let .window(id, _) = kind else { return nil }
+        return id
     }
 }
 

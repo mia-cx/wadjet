@@ -45,6 +45,9 @@ final class MarkupController {
         snapBounds ?? NSScreen.screens.first { $0.frame.contains(p) }?.frame
             ?? NSScreen.main?.frame ?? .zero
     }
+    /// an Editor's window layers by id: `.window` Annotations draw their image,
+    /// the Layers window names them; the screen's stays empty
+    @ObservationIgnored var windowLayers: [UUID: CanvasWindowLayer] = [:]
     /// the stack when the drag in flight began — its one undo step
     @ObservationIgnored private var gestureStart: LayerStack?
     enum Gesture {
@@ -611,7 +614,7 @@ final class MarkupController {
             case let .censor(_, method):
                 a.kind = .censor(rect: CGRect(x: from.x, y: from.y, width: p.x - from.x,
                                               height: p.y - from.y).standardized, method: method)
-            case .counter: break // counters place on the click — never a draft
+            case .counter, .window: break // counters place on the click; windows are never drafted
             case let .magnify(m):
                 // the drag sizes the source; the magnifier re-places beside it
                 let source = CGRect(x: from.x, y: from.y, width: p.x - from.x,
@@ -691,8 +694,8 @@ final class MarkupController {
                 false
             case let .shape(_, rect), let .censor(rect, _):
                 rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
-            case .counter:
-                false // counters place on the click — never a draft
+            case .counter, .window:
+                false // counters place on the click; windows are never drafted
             case let .magnify(m):
                 m.source.width >= Self.minDraftSize && m.source.height >= Self.minDraftSize
             case .text:

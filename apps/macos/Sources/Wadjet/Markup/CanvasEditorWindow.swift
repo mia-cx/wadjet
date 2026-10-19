@@ -280,7 +280,8 @@ final class EditorCanvasView: NSView {
             l.preferredDynamicRange = .high
             return l
         }
-        let isolated = canvas.windowLayers.filter(\.isolatesBackground)
+        // windows an Annotation names draw on the Markup surface, not the backdrop
+        let isolated = canvas.windowLayers.filter { $0.id == nil && $0.isolatesBackground }
         if !isolated.isEmpty {
             let p = CGMutablePath()
             p.addRect(region)
@@ -293,7 +294,7 @@ final class EditorCanvasView: NSView {
             displays.mask = m
         }
         var layers: [CALayer] = [displays]
-        for w in canvas.windowLayers.sorted(by: { $0.zOrder < $1.zOrder }) {
+        for w in canvas.windowLayers.filter({ $0.id == nil }).sorted(by: { $0.zOrder < $1.zOrder }) {
             let l = CALayer()
             l.contents = w.image
             l.frame = w.frame
