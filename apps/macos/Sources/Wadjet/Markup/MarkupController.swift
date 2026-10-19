@@ -531,14 +531,21 @@ final class MarkupController {
 
     /// Freeze region's result: `canvas` embedded beneath every Annotation at exactly its crop — one undo
     /// step — then selected when Select is armed (Freeze region arms it at confirm; a later Tool choice
-    /// wins, and the frozen region still lands). A drag, Pen path or text session in flight keeps its
-    /// own undo step and selection: the region lands at once beneath everything, as the step before it.
+    /// wins, and the frozen region still lands). A drag or text session in flight keeps its own undo
+    /// step and selection: the region lands at once beneath everything, as the step before it.
     func freeze(_ canvas: CanvasDocument) {
         let name = "\(UUID().uuidString).wadjet"
         assets.embedded[name] = canvas
         let a = Annotation.frozenRegion(embedding: name, canvas, style: Self.imageStyle)
-        guard let open = gestureStart ?? textEditStart else {
+        // a drag or text session changes the stack as it goes: the region joins that
+        // step's baseline and records as the step before it. A Pen path keeps its
+        // nodes off the stack, so between presses the stack itself is the baseline.
+        let open = textEditStart ?? (gesture != nil ? gestureStart : nil)
+        guard let open else {
             edit { $0.addAtBottom(a) }
+            // a Pen snapshot lingers between presses — keep the region inside it
+            // so its commitGesture can't re-record the region into the path's step
+            gestureStart?.addAtBottom(a)
             syncPanels()
             if armed == .select { selection = a.id }
             AppLog.line("markup: froze region \(canvas.crop.debugDescription) as \(name)")
