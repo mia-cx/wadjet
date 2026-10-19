@@ -30,6 +30,8 @@ final class MarkupView: NSView {
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
+    /// snap guides, drawn above the Annotations and outside the peer-through mask
+    let guidesLayer = CAShapeLayer()
     let accent = CGColor(srgbRed: 0.20, green: 0.84, blue: 0.58, alpha: 1)
     /// the display's backing scale; mixed-scale setups get crisp strokes on
     /// every panel because each one follows its own window
@@ -44,6 +46,11 @@ final class MarkupView: NSView {
         canvas.position = .zero
         canvas.bounds = screen.frame
         layer?.addSublayer(canvas)
+        guidesLayer.anchorPoint = .zero
+        guidesLayer.position = .zero
+        guidesLayer.bounds = screen.frame
+        guidesLayer.contentsScale = scale
+        layer?.addSublayer(guidesLayer)
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isOpaque: Bool { false }
@@ -52,7 +59,7 @@ final class MarkupView: NSView {
         super.viewDidChangeBackingProperties()
         guard let s = window?.backingScaleFactor, s != scale else { return }
         scale = s
-        for l in Array(shapeLayers.values) + [frameLayer, handlesLayer] { l.contentsScale = s }
+        for l in Array(shapeLayers.values) + [frameLayer, handlesLayer, guidesLayer] { l.contentsScale = s }
     }
 
     /// one CAShapeLayer per Annotation, keyed by id so strokes can persist

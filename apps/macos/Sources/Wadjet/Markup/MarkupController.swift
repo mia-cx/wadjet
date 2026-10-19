@@ -45,6 +45,10 @@ final class MarkupController {
     @ObservationIgnored var cmdHeld = false
     var selecting: Bool { armed == .select || cmdHeld }
 
+    /// the gesture's snapping state; nil between gestures and while Snapping is off
+    @ObservationIgnored private var snapper: MarkupSnapper?
+    var guides: [SnapGuide] { snapper?.guides ?? [] }
+
     @ObservationIgnored private var panels: [MarkupPanel] = []
     @ObservationIgnored private var flagsMon: Any?
     @ObservationIgnored private var keyMon: Any?
@@ -107,7 +111,7 @@ final class MarkupController {
         armed = want
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
-            gesture = nil; selection = nil; cmdHeld = false
+            gesture = nil; selection = nil; cmdHeld = false; snapper = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
         } else if flagsMon == nil {
@@ -186,7 +190,7 @@ final class MarkupController {
     func clear() {
         commitGesture()
         edit { $0.clear() }
-        gesture = nil; selection = nil; syncPanels()
+        gesture = nil; snapper = nil; selection = nil; syncPanels()
     }
 
     /// the selected Annotation's style; setting restyles it alone — the seam the
@@ -239,10 +243,12 @@ final class MarkupController {
             if let sel = selected {
                 if let h = sel.handle(at: p, radius: Self.handleHitRadius,
                                       minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset) {
+                    snapper = MarkupSnapper(stack: stack, excluding: sel.id)
                     gesture = .handle(h, sel, from: p)
                     return
                 }
                 if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
+                    snapper = MarkupSnapper(stack: stack, excluding: sel.id)
                     gesture = .moving(sel, from: p)
                     return
                 }
@@ -250,6 +256,7 @@ final class MarkupController {
             if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance) {
                 selection = hit.id
                 AppLog.line("markup: selected")
+                snapper = MarkupSnapper(stack: stack, excluding: hit.id)
                 gesture = .moving(hit, from: p)
             } else {
                 selection = nil
@@ -270,12 +277,16 @@ final class MarkupController {
         default:
             return
         }
-        gesture = .drawing(a, from: p)
+        snapper = MarkupSnapper(stack: stack, excluding: nil)
+        let so = snapper?.offset(points: [p]) ?? .zero
+        gesture = .drawing(a.moved(by: so), from: CGPoint(x: p.x + so.dx, y: p.y + so.dy))
         render()
     }
     func drag(to p: CGPoint) {
         switch gesture {
         case let .drawing(d, from):
+            let so = snapper?.offset(points: [p]) ?? .zero
+            let p = CGPoint(x: p.x + so.dx, y: p.y + so.dy)
             var a = d
             switch d.kind {
             case .line:
@@ -291,9 +302,23 @@ final class MarkupController {
             }
             gesture = .drawing(a, from: from)
         case let .moving(start, from):
-            stack.replace(start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y)))
+            let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
+            let snapped = snapper?.offset(rect: PathGeometry.path(for: moved).boundingBoxOfPath) ?? .zero
+            stack.replace(moved.moved(by: snapped))
         case let .handle(h, start, from):
-            stack.replace(start.dragging(h, from: from, to: p))
+            var to = p
+            if case .resize = h {
+                // the grip at drag start, moved by the pointer's delta, is the snapping point
+                let grip = start.handles(minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset)
+                    .filter { $0.handle == h }
+                    .min { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) }?.at
+                if let grip {
+                    let proposed = CGPoint(x: grip.x + p.x - from.x, y: grip.y + p.y - from.y)
+                    let so = snapper?.offset(points: [proposed]) ?? .zero
+                    to = CGPoint(x: p.x + so.dx, y: p.y + so.dy)
+                }
+            }
+            stack.replace(start.dragging(h, from: from, to: to))
         case nil:
             return
         }
@@ -311,12 +336,13 @@ final class MarkupController {
         }
         commitGesture()
         gesture = nil
+        snapper = nil
         render()
     }
 
     func render() {
         let shown = stack.annotations + [draft].compactMap { $0 }
-        for p in panels { p.view.show(shown, selection: selected) }
+        for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
     }
 
