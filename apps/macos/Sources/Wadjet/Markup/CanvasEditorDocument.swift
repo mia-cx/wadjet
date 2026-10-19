@@ -143,7 +143,13 @@ final class CanvasEditorDocument: NSDocument {
     override func fileWrapper(ofType typeName: String) throws -> FileWrapper {
         // FileWrapper can't cross the isolation boundary even synchronously
         try MainActor.assumeIsolated {
-            UnsafeSendable(value: try isStorePackage ? current.fileWrapper() : current.savedFileWrapper())
+            var writing = current
+            if isStorePackage { return UnsafeSendable(value: try writing.fileWrapper()) }
+            let wrapper = try writing.archiveLinkedCanvases()
+            // Cache archived sources without reloading Markup or its undo stack.
+            // A later autosave must not need the History files archived here.
+            canvas = writing
+            return UnsafeSendable(value: wrapper)
         }.value
     }
 

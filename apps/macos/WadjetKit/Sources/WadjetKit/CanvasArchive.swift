@@ -1,11 +1,14 @@
 import Foundation
 
 extension CanvasDocument {
-    /// A saved Canvas keeps full copies of its linked sources, so History can
-    /// expire without breaking later recrops. Cyclic or unreadable dependencies
-    /// fail the save before replacing any existing package.
-    public func savedFileWrapper() throws -> FileWrapper {
-        try Self.preservingLinks(in: fileWrapper(), visiting: [])
+    /// Retains full linked sources in this value and returns its saved package,
+    /// so both reopened documents and later saves in the same Editor session
+    /// survive History expiry. Cyclic or unreadable dependencies leave self intact.
+    @discardableResult
+    public mutating func archiveLinkedCanvases() throws -> FileWrapper {
+        let wrapper = try Self.preservingLinks(in: fileWrapper(), visiting: [])
+        self = try CanvasDocument(fileWrapper: wrapper)
+        return wrapper
     }
 
     /// Copies an existing package with its full linked sources, preserving image

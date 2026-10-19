@@ -42,20 +42,25 @@ struct CanvasStoreTests {
         #expect(errors.isEmpty)
         let savedURL = try #require(saved.first)
         let original = try packageBytes(at: savedURL)
+        var live = try CanvasDocument.read(from: hostURL)
+        try live.archiveLinkedCanvases() // first save in an open Editor, without reopening it
         clock.withLock { $0 = created.addingTimeInterval(90 * 86_400) }
         try store.sweep()
         try store.sweep()
         #expect(try store.url(for: targetID) == nil)
         #expect(try store.url(for: hostID) == nil)
         #expect(try packageBytes(at: savedURL) == original)
-        let reopened = try CanvasDocument.read(from: savedURL)
+        live.cornerRadius = 2 // a live edit made after the original sources expired
+        let nextSave = try live.archiveLinkedCanvases()
+        #expect(try CanvasDocument(fileWrapper: nextSave).cornerRadius == 2)
+        var reopened = try CanvasDocument.read(from: savedURL)
         let savedHost = embedded ? try #require(reopened.embeddedCanvases["child.wadjet"]) : reopened
         let source = try #require(savedHost.linkedDocuments[targetURL])
         #expect(source.layout == target.layout)
         #expect(source.displayImages[1]?.width == target.displayImages[1]?.width)
         #expect(try source.flatten(crop: CGRect(x: 32, y: 32, width: 16, height: 16)).width > 0)
         // The Editor can save the archived dependency again after History is gone.
-        try reopened.savedFileWrapper().write(to: savedURL, options: .atomic, originalContentsURL: nil)
+        try reopened.archiveLinkedCanvases().write(to: savedURL, options: .atomic, originalContentsURL: nil)
         let edited = try CanvasDocument.read(from: savedURL)
         #expect((embedded ? edited.embeddedCanvases["child.wadjet"] : edited)?.linkedDocuments[targetURL] != nil)
     }
