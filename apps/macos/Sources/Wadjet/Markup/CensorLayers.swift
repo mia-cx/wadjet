@@ -14,8 +14,12 @@ import WadjetKit
     /// the global rect sampling covers: the display's frame, or the Canvas's bounds
     private let coverage: CGRect
     private let contentScale: CGFloat
-    /// an Editor's fixed source — the Canvas's composited displays and windows
-    private let staticSource: CIImage?
+    /// an Editor's source renderer: the visible `.window` Annotations in,
+    /// the Canvas flattened with them — re-run when that set changes
+    private let render: (([Annotation]) -> CGImage?)?
+    /// an Editor's last rendered source and the windows it rendered from
+    private var staticSource: CIImage?
+    private var renderedWindows: [Annotation] = []
     private var imageLayers: [Annotation.ID: CALayer] = [:]
 
     /// a screen panel's Censors draw from the shared ScreenSamples
@@ -23,15 +27,18 @@ import WadjetKit
         self.screen = screen
         coverage = screen.frame
         contentScale = screen.backingScaleFactor
+        render = nil
         staticSource = nil
     }
 
-    /// an Editor's Censors sample the Canvas's own flat image — no live stream
-    init(staticImage: CGImage, coverage: CGRect, scale: CGFloat) {
+    /// an Editor's Censors sample the Canvas's own flat image — no live
+    /// stream; `render` re-flattens it from a window set
+    init(coverage: CGRect, scale: CGFloat, render: @escaping ([Annotation]) -> CGImage?) {
         screen = nil
         self.coverage = coverage
         contentScale = scale
-        staticSource = CIImage(cgImage: staticImage)
+        self.render = render
+        staticSource = render([]).map(CIImage.init) // no windows: today's flat image
     }
 
     /// the view's annotations each render; `layers` is MarkupView's
@@ -40,6 +47,18 @@ import WadjetKit
         let sampling = annotations.filter { a in
             guard case let .censor(_, m) = a.kind, m.samplesBeneath else { return false }
             return PathGeometry.path(for: a).boundingBox.intersects(coverage)
+        }
+        // refresh the flat source when the windows under the Censors change —
+        // approximated as every visible window, not only those beneath each one
+        if let render, !sampling.isEmpty {
+            let windows = annotations.filter {
+                if case .window = $0.kind { return !$0.hidden }
+                return false
+            }
+            if windows != renderedWindows {
+                renderedWindows = windows
+                staticSource = render(windows).map(CIImage.init)
+            }
         }
         let source = staticSource.map { (image: $0, rect: coverage) }
             ?? screen.flatMap { ScreenSamples.shared.source(on: $0) }

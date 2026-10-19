@@ -380,6 +380,59 @@ struct CanvasDocumentTests {
         #expect(try pixel(flat, 5) == [0, 1, 0, 1])
     }
 
+    // Proves a sampling Censor reads a moved window where it is: the Pixelate
+    // over the window's new spot filters red, not the flat blue screen.
+    @Test func censorSamplesMovedWindow() throws {
+        var document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 6, height: 2), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 6, height: 2),
+            displayImages: [1: try solidImage([0, 0, 1, 1], width: 6, height: 2)])
+        document.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 0, y: 0, width: 2, height: 2),
+                           image: try solidImage([1, 0, 0, 1], width: 2, height: 2)),
+        ])
+        let red = try #require(document.layerStack.annotations.last)
+        document.layerStack.replace(red.moved(by: CGVector(dx: 4, dy: 0)))
+        document.layerStack.add(Annotation(
+            kind: .censor(rect: CGRect(x: 4, y: 0, width: 2, height: 2),
+                          method: .pixelate(blockSize: 2)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 0)))
+        let px = try linearPixels(document.flatten(scale: 1))
+        func pixel(_ x: Int) -> [Float] { Array(px[4 * x..<4 * x + 4]) }
+        #expect(pixel(4) == [1, 0, 0, 1])
+        #expect(pixel(5) == [1, 0, 0, 1])
+        #expect(pixel(3) == [0, 0, 1, 1]) // the flat screen beside the window
+    }
+
+    // Proves the sampling source follows the stack: the front window wins, and
+    // restacking the back one above it changes what the Censor filters.
+    @Test func censorSamplesRestackedWindows() throws {
+        var document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 6, height: 2), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 6, height: 2),
+            displayImages: [1: try solidImage([0, 0, 1, 1], width: 6, height: 2)])
+        // front first: green over red, both at the same spot
+        document.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 4, y: 0, width: 2, height: 2),
+                           image: try solidImage([0, 1, 0, 1], width: 2, height: 2)),
+            CapturedWindow(frame: CGRect(x: 4, y: 0, width: 2, height: 2),
+                           image: try solidImage([1, 0, 0, 1], width: 2, height: 2)),
+        ])
+        document.layerStack.add(Annotation(
+            kind: .censor(rect: CGRect(x: 4, y: 0, width: 2, height: 2),
+                          method: .pixelate(blockSize: 2)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 0)))
+        // back to front: [red window, green window, censor]
+        let red = try #require(document.layerStack.annotations.first)
+        func pixel(_ x: Int, _ image: CGImage) throws -> [Float] {
+            let px = try linearPixels(image)
+            return Array(px[4 * x..<4 * x + 4])
+        }
+        #expect(try pixel(4, document.flatten(scale: 1)) == [0, 1, 0, 1]) // green wins
+        document.layerStack.move(red.id, to: 1) // red directly beneath the censor
+        #expect(try pixel(4, document.flatten(scale: 1)) == [1, 0, 0, 1]) // now red
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])

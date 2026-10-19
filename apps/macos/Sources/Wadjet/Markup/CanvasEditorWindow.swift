@@ -321,13 +321,22 @@ final class EditorCanvasView: NSView {
     }
 
     /// Censors in an Editor sample exactly what output flattens: the same
-    /// renderer over the whole Canvas, without Annotations or the crop's corner
+    /// renderer over the whole Canvas, without Annotations or the crop's
+    /// corner — re-run when the visible windows change so moved windows
+    /// filter where they are
     private func censorSource() -> CensorLayers? {
-        var canvas = doc.canvas
-        canvas.layerStack = LayerStack()
-        canvas.cornerRadius = 0
-        guard let image = try? canvas.flatten(crop: canvas.displayBounds, scale: 1) else { return nil }
-        return CensorLayers(staticImage: image, coverage: canvas.displayBounds, scale: 1)
+        let canvas = doc.canvas
+        return CensorLayers(coverage: canvas.displayBounds, scale: 1) { windows in
+            var c = canvas
+            c.layerStack = LayerStack(windows)
+            c.cornerRadius = 0
+            do {
+                return try c.flatten(crop: c.displayBounds, scale: 1)
+            } catch {
+                AppLog.line("censor source: \(error.localizedDescription)")
+                return nil
+            }
+        }
     }
 
     /// Magnifies in an Editor sample the Canvas's own displays — the same
