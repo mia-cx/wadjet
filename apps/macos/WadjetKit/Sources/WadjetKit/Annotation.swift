@@ -8,10 +8,23 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
     public var id: UUID
     public var kind: AnnotationKind
     public var style: AnnotationStyle
-    public init(id: UUID = UUID(), kind: AnnotationKind, style: AnnotationStyle) {
+    public var transform: AnnotationTransform
+    public init(id: UUID = UUID(), kind: AnnotationKind, style: AnnotationStyle,
+                transform: AnnotationTransform = .identity) {
         self.id = id
         self.kind = kind
         self.style = style
+        self.transform = transform
+    }
+
+    enum CodingKeys: String, CodingKey { case id, kind, style, transform }
+    /// annotations.json files from before `transform` existed decode as .identity
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        id = try c.decode(UUID.self, forKey: .id)
+        kind = try c.decode(AnnotationKind.self, forKey: .kind)
+        style = try c.decode(AnnotationStyle.self, forKey: .style)
+        transform = try c.decodeIfPresent(AnnotationTransform.self, forKey: .transform) ?? .identity
     }
 }
 

@@ -18,4 +18,29 @@ struct PathGeometryTests {
                            style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: width))
         #expect(PathGeometry.hitTest(a, at: point, tolerance: tolerance) == expected)
     }
+
+    // rotated pi/2 about the bounds centre, a (0,0)->(100,0) line displays
+    // vertical at x=50, y -50…50 — drawing and hit-testing follow the transform
+    @Test(arguments: [
+        (CGPoint(x: 50, y: 40), true),
+        (CGPoint(x: 90, y: 0), false),
+    ])
+    func rotatedLineHitTest(point: CGPoint, expected: Bool) {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)),
+                           style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4),
+                           transform: AnnotationTransform(rotation: .pi / 2))
+        #expect(PathGeometry.hitTest(a, at: point) == expected)
+    }
+
+    // flipped horizontally about the centre, a (0,0)->(100,50) line displays (0,50)->(100,0)
+    @Test(arguments: [
+        (CGPoint(x: 10, y: 45), true),
+        (CGPoint(x: 10, y: 5), false),
+    ])
+    func flippedLineHitTest(point: CGPoint, expected: Bool) {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 50)),
+                           style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4),
+                           transform: AnnotationTransform(flipHorizontal: true))
+        #expect(PathGeometry.hitTest(a, at: point) == expected)
+    }
 }

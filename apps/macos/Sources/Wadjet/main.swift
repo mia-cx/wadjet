@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case draw = "draw", clearAnnotations = "clearAnnotations"
+    case select = "select", draw = "draw", clearAnnotations = "clearAnnotations"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .draw: "Draw"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .draw: "Draw"; case .clearAnnotations: "Clear Annotations"
         }
     }
     // the permanent label under the cell icon — as short as it can be
@@ -33,10 +33,10 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .draw: "Draw"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .draw: "Draw"; case .clearAnnotations: "Clear"
         }
     }
-    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; case .draw, .clearAnnotations: .markup; default: .util } }
+    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; case .select, .draw, .clearAnnotations: .markup; default: .util } }
     /// Tools that can skip the pick: one obvious target (the pointer's display
     /// or the focused window) — a Shortcut can capture them without confirming
     var confirmOptional: Bool { [.capWindow, .capScreen, .recWindow, .recScreen].contains(self) }
@@ -45,7 +45,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .draw: "line.diagonal"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .clearAnnotations: "trash"
         }
     }
     enum Kind: CaseIterable { case shot, rec, util, markup
@@ -56,7 +56,7 @@ enum Tool: String, CaseIterable {
             switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities"; case .markup: "Markup" }
         }
     }
-    /// nil for Tools no Shortcut can name (Clear)
+    /// nil for Tools no Shortcut can name (Select, Clear)
     var toolID: ToolID? { ToolID(rawValue: rawValue) }
     var hasMenu: Bool { ![.copyText, .clearAnnotations].contains(self) }
     /// a toolbar button that acts at once instead of arming
@@ -1481,6 +1481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func handleEsc() {
         let s = AppState.shared
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
+        if MarkupController.shared.deselect() { AppLog.line("esc: deselected"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
             s.tool = nil; s.triggerWorkflow = nil; AppLog.line("esc: disarmed Markup"); updateEscHotkey(); return
@@ -2260,6 +2261,7 @@ enum WadjetCursors {
     static func make(_ t: Tool) -> NSCursor {
         switch t {
         case .capRegion, .recRegion, .copyText, .measure, .draw: return .crosshair
+        case .select: return .arrow
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
         case .pickColour: return symbol("eyedropper", centre: false)
@@ -2672,7 +2674,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText, .draw, .clearAnnotations: break
+        case .copyText, .select, .draw, .clearAnnotations: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -4013,7 +4015,9 @@ struct ToolMenuView: View {
                 section("Code") { colourRows([.swiftUI]) }
             case .util where tool == .measure:
                 tileRow(measureTiles)
-            case .markup: clearAfterScreenshotRow()
+            case .markup:
+                selectionRows()
+                clearAfterScreenshotRow()
             default: EmptyView()
             }
         }

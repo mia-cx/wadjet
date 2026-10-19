@@ -1,20 +1,51 @@
 import AppKit
+import Observation
 import WadjetKit
 
 /// Owns the Annotations on screen and the Markup panels that draw them —
 /// one per display, above apps and the Freeze Frame, below the toolbar.
 /// Panels ignore the mouse unless a Markup Tool is armed; an armed Tool takes every click.
-@MainActor
+@MainActor @Observable
 final class MarkupController {
     static let shared = MarkupController()
     /// fixed until per-Tool styles land: opaque red, 4 pt
     static let lineStyle = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
     /// a press shorter than this draws nothing
     static let minLineLength: CGFloat = 1
+    static let handleSize: CGFloat = 7      // grip diameter, on-screen points
+    static let handleHitRadius: CGFloat = 6
+    static let rotateOffset: CGFloat = 20   // rotate grip's distance above the frame
+    static let handleMinExtent: CGFloat = 12
+    static let hitTolerance: CGFloat = 4
+
     private(set) var stack = LayerStack()
-    private var draft: Annotation?
     private(set) var armed: Tool?
-    private var panels: [MarkupPanel] = []
+    /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
+    @ObservationIgnored private var gesture: Gesture?
+    enum Gesture {
+        case drawing(Annotation)
+        case moving(Annotation, from: CGPoint)
+        case handle(SelectionHandle, Annotation, from: CGPoint)
+    }
+    /// the in-progress stroke, for syncPanels/render
+    var draft: Annotation? { if case let .drawing(a) = gesture { a } else { nil } }
+    private(set) var selection: Annotation.ID? {
+        didSet {
+            if selection == nil, AppState.shared.openMenu?.kind == .markup {
+                AppState.shared.openMenu = nil
+                AppDelegate.shared?.overlayCtrl.syncMenu()
+            }
+            render()
+        }
+    }
+    var selected: Annotation? { selection.flatMap { id in stack.annotations.first { $0.id == id } } }
+    /// ⌘ held turns any armed Markup Tool into Select until release
+    @ObservationIgnored var cmdHeld = false
+    var selecting: Bool { armed == .select || cmdHeld }
+
+    @ObservationIgnored private var panels: [MarkupPanel] = []
+    @ObservationIgnored private var flagsMon: Any?
+    @ObservationIgnored private var keyMon: Any?
     var windowNumbers: [Int] { panels.map(\.windowNumber) }
 
     init() {
@@ -32,7 +63,27 @@ final class MarkupController {
         guard want != armed else { return }
         let was = armed
         armed = want
-        if want == nil { draft = nil }
+        if want == nil {
+            gesture = nil; selection = nil; cmdHeld = false
+            if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
+            if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
+        } else if flagsMon == nil {
+            // ⌘ = temporary Select; Delete removes the selection — installed on
+            // entering the armed session, kept across Tool switches within it
+            flagsMon = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
+                guard let self else { return e }
+                self.cmdHeld = e.modifierFlags.contains(.command)
+                if AppDelegate.shared?.overlayCtrl.pointerOverUI != true {
+                    self.panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.view.setToolCursor()
+                }
+                return e
+            }
+            keyMon = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
+                guard let self, e.keyCode == 51 || e.keyCode == 117, self.selection != nil else { return e }
+                self.deleteSelection()
+                return nil
+            }
+        }
         syncPanels()
         for p in panels { p.ignoresMouseEvents = want == nil }
         if let want {
@@ -88,31 +139,96 @@ final class MarkupController {
     }
 
     func clear() {
-        stack.clear(); draft = nil; syncPanels(); render()
+        stack.clear(); gesture = nil; selection = nil; syncPanels(); render()
     }
 
-    // strokes arrive as global screen points from MarkupView
-    func begin(at p: CGPoint) {
+    /// the selected Annotation's style; setting restyles it alone — the seam the
+    /// Tool menu's style tiles hook into
+    var selectedStyle: AnnotationStyle? {
+        get { selected?.style }
+        set {
+            guard var a = selected, let newValue else { return }
+            a.style = newValue
+            stack.replace(a); render()
+            AppLog.line("markup: restyled selection")
+        }
+    }
+
+    /// apply a value transform (rotate/flip) to the selection
+    func transformSelection(_ f: (Annotation) -> Annotation) {
+        guard let a = selected else { return }
+        stack.replace(f(a)); render()
+        AppLog.line("markup: transformed selection")
+    }
+
+    /// true when there was a selection to drop
+    @discardableResult
+    func deselect() -> Bool {
+        guard selection != nil else { return false }
+        selection = nil
+        AppLog.line("markup: deselected")
+        return true
+    }
+
+    func deleteSelection() {
+        guard let id = selection else { return }
+        stack.remove(id: id); selection = nil
+        AppLog.line("markup: deleted selection")
+    }
+
+    // strokes arrive as global screen points from MarkupView; `command` = temporary Select
+    func begin(at p: CGPoint, command: Bool) {
+        if armed == .select || command {
+            if let sel = selected {
+                if let h = sel.handle(at: p, radius: Self.handleHitRadius,
+                                      minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset) {
+                    gesture = .handle(h, sel, from: p)
+                    return
+                }
+                if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
+                    gesture = .moving(sel, from: p)
+                    return
+                }
+            }
+            if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance) {
+                selection = hit.id
+                AppLog.line("markup: selected")
+                gesture = .moving(hit, from: p)
+            } else {
+                selection = nil
+            }
+            return
+        }
         guard armed == .draw else { return }
-        draft = Annotation(kind: .line(start: p, end: p), style: Self.lineStyle)
+        selection = nil
+        gesture = .drawing(Annotation(kind: .line(start: p, end: p), style: Self.lineStyle))
         render()
     }
     func drag(to p: CGPoint) {
-        guard case let .line(start, _) = draft?.kind else { return }
-        draft?.kind = .line(start: start, end: p)
+        switch gesture {
+        case let .drawing(d):
+            guard case let .line(start, _) = d.kind else { return }
+            gesture = .drawing(Annotation(id: d.id, kind: .line(start: start, end: p), style: d.style))
+        case let .moving(start, from):
+            stack.replace(start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y)))
+        case let .handle(h, start, from):
+            stack.replace(start.dragging(h, from: from, to: p))
+        case nil:
+            return
+        }
         render()
     }
     func end() {
-        if let d = draft, case let .line(start, end) = d.kind,
+        if case let .drawing(d) = gesture, case let .line(start, end) = d.kind,
            hypot(end.x - start.x, end.y - start.y) >= Self.minLineLength {
             stack.add(d)
         }
-        draft = nil
+        gesture = nil
         render()
     }
 
     func render() {
         let shown = stack.annotations + [draft].compactMap { $0 }
-        for p in panels { p.view.show(shown) }
+        for p in panels { p.view.show(shown, selection: selected) }
     }
 }
