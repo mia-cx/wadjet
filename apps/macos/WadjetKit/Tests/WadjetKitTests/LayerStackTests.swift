@@ -17,14 +17,29 @@ struct LayerStackTests {
         #expect(stack.isEmpty)
     }
 
+    // the front-most stroke wins where two lines cross; a miss returns nil
+    @Test func topmostHit() {
+        var stack = LayerStack()
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: red4)
+        let b = Annotation(kind: .line(start: CGPoint(x: 50, y: -50), end: CGPoint(x: 50, y: 50)), style: red4)
+        stack.add(a); stack.add(b)
+        #expect(stack.topmost(at: CGPoint(x: 50, y: 0), tolerance: 0)?.id == b.id)
+        #expect(stack.topmost(at: CGPoint(x: 500, y: 500), tolerance: 0) == nil)
+    }
+
     @Test func annotationsJSONRoundTrip() throws {
+        // the first annotation predates `transform` — it decodes as .identity
         let fixture = """
-            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"line":{"start":[10,20],"end":[110,20]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}
+            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"line":{"start":[10,20],"end":[110,20]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}},{"id":"7A2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A","kind":{"line":{"start":[0,0],"end":[5,5]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4},"transform":{"flipHorizontal":true,"flipVertical":false,"rotation":1.5}}]}
             """
         var expected = LayerStack()
         expected.add(Annotation(id: UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!,
                                 kind: .line(start: CGPoint(x: 10, y: 20), end: CGPoint(x: 110, y: 20)),
                                 style: red4))
+        expected.add(Annotation(id: UUID(uuidString: "7A2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A")!,
+                                kind: .line(start: .zero, end: CGPoint(x: 5, y: 5)),
+                                style: red4,
+                                transform: AnnotationTransform(rotation: 1.5, flipHorizontal: true)))
         let stack = try LayerStack(json: Data(fixture.utf8))
         #expect(stack == expected)
         #expect(try LayerStack(json: stack.json()) == stack)

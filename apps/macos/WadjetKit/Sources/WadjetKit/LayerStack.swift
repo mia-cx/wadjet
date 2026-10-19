@@ -11,6 +11,14 @@ public struct LayerStack: Codable, Equatable, Sendable {
     public mutating func add(_ a: Annotation) { annotations.append(a) }
     public mutating func remove(id: Annotation.ID) { annotations.removeAll { $0.id == id } }
     public mutating func clear() { annotations.removeAll() }
+    /// the front-most annotation under `point`, if any
+    public func topmost(at point: CGPoint, tolerance: CGFloat) -> Annotation? {
+        annotations.reversed().first { PathGeometry.hitTest($0, at: point, tolerance: tolerance) }
+    }
+    /// replace the annotation with the same id, in place
+    public mutating func replace(_ a: Annotation) {
+        if let i = annotations.firstIndex(where: { $0.id == a.id }) { annotations[i] = a }
+    }
 
     /// annotations.json; JSONEncoder with [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes] like ConfigStore
     public func json() throws -> Data {
