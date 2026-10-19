@@ -134,6 +134,7 @@ enum SettingsPanes: String, CaseIterable {
         Section("Screenshots") { ForEach(Tool.allCases.filter { $0.kind == .shot }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
         Section("Recordings") { ForEach(Tool.allCases.filter { $0.kind == .rec }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
         Section("Utilities") { ForEach(Tool.allCases.filter { $0.kind == .util }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Markup") { ForEach(Tool.allCases.filter { $0.kind == .markup && $0.toolID != nil }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
     }
 }
 
