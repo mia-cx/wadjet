@@ -5,15 +5,15 @@ extension MarkupStyles {
     /// the selected Annotation's method if it's a Censor, else Censor's
     /// configured default for new Annotations
     var censorMethod: CensorMethod {
-        if case let .censor(_, method) = MarkupController.shared.selected?.kind { return method }
+        if case let .censor(_, method) = MarkupController.active.selected?.kind { return method }
         return config.value.markup.tools["censor"]?.censorMethod ?? .blackOut
     }
 
     /// a selected Censor changes alone; with nothing selected the method
     /// becomes Censor's default for new Annotations (mirroring `restyle`)
     func setCensorMethod(_ m: CensorMethod) {
-        if let a = MarkupController.shared.selected, case .censor = a.kind {
-            MarkupController.shared.transformSelection {
+        if let a = MarkupController.active.selected, case .censor = a.kind {
+            MarkupController.active.transformSelection {
                 var a = $0
                 if case let .censor(rect, _) = a.kind { a.kind = .censor(rect: rect, method: m) }
                 return a

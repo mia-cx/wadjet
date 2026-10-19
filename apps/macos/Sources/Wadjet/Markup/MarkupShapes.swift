@@ -9,7 +9,7 @@ import WadjetKit
 
     /// the selected shape's variant, else the configured one, else .rectangle
     static var variant: ShapeVariant {
-        if case let .shape(k, _) = MarkupController.shared.selected?.kind { return k.variant }
+        if case let .shape(k, _) = MarkupController.active.selected?.kind { return k.variant }
         return config.value.markup.tools["shapes"]?.variant ?? .rectangle
     }
 
@@ -17,25 +17,25 @@ import WadjetKit
     /// (keeping its rect and style)
     static func pick(_ v: ShapeVariant) {
         config.update { $0.markup.tools["shapes", default: .init()].variant = v }
-        guard var a = MarkupController.shared.selected,
+        guard var a = MarkupController.active.selected,
               case let .shape(_, rect) = a.kind else { return }
         a.kind = .shape(shape(for: v), rect: rect)
-        MarkupController.shared.transformSelection { _ in a }
+        MarkupController.active.transformSelection { _ in a }
     }
 
     /// the selected shape's kind if it's this variant, else
     /// `markup.tools.<v>.shape`, else v.defaultShape
     static func shape(for v: ShapeVariant) -> ShapeKind {
-        if case let .shape(k, _) = MarkupController.shared.selected?.kind, k.variant == v { return k }
+        if case let .shape(k, _) = MarkupController.active.selected?.kind, k.variant == v { return k }
         return config.value.markup.tools[v.rawValue]?.shape ?? v.defaultShape
     }
 
     /// edits the selected shape's option (via
     /// MarkupController.transformSelection), or the remembered one for its variant
     static func setShape(_ k: ShapeKind) {
-        if var a = MarkupController.shared.selected, case let .shape(_, rect) = a.kind {
+        if var a = MarkupController.active.selected, case let .shape(_, rect) = a.kind {
             a.kind = .shape(k, rect: rect)
-            MarkupController.shared.transformSelection { _ in a }
+            MarkupController.active.transformSelection { _ in a }
             return
         }
         config.update { $0.markup.tools[k.variant.rawValue, default: .init()].shape = k }

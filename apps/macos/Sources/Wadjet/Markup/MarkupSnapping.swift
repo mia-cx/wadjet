@@ -10,11 +10,18 @@ import WadjetKit
     private(set) var guides: [SnapGuide] = []
 
     /// nil while the Snapping setting is off. Target order is the tiebreak:
-    /// Annotations, then other apps' windows, then the displays.
-    init?(stack: LayerStack, excluding id: Annotation.ID?) {
+    /// Annotations, then other apps' windows, then the displays. An Editor
+    /// passes `canvasBounds`: its Canvas is a still — the only targets are its
+    /// Annotations and the bounds Recrop can reach.
+    init?(stack: LayerStack, excluding id: Annotation.ID?, canvasBounds: CGRect? = nil) {
         let c = AppState.shared.config.value.markup
         guard c.snapping else { return nil }
         range = c.snapRange
+        if let canvasBounds {
+            targets = SnapTarget.annotations(stack.annotations, excluding: id)
+                + [.rect(canvasBounds)]
+            return
+        }
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                kCGNullWindowID) as? [[String: Any]] ?? []
         // hidden Annotations don't draw, so they don't pull the pointer either

@@ -10,16 +10,16 @@ import WadjetKit
 
     /// the selected counter's, else configured, else .numbers
     static var format: CounterFormat {
-        if case let .counter(_, _, _, f) = MarkupController.shared.selected?.kind { return f }
+        if case let .counter(_, _, _, f) = MarkupController.active.selected?.kind { return f }
         return config.value.markup.tools["counter"]?.format ?? .numbers
     }
 
     /// relabels the selected counter (value kept), else sets the Tool's format
     static func setFormat(_ f: CounterFormat) {
-        if var a = MarkupController.shared.selected,
+        if var a = MarkupController.active.selected,
            case let .counter(c, r, v, _) = a.kind {
             a.kind = .counter(center: c, radius: r, value: v, format: f)
-            MarkupController.shared.transformSelection { _ in a }
+            MarkupController.active.transformSelection { _ in a }
             return
         }
         config.update { $0.markup.tools["counter", default: .init()].format = f }
@@ -27,16 +27,16 @@ import WadjetKit
 
     /// diameter: the selected counter's 2 × radius, else configured, else defaultSize
     static var size: CGFloat {
-        if case let .counter(_, r, _, _) = MarkupController.shared.selected?.kind { return 2 * r }
+        if case let .counter(_, r, _, _) = MarkupController.active.selected?.kind { return 2 * r }
         return config.value.markup.tools["counter"]?.size ?? defaultSize
     }
 
     /// resizes the selected counter about its centre, else sets the Tool's size
     static func setSize(_ d: CGFloat) {
-        if var a = MarkupController.shared.selected,
+        if var a = MarkupController.active.selected,
            case let .counter(c, _, v, f) = a.kind {
             a.kind = .counter(center: c, radius: d / 2, value: v, format: f)
-            MarkupController.shared.transformSelection { _ in a }
+            MarkupController.active.transformSelection { _ in a }
             return
         }
         config.update { $0.markup.tools["counter", default: .init()].size = d }

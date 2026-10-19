@@ -19,16 +19,16 @@ final class MarkupStyles {
     /// the selected Annotation's style if there is one, else the Tool's
     /// configured default — the #107 selection seam
     func style(for tool: Tool) -> AnnotationStyle {
-        MarkupController.shared.selectedStyle ?? config.value.markup.tools[tool.styleKey]?.style ?? tool.defaultStyle
+        MarkupController.active.selectedStyle ?? config.value.markup.tools[tool.styleKey]?.style ?? tool.defaultStyle
     }
 
     /// While an Annotation is selected this restyles that Annotation alone
     /// (via MarkupController.selectedStyle); with nothing selected the change
     /// becomes the Tool's default for new Annotations.
     func restyle(_ tool: Tool, _ change: (inout AnnotationStyle) -> Void) {
-        if var selected = MarkupController.shared.selectedStyle {
+        if var selected = MarkupController.active.selectedStyle {
             change(&selected)
-            MarkupController.shared.selectedStyle = selected
+            MarkupController.active.selectedStyle = selected
             return
         }
         config.update {
@@ -68,10 +68,23 @@ final class MarkupStyles {
     private(set) var eyedropper: (tool: Tool, target: ColourTarget, annotation: Annotation.ID?, live: Bool)?
 
     /// hands the pointer to Pick Colour: from .frozen it switches Tool on the
-    /// same Freeze Frame, from .toolbar it takes one and opens Pick Colour
+    /// same Freeze Frame, from .toolbar it takes one and opens Pick Colour.
+    /// In an Editor there's no Freeze Frame to sample — the system sampler runs.
     func beginEyedropper(for tool: Tool, target: ColourTarget = .stroke) {
         let s = AppState.shared
-        eyedropper = (tool, target, annotation: MarkupController.shared.selection, live: s.phase == .toolbar)
+        if MarkupController.active !== MarkupController.shared {
+            NSColorSampler().show { colour in
+                MainActor.assumeIsolated {
+                    guard let colour,
+                          let c = colour.usingColorSpace(.sRGB) else { return }
+                    let rgba = RGBAColour(red: c.redComponent, green: c.greenComponent,
+                                          blue: c.blueComponent, alpha: 1)
+                    self.useColour(rgba, for: tool, target: target)
+                }
+            }
+            return
+        }
+        eyedropper = (tool, target, annotation: MarkupController.active.selection, live: s.phase == .toolbar)
         s.openMenu = nil; AppDelegate.shared?.overlayCtrl.syncMenu()
         AppDelegate.shared?.trigger(.pickColour)
     }
@@ -81,7 +94,7 @@ final class MarkupStyles {
         guard let e = eyedropper else { return false }
         let colour = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
         if let id = e.annotation {
-            MarkupController.shared.restyle(id) { $0.setColour(colour, for: e.target) }
+            MarkupController.active.restyle(id) { $0.setColour(colour, for: e.target) }
             config.update { $0.markup.recordColour(colour.hex) }
         } else {
             useColour(colour, for: e.tool, target: e.target)
