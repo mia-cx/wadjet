@@ -281,6 +281,7 @@ private enum Knife {
     /// previous split (keeps it monotone), and the projection ends one raw
     /// piece and opens the next
     static func splitRaw(_ raw: [CGPoint], at points: [CGPoint]) -> [[CGPoint]] {
+        guard raw.count >= 2 else { return [raw] }
         var pieces: [[CGPoint]] = []
         var start = 0, cursor = 0
         var cursorT: CGFloat = 0
@@ -297,9 +298,11 @@ private enum Knife {
                 let d2 = (p.x - q.x) * (p.x - q.x) + (p.y - q.y) * (p.y - q.y)
                 if d2 < best.d2 { best = (j, t, d2) }
             }
-            let proj = lerp(raw[best.i], raw[min(best.i + 1, raw.count - 1)], best.t)
+            let proj = lerp(raw[best.i], raw[best.i + 1], best.t)
             var piece = head.map { [$0] } ?? []
-            piece += raw[start...best.i]
+            // two crossings can land on the same raw segment — the slice may
+            // be empty, but the projected boundary points still bracket it
+            piece += raw[min(start, best.i + 1)..<(best.i + 1)]
             piece.append(proj)
             pieces.append(piece)
             head = proj
@@ -308,7 +311,7 @@ private enum Knife {
             cursorT = best.t
         }
         var last = head.map { [$0] } ?? []
-        last += raw[start...]
+        last += raw[min(start, raw.count)...]
         pieces.append(last)
         return pieces
     }
@@ -404,6 +407,7 @@ extension Annotation {
     /// once. Returns nil when no chord formed.
     private func closedPieces(_ segs: [Segment], _ crossings: [KnifeCrossing],
                               tol: CGFloat) -> [PathData]? {
+        guard crossings.count >= 2 else { return nil }
         let geo = PathGeometry.path(segments: segs, closed: true)
         let byS = crossings.indices.sorted { crossings[$0].s < crossings[$1].s }
         var inChord = Set<Int>()

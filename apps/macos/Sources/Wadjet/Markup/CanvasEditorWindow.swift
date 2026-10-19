@@ -415,7 +415,8 @@ final class EditorCanvasView: NSView {
         doc.markup.cmdHeld = e.modifierFlags.contains(.command)
         markupView.setToolCursor()
         if doc.markup.draft != nil {
-            doc.markup.drag(to: markupView.canvasPoint(fromScreen: NSEvent.mouseLocation))
+            doc.markup.drag(to: markupView.canvasPoint(fromScreen: NSEvent.mouseLocation),
+                            constrained: e.modifierFlags.contains(.shift))
         }
         super.flagsChanged(with: e)
     }

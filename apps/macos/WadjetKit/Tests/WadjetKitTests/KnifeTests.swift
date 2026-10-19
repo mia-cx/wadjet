@@ -237,6 +237,56 @@ struct KnifeTests {
         }
     }
 
+    // Proves a cut that misses a closed Annotation entirely leaves it alone
+    // and still splits what it does cross — a zero-crossing closed path used
+    // to trap in the chord pairing
+    @Test func missedClosedShapeIsNotCut() {
+        let rect = Annotation(kind: .shape(.rectangle(cornerRadius: 0),
+                                          rect: CGRect(x: 0, y: 0, width: 100, height: 60)),
+                              style: red4)
+        var lone = LayerStack([rect])
+        var didCut = lone.cut(from: CGPoint(x: 200, y: 0), to: CGPoint(x: 200, y: 100))
+        #expect(!didCut && lone.annotations == [rect])
+
+        let line = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)),
+                              style: red4)
+        var stack = LayerStack([rect, line])
+        didCut = stack.cut(from: CGPoint(x: 50, y: -10), to: CGPoint(x: 50, y: 10))
+        #expect(didCut)
+        #expect(stack.annotations.count == 3 && stack.annotations[0] == rect)
+    }
+
+    // Proves two crossings projecting onto the same raw sample segment don't
+    // trap the slice, and the split keeps every original sample in order —
+    // each projected boundary point ends one piece and opens the next
+    @Test func rawSplitsOnSameSegmentDoNotTrap() {
+        let raw = [CGPoint(x: 0, y: 0), CGPoint(x: 36, y: -1), CGPoint(x: 73, y: -27),
+                   CGPoint(x: 99, y: 25), CGPoint(x: 106, y: -29)]
+        guard let path = PathData.fitted(raw, smoothing: 1) else {
+            Issue.record("fit failed")
+            return
+        }
+        var stack = LayerStack([Annotation(kind: .path(path), style: red4)])
+        let didCut = stack.cut(from: CGPoint(x: -10, y: 0), to: CGPoint(x: 120, y: 0))
+        #expect(didCut)
+        #expect(stack.annotations.count >= 2)
+        var rawPieces: [[CGPoint]] = []
+        for a in stack.annotations {
+            guard case let .path(d) = a.kind, let r = d.rawPoints, r.count >= 2 else {
+                Issue.record("expected .path pieces with ≥ 2 raw samples, got \(a.kind)")
+                return
+            }
+            rawPieces.append(r)
+        }
+        // each later piece opens with the projected boundary point — drop it
+        let all = rawPieces.enumerated().flatMap { i, r in
+            i == 0 ? r : Array(r.dropFirst())
+        }
+        var idx = 0
+        for p in all where idx < raw.count && p == raw[idx] { idx += 1 }
+        #expect(idx == raw.count)
+    }
+
     // Proves pieces take the original's layer position, in path order
     @Test func piecesKeepLayerPosition() {
         let x = Annotation(kind: .counter(center: CGPoint(x: -50, y: -50), radius: 5,
