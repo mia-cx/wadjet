@@ -83,17 +83,16 @@ final class MarkupController {
 
     func undo() {
         guard gesture == nil, let s = history.undo(from: stack) else { return }
-        stack = s
-        if let id = selection, !stack.annotations.contains(where: { $0.id == id }) { selection = nil }
-        syncPanels(); render()
-        AppLog.line("markup: undo")
+        restore(s); AppLog.line("markup: undo")
     }
     func redo() {
         guard gesture == nil, let s = history.redo(from: stack) else { return }
+        restore(s); AppLog.line("markup: redo")
+    }
+    private func restore(_ s: LayerStack) {
         stack = s
-        if let id = selection, !stack.annotations.contains(where: { $0.id == id }) { selection = nil }
+        if selected == nil { selection = nil }
         syncPanels(); render()
-        AppLog.line("markup: redo")
     }
 
     /// the want from AppState: a Markup Tool armed while the toolbar is up —
