@@ -296,8 +296,9 @@ final class MarkupController {
     }
 
     func clear() {
-        // drops the editor without committing — the Annotation is cleared anyway
-        editor?.removeFromSuperview(); editor = nil; editing = nil; textEditStart = nil
+        // a live text session commits as its own step before Clear's
+        commitEditing()
+        textEditStart = nil
         commitGesture()
         gesture = nil; snapper = nil; selection = nil; counterNext = nil
         // the Pen preview dies with the stack it wasn't part of — clear it
@@ -321,7 +322,9 @@ final class MarkupController {
         set {
             guard var a = selected, let newValue else { return }
             a.style = newValue
-            edit { $0.replace(a) }
+            // a mid-edit restyle folds into the text session's one undo step
+            if editing != nil { mutateUnrecorded { $0.replace(a) } }
+            else { edit { $0.replace(a) } }
             AppLog.line("markup: restyled selection")
         }
     }
@@ -336,7 +339,9 @@ final class MarkupController {
     func update(_ id: Annotation.ID, _ change: (inout Annotation) -> Void) {
         guard var a = stack.annotations.first(where: { $0.id == id }) else { return }
         change(&a)
-        edit { $0.replace(a) }
+        // a mid-edit restyle folds into the text session's one undo step
+        if id == editing { mutateUnrecorded { $0.replace(a) } }
+        else { edit { $0.replace(a) } }
         AppLog.line("markup: restyled selection")
     }
 
