@@ -31,9 +31,11 @@ struct ScreenshotCanvasTests {
         rotated.transform.rotation = .pi / 2
         let misses = line(8, 15, 15, 8) // bounding box overlaps, the stroke does not
         let elsewhere = line(-18, 12, -12, 12)
+        let coveringCensor = Annotation(kind: .censor(rect: CGRect(x: -5, y: -5, width: 20, height: 20), method: .blackOut),
+            style: crossing.style)
         let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(), crop: crop,
-            annotations: LayerStack([crossing, edge, rotated, misses, elsewhere]), windowCapture: true)
-        #expect(canvas.layerStack.annotations == [crossing, edge, rotated])
+            annotations: LayerStack([crossing, edge, rotated, misses, elsewhere, coveringCensor]), windowCapture: true)
+        #expect(canvas.layerStack.annotations == [crossing, edge, rotated, coveringCensor])
         #expect(canvas.layout.count == 2)
     }
 

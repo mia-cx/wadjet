@@ -19,10 +19,15 @@ extension CanvasDocument {
                 annotations: LayerStack, windowCapture: Bool = false) {
         let frames = windowCapture ? [crop] : capturedDisplays.map(\.display.frame)
         let kept = annotations.annotations.filter { annotation in
-            let outline = PathGeometry.path(for: annotation).copy(strokingWithWidth: annotation.style.width,
+            let path = PathGeometry.path(for: annotation)
+            let area: CGPath
+            switch annotation.kind {
+            case .censor: area = path
+            case .line: area = path.copy(strokingWithWidth: annotation.style.width,
                 lineCap: .round, lineJoin: .round, miterLimit: 10)
+            }
             return frames.contains { frame in
-                outline.intersects(CGPath(rect: frame, transform: nil), using: .winding)
+                area.intersects(CGPath(rect: frame, transform: nil), using: .winding)
             }
         }
         self.init(layout: capturedDisplays.map(\.display), crop: crop, cornerRadius: cornerRadius,
