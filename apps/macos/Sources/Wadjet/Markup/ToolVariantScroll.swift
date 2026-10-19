@@ -37,8 +37,11 @@ extension PassthroughHostingView {
     /// when the pointer is elsewhere, so the event travels on
     func scrollVariant(_ e: NSEvent) -> Bool {
         let s = AppState.shared
+        // the cell frames are in SwiftUI's top-left "panel" space
+        let q = convert(e.locationInWindow, from: nil)
+        let p = isFlipped ? q : CGPoint(x: q.x, y: bounds.height - q.y)
         guard let t = s.tool, t.kind == .markup, s.expandedDisplay == displayIndex,
-              ToolbarBtnFrames.rects[displayIndex]?[t]?.contains(convert(e.locationInWindow, from: nil)) == true
+              ToolbarBtnFrames.rects[displayIndex]?[t]?.contains(p) == true
         else { return false }
         let step = scrollTicks.step(e)
         if step != 0 { t.cycleVariant(by: step) }
