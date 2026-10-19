@@ -24,7 +24,7 @@ import WadjetKit
         let settings = AppState.shared.config.value.canvasRetention.settings
         do {
             let decisions = try await Task.detached(priority: .background) {
-                try store.sweep(settings: settings)
+                try await store.sweep(settings: settings)
             }.value
             func count(_ action: CanvasRetentionAction) -> Int {
                 decisions.filter { $0.actions.contains(action) }.count

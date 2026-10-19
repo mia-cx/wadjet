@@ -64,8 +64,8 @@ struct CanvasStoreTests {
         var live = try CanvasDocument.read(from: hostURL)
         try live.archiveLinkedCanvases() // first save in an open Editor, without reopening it
         clock.withLock { $0 = created.addingTimeInterval(90 * 86_400) }
-        try store.sweep()
-        try store.sweep()
+        try await store.sweep()
+        try await store.sweep()
         #expect(try store.url(for: targetID) == nil)
         #expect(try store.url(for: hostID) == nil)
         #expect(try packageBytes(at: savedURL) == original)
@@ -101,12 +101,12 @@ struct CanvasStoreTests {
         let presenter = RetentionEditorPresenter(url: url)
         NSFileCoordinator.addFilePresenter(presenter)
         defer { NSFileCoordinator.removeFilePresenter(presenter) }
-        _ = try await Task.detached { try store.sweep() }.value
+        _ = try await Task.detached { try await store.sweep() }.value
         #expect(try store.canvas(for: id)?.crop.width == 20)
         #expect(try !hasGainMap(at: url.appendingPathComponent("display-1.heic")))
-        #expect(try store.sweep().isEmpty) // the Editor save and stage markers both survived
+        #expect(try await store.sweep().isEmpty) // the Editor save and stage markers both survived
         clock.withLock { $0 = created.addingTimeInterval(90 * 86_400) }
-        _ = try await Task.detached { try store.sweep() }.value
+        _ = try await Task.detached { try await store.sweep() }.value
         #expect(presenter.deleted.withLock { $0 })
         #expect(try store.url(for: id) == nil)
     }
@@ -114,7 +114,7 @@ struct CanvasStoreTests {
     // Proves root and embedded linking Annotations preserve whole displays for
     // recropping, even when those displays are outside the target's own crop.
     @Test(arguments: [false, true], [false, true])
-    func linkedRecropKeepsItsDisplays(embedded: Bool, embeddedTarget: Bool) throws {
+    func linkedRecropKeepsItsDisplays(embedded: Bool, embeddedTarget: Bool) async throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let created = Date(timeIntervalSince1970: 1_000_000)
@@ -154,15 +154,15 @@ struct CanvasStoreTests {
             : url
         let settings = CanvasRetentionSettings(daysUntilDeletion: 0)
         clock.withLock { $0 = created.addingTimeInterval(6 * 86_400) }
-        #expect(try store.sweep(settings: settings).isEmpty)
+        #expect(try await store.sweep(settings: settings).isEmpty)
         #expect(try hasGainMap(at: targetURL.appendingPathComponent("display-1.heic")))
         clock.withLock { $0 = created.addingTimeInterval(7 * 86_400) }
-        try store.sweep(settings: settings)
+        try await store.sweep(settings: settings)
         #expect(try !hasGainMap(at: targetURL.appendingPathComponent("display-1.heic")))
         clock.withLock { $0 = created.addingTimeInterval(29 * 86_400) }
-        #expect(try store.sweep(settings: settings).isEmpty)
+        #expect(try await store.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(30 * 86_400) }
-        try store.sweep(settings: settings)
+        try await store.sweep(settings: settings)
         #expect(try CanvasDocument.read(from: targetURL).layout.map(\.id) == [1, 2, 3])
         #expect(FileManager.default.fileExists(atPath: targetURL.appendingPathComponent("display-2.heic").path))
         #expect(FileManager.default.fileExists(atPath: targetURL.appendingPathComponent("display-3.heic").path))
@@ -170,7 +170,7 @@ struct CanvasStoreTests {
 
     // Proves persisted, configurable deadlines change real pixels/files exactly once,
     // prune each nested Canvas by its own crop/stroked Annotations, and leave History intact.
-    @Test @MainActor func retentionStages() throws {
+    @Test @MainActor func retentionStages() async throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let created = Date(timeIntervalSince1970: 1_000_000)
@@ -214,9 +214,9 @@ struct CanvasStoreTests {
             daysUntilDroppingUnusedDisplays: 4, daysUntilDeletion: 6)
 
         clock.withLock { $0 = created.addingTimeInterval(2 * 86_400 - 1) }
-        #expect(try store.sweep(settings: settings).isEmpty)
+        #expect(try await store.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(2 * 86_400) }
-        #expect(try store.sweep(settings: settings).flatMap(\.actions) == [.convertToSDR, .reencodeLossyHEIC])
+        #expect(try await store.sweep(settings: settings).flatMap(\.actions) == [.convertToSDR, .reencodeLossyHEIC])
         let degraded = try #require(try store.canvas(for: entry.id))
         let image = try #require(degraded.displayImages[1])
         #expect(max(image.contentHeadroom, image.calculatedContentHeadroom) <= 1)
@@ -224,7 +224,7 @@ struct CanvasStoreTests {
         #expect(try !hasGainMap(at: package.appendingPathComponent("embedded/child.wadjet/display-1.heic")))
         #expect(try Data(contentsOf: windowURL).count < originalWindow.count)
         let once = try Data(contentsOf: displayURL)
-        #expect(try store.sweep(settings: settings).isEmpty)
+        #expect(try await store.sweep(settings: settings).isEmpty)
         #expect(try Data(contentsOf: displayURL) == once)
 
         // Editor open/save preserves retention metadata, including the original capture date.
@@ -232,11 +232,11 @@ struct CanvasStoreTests {
         edited.cornerRadius = 2
         try edited.write(to: package)
         let reopenedStore = CanvasStore(directory: directory, now: { clock.withLock { $0 } })
-        #expect(try reopenedStore.sweep(settings: settings).isEmpty)
+        #expect(try await reopenedStore.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(4 * 86_400 - 1) }
-        #expect(try reopenedStore.sweep(settings: settings).isEmpty)
+        #expect(try await reopenedStore.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(4 * 86_400) }
-        #expect(try reopenedStore.sweep(settings: settings).flatMap(\.actions) == [.dropUnusedDisplays])
+        #expect(try await reopenedStore.sweep(settings: settings).flatMap(\.actions) == [.dropUnusedDisplays])
         #expect(try reopenedStore.canvas(for: entry.id)?.layout.map(\.id) == [1, 2])
         #expect(!FileManager.default.fileExists(atPath: package.appendingPathComponent("display-3.heic").path))
         let pruned = try #require(try reopenedStore.canvas(for: entry.id))
@@ -247,23 +247,23 @@ struct CanvasStoreTests {
         #expect(!FileManager.default.fileExists(atPath: package.appendingPathComponent("embedded/child.wadjet/embedded/grandchild.wadjet/display-2.heic").path))
         #expect(try Data(contentsOf: displayURL) == once)
         let prunedBytes = try packageBytes(at: package)
-        #expect(try reopenedStore.sweep(settings: settings).isEmpty)
+        #expect(try await reopenedStore.sweep(settings: settings).isEmpty)
         #expect(try packageBytes(at: package) == prunedBytes)
         clock.withLock { $0 = created.addingTimeInterval(6 * 86_400 - 1) }
-        #expect(try reopenedStore.sweep(settings: settings).isEmpty)
+        #expect(try await reopenedStore.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(6 * 86_400) }
-        #expect(try reopenedStore.sweep(settings: settings).flatMap(\.actions) == [.delete])
+        #expect(try await reopenedStore.sweep(settings: settings).flatMap(\.actions) == [.delete])
         #expect(!FileManager.default.fileExists(atPath: package.path))
         #expect(try reopenedStore.url(for: entry.id) == nil)
         #expect(try reopenedStore.canvas(for: entry.id) == nil)
-        #expect(try reopenedStore.sweep(settings: settings).isEmpty)
+        #expect(try await reopenedStore.sweep(settings: settings).isEmpty)
         #expect(try history.recent().map(\.id) == [entry.id])
     }
 
     // Proves the stage that drops unused displays keeps the display a Magnify
     // samples: its viewport reaches display 2 though every painted part —
     // source outline, leader, magnifier — stays on display 1.
-    @Test @MainActor func magnifyViewportKeepsItsDisplay() throws {
+    @Test @MainActor func magnifyViewportKeepsItsDisplay() async throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let created = Date(timeIntervalSince1970: 1_000_000)
@@ -285,7 +285,7 @@ struct CanvasStoreTests {
         let settings = CanvasRetentionSettings(daysUntilSDRAndLossyHEIC: 10,
             daysUntilDroppingUnusedDisplays: 4, daysUntilDeletion: 20)
         clock.withLock { $0 = created.addingTimeInterval(4 * 86_400) }
-        #expect(try store.sweep(settings: settings).flatMap(\.actions) == [.dropUnusedDisplays])
+        #expect(try await store.sweep(settings: settings).flatMap(\.actions) == [.dropUnusedDisplays])
         #expect(try store.canvas(for: entry.id)?.layout.map(\.id) == [1, 2])
         #expect(FileManager.default.fileExists(atPath:
             package.appendingPathComponent("display-2.heic").path))
@@ -293,7 +293,7 @@ struct CanvasStoreTests {
 
     // Proves root and nested links use the newest root host's age and protect the
     // target through that host's deletion sweep; the next sweep deletes the orphan.
-    @Test(arguments: [0, 1, 2]) func newestLinkControlsLifetimeAndDegradation(depth: Int) throws {
+    @Test(arguments: [0, 1, 2]) func newestLinkControlsLifetimeAndDegradation(depth: Int) async throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let old = Date(timeIntervalSince1970: 0)
@@ -311,32 +311,32 @@ struct CanvasStoreTests {
         }
         try store.add(host, for: olderHost, createdAt: old.addingTimeInterval(150 * 86_400))
         try store.add(host, for: newestHost, createdAt: newest)
-        #expect(try store.sweep().map(\.canvasID) == [olderHost])
+        #expect(try await store.sweep().map(\.canvasID) == [olderHost])
         #expect(try hasGainMap(at: targetURL.appendingPathComponent("display-1.heic")))
         clock.withLock { $0 = newest.addingTimeInterval(7 * 86_400) }
-        let decisions = try store.sweep()
+        let decisions = try await store.sweep()
         #expect(Set(decisions.map(\.canvasID)) == [targetID, newestHost])
         #expect(decisions.allSatisfy { $0.actions == [.convertToSDR, .reencodeLossyHEIC] })
         #expect(try !hasGainMap(at: targetURL.appendingPathComponent("display-1.heic")))
-        #expect(try store.sweep().isEmpty)
+        #expect(try await store.sweep().isEmpty)
         clock.withLock { $0 = newest.addingTimeInterval(90 * 86_400) }
-        let atDeletion = try store.sweep()
+        let atDeletion = try await store.sweep()
         #expect(atDeletion.contains { $0.canvasID == newestHost && $0.actions == [.delete] })
         #expect(!atDeletion.contains { $0.canvasID == targetID && $0.actions.contains(.delete) })
         #expect(try store.url(for: targetID) == targetURL)
-        #expect(try store.sweep().map(\.canvasID) == [targetID])
+        #expect(try await store.sweep().map(\.canvasID) == [targetID])
         #expect(try store.url(for: targetID) == nil)
     }
 
     // Proves never-delete still degrades, and Save file copies outside the store
     // remain byte-for-byte untouched, even when linked or symlinked into it.
-    @Test func neverDeleteAndSavedCopies() throws {
+    @Test func neverDeleteAndSavedCopies() async throws {
         let root = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let directory = root.appendingPathComponent("History")
         let now = Date(timeIntervalSince1970: 1_000 * 86_400)
         let store = CanvasStore(directory: directory, now: { now })
-        #expect(try store.sweep().isEmpty)
+        #expect(try await store.sweep().isEmpty)
         let id = UUID()
         let package = try store.add(fixtureCanvas(), for: id, createdAt: Date(timeIntervalSince1970: 0))
         let saved = root.appendingPathComponent("saved.wadjet")
@@ -350,18 +350,18 @@ struct CanvasStoreTests {
             at: directory.appendingPathComponent("\(symlinkID).wadjet"), withDestinationURL: saved)
         #expect(try store.url(for: symlinkID) == nil)
         let settings = CanvasRetentionSettings(daysUntilDeletion: 0)
-        #expect(try store.sweep(settings: settings).flatMap(\.actions)
+        #expect(try await store.sweep(settings: settings).flatMap(\.actions)
             == [.convertToSDR, .reencodeLossyHEIC, .dropUnusedDisplays])
-        #expect(try store.sweep(settings: settings).isEmpty)
+        #expect(try await store.sweep(settings: settings).isEmpty)
         #expect(try store.url(for: id) != nil)
         #expect(try packageBytes(at: saved) == original)
-        #expect(try store.sweep().flatMap(\.actions) == [.delete])
+        #expect(try await store.sweep().flatMap(\.actions) == [.delete])
         #expect(try store.url(for: id) == nil)
         #expect(try packageBytes(at: saved) == original)
     }
 
     // Proves a damaged host's unreadable links cannot cause deletion of its target.
-    @Test(arguments: [0, 1, 2]) func unreadableManifestAbortsBeforeDeletion(depth: Int) throws {
+    @Test(arguments: [0, 1, 2]) func unreadableManifestAbortsBeforeDeletion(depth: Int) async throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let now = Date(timeIntervalSince1970: 100 * 86_400)
@@ -377,7 +377,7 @@ struct CanvasStoreTests {
         var damagedURL = try store.add(host, for: UUID(), createdAt: now)
         for _ in 0..<depth { damagedURL.appendPathComponent("embedded/child.wadjet") }
         try Data("broken".utf8).write(to: damagedURL.appendingPathComponent("canvas.json"))
-        #expect(throws: (any Error).self) { try store.sweep() }
+        await #expect(throws: (any Error).self) { try await store.sweep() }
         #expect(try store.url(for: target) != nil)
     }
 

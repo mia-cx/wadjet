@@ -56,42 +56,45 @@ public struct CanvasStore: Sendable {
     /// package with its completed stages. A failed package is left intact; other
     /// decisions still run and failures surface together. An unreadable manifest
     /// aborts planning, because its links may protect another package from deletion.
-    /// Blocks for file presenters; run off the main thread in an app with Editors.
+    /// Awaits file presenters and performs package IO on a utility queue.
     @discardableResult
-    public func sweep(settings: CanvasRetentionSettings = .init()) throws -> [CanvasRetentionDecision] {
+    public func sweep(settings: CanvasRetentionSettings = .init()) async throws -> [CanvasRetentionDecision] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        // A plain directory writer does not lock its children. Hold the
-        // directory (for additions) and every actual package before planning.
-        // Use synchronous coordination throughout: waiting on an async accessor
-        // can starve the cooperative executor when several callers sweep at once.
+        // A plain directory writer does not lock its children. Acquire every
+        // actual package in one batch, awaiting access without blocking Swift's
+        // cooperative executor or nesting one lock frame per History entry.
         while true {
             let urls = try packageURLs()
             guard !urls.isEmpty else { return [] }
-            let coordinator = NSFileCoordinator()
-            let decisions = try coordinatePackages(urls[...], using: coordinator) { () -> [CanvasRetentionDecision]? in
-                // An add may have won the directory before access was granted.
-                // Retry with that new package included in the lock.
-                guard try packageURLs().map(\.path) == urls.map(\.path) else { return nil }
-                return try sweepCoordinated(settings: settings, coordinator: coordinator)
+            let intents = [NSFileAccessIntent.writingIntent(with: directory, options: [])]
+                + urls.map { NSFileAccessIntent.writingIntent(with: $0, options: .forMerging) }
+            let decisions: [CanvasRetentionDecision]? = try await withCheckedThrowingContinuation { continuation in
+                // Only the granted accessor uses this coordinator after the
+                // asynchronous request has been scheduled.
+                nonisolated(unsafe) let coordinator = NSFileCoordinator()
+                coordinator.coordinate(with: intents, queue: Self.sweepQueue) { error in
+                    continuation.resume(with: Result {
+                        if let error { throw error }
+                        func paths(_ urls: [URL]) -> Set<String> {
+                            Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+                        }
+                        // An add may have won the directory before access was
+                        // granted. Retry including the new package in the batch.
+                        guard try paths(packageURLs()) == paths(intents.dropFirst().map(\.url)) else { return nil }
+                        return try sweepCoordinated(settings: settings, coordinator: coordinator)
+                    })
+                }
             }
             if let decisions { return decisions }
         }
     }
 
-    // The two-item API explicitly permits nested coordinated writes. All store
-    // mutations take the directory first; package locks use a stable path order.
-    private func coordinatePackages<T>(_ urls: ArraySlice<URL>, using coordinator: NSFileCoordinator,
-                                       operation: () throws -> T) throws -> T {
-        guard let package = urls.first else { return try operation() }
-        var result: Result<T, Error>?
-        var error: NSError?
-        coordinator.coordinate(writingItemAt: directory, options: [],
-            writingItemAt: package, options: .forMerging, error: &error) { _, _ in
-            result = Result { try coordinatePackages(urls.dropFirst(), using: coordinator, operation: operation) }
-        }
-        if let error { throw error }
-        return try result!.get()
-    }
+    private static let sweepQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Canvas retention"
+        queue.qualityOfService = .utility
+        return queue
+    }()
 
     private func packageURLs() throws -> [URL] {
         try FileManager.default.contentsOfDirectory(at: directory,
