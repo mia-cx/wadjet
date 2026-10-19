@@ -27,6 +27,10 @@ final class MarkupPanel: NSPanel {
 final class MarkupView: NSView {
     let canvas = CALayer()
     var shapeLayers: [Annotation.ID: CAShapeLayer] = [:]
+    /// selection chrome, kept above the annotation layers
+    let frameLayer = CAShapeLayer()
+    let handlesLayer = CAShapeLayer()
+    let accent = CGColor(srgbRed: 0.20, green: 0.84, blue: 0.58, alpha: 1)
     let scale: CGFloat
     init(frame f: NSRect, screen: NSScreen) {
         scale = screen.backingScaleFactor
@@ -43,8 +47,9 @@ final class MarkupView: NSView {
     override var isOpaque: Bool { false }
 
     /// one CAShapeLayer per Annotation, keyed by id so strokes can persist
-    /// and vanish without touching the rest; array order = back to front
-    func show(_ annotations: [Annotation]) {
+    /// and vanish without touching the rest; array order = back to front.
+    /// `selection` draws its frame and grips on top.
+    func show(_ annotations: [Annotation], selection: Annotation?) {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for a in annotations {
@@ -60,13 +65,41 @@ final class MarkupView: NSView {
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }
+        if let selection {
+            let frame = CGMutablePath()
+            frame.addLines(between: selection.frameCorners)
+            frame.closeSubpath()
+            frameLayer.path = frame
+            frameLayer.fillColor = nil
+            frameLayer.strokeColor = accent
+            frameLayer.lineWidth = 1
+            frameLayer.contentsScale = scale
+            let grips = CGMutablePath()
+            let r = MarkupController.handleSize / 2
+            for h in selection.handles(minExtent: MarkupController.handleMinExtent,
+                                     rotateOffset: MarkupController.rotateOffset) {
+                grips.addEllipse(in: CGRect(x: h.at.x - r, y: h.at.y - r, width: 2 * r, height: 2 * r))
+            }
+            handlesLayer.path = grips
+            handlesLayer.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+            handlesLayer.strokeColor = accent
+            handlesLayer.lineWidth = 1
+            handlesLayer.contentsScale = scale
+            handlesLayer.shadowColor = .black
+            handlesLayer.shadowOpacity = 0.25
+            handlesLayer.shadowRadius = 1
+            handlesLayer.shadowOffset = CGSize(width: 0, height: -0.5)
+        }
         canvas.sublayers = annotations.compactMap { shapeLayers[$0.id] }
+            + (selection == nil ? [] : [frameLayer, handlesLayer])
         CATransaction.commit()
     }
 
     func screenPt(_ e: NSEvent) -> CGPoint { window!.convertPoint(toScreen: e.locationInWindow) }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
-    override func mouseDown(with e: NSEvent) { MarkupController.shared.begin(at: screenPt(e)) }
+    override func mouseDown(with e: NSEvent) {
+        MarkupController.shared.begin(at: screenPt(e), command: e.modifierFlags.contains(.command))
+    }
     // drags keep coming to this view across displays
     override func mouseDragged(with e: NSEvent) { MarkupController.shared.drag(to: screenPt(e)) }
     override func mouseUp(with e: NSEvent) { MarkupController.shared.end() }
@@ -82,6 +115,8 @@ final class MarkupView: NSView {
     override func cursorUpdate(with e: NSEvent) { setToolCursor() }
     override func mouseMoved(with e: NSEvent) { setToolCursor() }
     func setToolCursor() {
-        if let t = MarkupController.shared.armed { WadjetCursors.cursor(for: t).set() }
+        let c = MarkupController.shared
+        if c.selecting { NSCursor.arrow.set() }
+        else if let t = c.armed { WadjetCursors.cursor(for: t).set() }
     }
 }
