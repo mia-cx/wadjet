@@ -31,7 +31,8 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
     private let queue: DispatchQueue
     private var clock: FrameClock
     private let compositor = WindowFrameCompositor()
-    private var pending = false
+    private var dirty = false
+    private var scheduled = false
     private var lastMapping: WindowFrameAnnotator?
     // the captured frame's own placement values, kept for refresh-time compositing
     private var contentRect: CGRect = .zero
@@ -53,26 +54,37 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
               let contentDict = attachments.first?[.contentRect] as? [String: Any],
               let contentRect = CGRect(dictionaryRepresentation: contentDict as CFDictionary),
               let scaleFactor = (attachments.first?[.scaleFactor] as? NSNumber)?.doubleValue
-        else { writer.append(pb, at: clock.stamp(pts)); return }
+        else {
+            if let t = clock.stamp(pts) { writer.append(pb, at: t) }
+            return
+        }
         compositor.capture(pb, contentRect: contentRect, scaleFactor: CGFloat(scaleFactor))
         self.contentRect = contentRect
         self.scaleFactor = CGFloat(scaleFactor)
         frameSize = CGSize(width: CVPixelBufferGetWidth(pb), height: CVPixelBufferGetHeight(pb))
-        writer.append(compose() ?? pb, at: clock.stamp(pts))
+        guard let t = clock.stamp(pts) else {
+            dirty = true // a refresh took this slot: catch up with these pixels in the next one
+            return schedule()
+        }
+        dirty = false // a written captured frame already carries the current Annotations
+        writer.append(compose() ?? pb, at: t)
     }
 
-    /// the Annotations changed, or the Recording resumed: rewrite the last frame with them,
-    /// at most once per frame interval. Safe from any thread.
-    func refresh() {
-        queue.async { [self] in
-            guard !pending else { return }
-            pending = true
-            let wait = CMTimeGetSeconds(clock.wait(from: CMClockGetTime(CMClockGetHostTimeClock())))
-            queue.asyncAfter(deadline: .now() + wait) { [self] in
-                pending = false
-                guard let out = compose() else { return }
-                writer.append(out, at: clock.stamp(CMClockGetTime(CMClockGetHostTimeClock())))
-            }
+    /// the Annotations changed, or the Recording resumed: rewrite the last frame with them
+    /// in the next free slot. Safe from any thread.
+    func refresh() { queue.async { [self] in dirty = true; schedule() } }
+
+    /// one pending catch-up write at a time, in the next free frame slot
+    private func schedule() {
+        guard !scheduled else { return }
+        scheduled = true
+        let wait = CMTimeGetSeconds(clock.wait(from: CMClockGetTime(CMClockGetHostTimeClock())))
+        queue.asyncAfter(deadline: .now() + wait) { [self] in
+            scheduled = false
+            guard dirty, let out = compose() else { return }
+            guard let t = clock.stamp(CMClockGetTime(CMClockGetHostTimeClock())) else { return schedule() }
+            dirty = false
+            writer.append(out, at: t)
         }
     }
 
