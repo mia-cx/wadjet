@@ -4063,7 +4063,13 @@ struct ToolMenuView: View {
                 }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 if tool == .magnify { magnifyRows() }
-                selectionRows()
+                if MarkupStyles.shared.editsText(tool) {
+                    TextFormatControls(tool: tool, ctrl: ctrl)
+                }
+                // the Transform rows are hidden while a text is being edited
+                if MarkupController.active.editing == nil {
+                    selectionRows()
+                }
                 if tool == .select, !editor { markupGroupRows() }
             default: EmptyView()
             }
