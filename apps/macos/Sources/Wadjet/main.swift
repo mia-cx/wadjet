@@ -382,10 +382,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
         overlayCtrl = OverlayController(app: self)
         toastCtrl = ToastController()
-        // a display plugged in while the island is up gets one too
+        // a display plugged in while the island or live toolbar is up gets one too
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
                                                object: nil, queue: .main) { _ in
-            Task { @MainActor in AppDelegate.shared?.overlayCtrl.syncDesktopChrome() }
+            Task { @MainActor in AppDelegate.shared?.overlayCtrl.screensChanged() }
         }
         Task { @MainActor in // live reload shows up in app.log
             var lastMode = AppState.shared.config.value.tools.measure.mode
@@ -2123,7 +2123,9 @@ final class OverlayController {
         }
         let filter: SCContentFilter
         if wadjet {
-            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluding.contains(Int($0.windowID)) })
+            // closeAll may have rebuilt the desktop islands since `excluding` was taken
+            let excluded = excluding.union(toolbarPanels.values.map(\.windowNumber))
+            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluded.contains(Int($0.windowID)) })
         } else {
             let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
             filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])

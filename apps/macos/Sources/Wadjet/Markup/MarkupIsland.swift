@@ -18,6 +18,13 @@ extension OverlayController {
         chromeScreens = s.recActive || !MarkupController.shared.stack.isEmpty ? NSScreen.screens : []
         refreshToolbars()
     }
+    /// a display plugged in or out: the live chrome follows the new screen set,
+    /// keeping whatever Markup Tool is armed on the live toolbar
+    func screensChanged() {
+        guard AppState.shared.phase == .toolbar else { return syncDesktopChrome() }
+        chromeScreens = NSScreen.screens
+        refreshToolbars()
+    }
 }
 
 extension AppDelegate {
