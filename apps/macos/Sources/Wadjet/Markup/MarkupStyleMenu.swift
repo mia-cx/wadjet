@@ -51,9 +51,11 @@ struct MarkupStyleControls: View {
         VStack(alignment: .leading, spacing: 0) {
             MarkupColourRow(tool: tool, target: .stroke, ctrl: ctrl)
             divider()
-            MenuSliderRow(icon: "lineweight", label: "Stroke weight", text: "\(Int(width)) pt",
-                          value: $width, range: 1...24, step: 1, editing: $editing) {
-                styles.restyle(tool) { $0.width = CGFloat(width) }
+            if tool != .counter { // a counter has no stroke — its Size slider replaces this
+                MenuSliderRow(icon: "lineweight", label: "Stroke weight", text: "\(Int(width)) pt",
+                              value: $width, range: 1...24, step: 1, editing: $editing) {
+                    styles.restyle(tool) { $0.width = CGFloat(width) }
+                }
             }
             MenuSliderRow(icon: "circle.lefthalf.filled", label: "Opacity",
                           text: "\(Int((opacity * 100).rounded()))%",
