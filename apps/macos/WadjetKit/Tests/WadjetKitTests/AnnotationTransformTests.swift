@@ -50,13 +50,57 @@ struct AnnotationTransformTests {
         #expect(want.allSatisfy { w in shown.contains { near($0, w) } })
     }
 
-    // a zero-height line shows only its end grips plus the rotate grip
-    @Test func handlesOnALine() {
-        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+    // corners first (a 0-extent axis zeroes that component, deduplicated), then
+    // edge midpoints only when both extents reach minExtent, then rotate
+    @Test(arguments: [
+        // a zero-height line: only its end grips
+        (CGPoint(x: 100, y: 0),
+         [(SelectionHandle.resize(x: -1, y: 0), CGPoint(x: 0, y: 0)),
+          (.resize(x: 1, y: 0), CGPoint(x: 100, y: 0)),
+          (.rotate, CGPoint(x: 50, y: 20))]),
+        // a short one keeps them under minExtent
+        (CGPoint(x: 10, y: 0),
+         [(.resize(x: -1, y: 0), CGPoint(x: 0, y: 0)),
+          (.resize(x: 1, y: 0), CGPoint(x: 10, y: 0)),
+          (.rotate, CGPoint(x: 5, y: 20))]),
+        // an undersized diagonal keeps all 4 corners, no edge midpoints
+        (CGPoint(x: 8, y: 8),
+         [(.resize(x: -1, y: -1), CGPoint(x: 0, y: 0)),
+          (.resize(x: -1, y: 1), CGPoint(x: 0, y: 8)),
+          (.resize(x: 1, y: -1), CGPoint(x: 8, y: 0)),
+          (.resize(x: 1, y: 1), CGPoint(x: 8, y: 8)),
+          (.rotate, CGPoint(x: 4, y: 28))]),
+        // full set: 4 corners, then the 4 edge midpoints (bottom, top, left, right)
+        (CGPoint(x: 100, y: 100),
+         [(.resize(x: -1, y: -1), CGPoint(x: 0, y: 0)),
+          (.resize(x: -1, y: 1), CGPoint(x: 0, y: 100)),
+          (.resize(x: 1, y: -1), CGPoint(x: 100, y: 0)),
+          (.resize(x: 1, y: 1), CGPoint(x: 100, y: 100)),
+          (.resize(x: 0, y: -1), CGPoint(x: 50, y: 0)),
+          (.resize(x: 0, y: 1), CGPoint(x: 50, y: 100)),
+          (.resize(x: -1, y: 0), CGPoint(x: 0, y: 50)),
+          (.resize(x: 1, y: 0), CGPoint(x: 100, y: 50)),
+          (.rotate, CGPoint(x: 50, y: 120))]),
+    ])
+    func handles(end: CGPoint, expected: [(SelectionHandle, CGPoint)]) {
+        let a = Annotation(kind: .line(start: .zero, end: end), style: style)
         let hs = a.handles(minExtent: 12, rotateOffset: 20)
-        #expect(hs.count == 3)
-        #expect(hs[0].handle == .resize(x: -1, y: 0) && near(hs[0].at, .zero))
-        #expect(hs[1].handle == .resize(x: 1, y: 0) && near(hs[1].at, CGPoint(x: 100, y: 0)))
-        #expect(hs[2].handle == .rotate && near(hs[2].at, CGPoint(x: 50, y: 20)))
+        #expect(hs.count == expected.count)
+        for (h, e) in zip(hs, expected) {
+            #expect(h.handle == e.0 && near(h.at, e.1))
+        }
+    }
+
+    // shrunk below minExtent the corner grips stay — and still resize back
+    @Test func shrinkThenEnlarge() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 50)), style: style)
+        let small = a.dragging(.resize(x: 1, y: 1), from: .zero, to: CGPoint(x: 5, y: 3))
+        guard case let .line(s1, e1) = small.kind else { Issue.record(); return }
+        #expect(near(s1, .zero) && near(e1, CGPoint(x: 5, y: 3)))
+        #expect(small.handles(minExtent: 12, rotateOffset: 20)
+            .contains { $0.handle == .resize(x: 1, y: 1) && near($0.at, CGPoint(x: 5, y: 3)) })
+        let back = small.dragging(.resize(x: 1, y: 1), from: .zero, to: CGPoint(x: 100, y: 50))
+        guard case let .line(s2, e2) = back.kind else { Issue.record(); return }
+        #expect(near(s2, .zero) && near(e2, CGPoint(x: 100, y: 50)))
     }
 }

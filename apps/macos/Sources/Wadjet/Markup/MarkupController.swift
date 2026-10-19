@@ -67,8 +67,9 @@ final class MarkupController {
             gesture = nil; selection = nil; cmdHeld = false
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
-        } else {
-            // ⌘ = temporary Select; Delete removes the selection
+        } else if flagsMon == nil {
+            // ⌘ = temporary Select; Delete removes the selection — installed on
+            // entering the armed session, kept across Tool switches within it
             flagsMon = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
                 guard let self else { return e }
                 self.cmdHeld = e.modifierFlags.contains(.command)
@@ -184,8 +185,7 @@ final class MarkupController {
                     gesture = .handle(h.handle, sel, from: p)
                     return
                 }
-                if sel.frameContains(p, tolerance: Self.hitTolerance)
-                    || PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
+                if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
                     gesture = .moving(sel, from: p)
                     return
                 }

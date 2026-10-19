@@ -107,26 +107,36 @@ extension Annotation {
             .map { $0.applying(m) }
     }
 
-    /// whether `p` is inside the transformed frame, widened by `tolerance`
-    public func frameContains(_ p: CGPoint, tolerance: CGFloat) -> Bool {
-        kind.bounds.insetBy(dx: -tolerance, dy: -tolerance).contains(p.applying(affineTransform.inverted()))
-    }
-
-    /// screen positions of the selection's grips: the 8 resize points that exist
-    /// at `minExtent` (a line gets only its ends), then the rotate grip above the
-    /// frame's top centre — placed by rotation alone so a flip can't put it below
+    /// screen positions of the selection's grips:
+    /// - the 4 corners (x, y ∈ {-1, 1}), a component set to 0 on any axis whose
+    ///   extent is exactly 0 (it would resize nothing), deduplicated keeping
+    ///   first-seen order (x outer, y inner, -1 before 1) — so a horizontal
+    ///   Line gets only resize(-1,0) at its left end and resize(1,0) at its
+    ///   right end, and an undersized diagonal keeps all 4 corners
+    /// - the 4 edge midpoints resize(0,±1), resize(±1,0), only when BOTH width
+    ///   and height are ≥ `minExtent`
+    /// - then `.rotate` above the frame's top centre — placed by rotation alone
+    ///   so a flip can't put it below
     public func handles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
         let b = kind.bounds, m = affineTransform
-        var out: [(SelectionHandle, CGPoint)] = []
-        for x in -1...1 { for y in -1...1 where x != 0 || y != 0 {
-            guard (x == 0 || b.width >= minExtent) && (y == 0 || b.height >= minExtent) else { continue }
-            out.append((.resize(x: x, y: y),
-                        CGPoint(x: b.midX + CGFloat(x) * b.width / 2,
-                                y: b.midY + CGFloat(y) * b.height / 2).applying(m)))
+        func at(_ x: Int, _ y: Int) -> CGPoint {
+            CGPoint(x: b.midX + CGFloat(x) * b.width / 2,
+                    y: b.midY + CGFloat(y) * b.height / 2).applying(m)
+        }
+        var out: [(handle: SelectionHandle, at: CGPoint)] = []
+        var seen = Set<SelectionHandle>()
+        for x in -1...1 where x != 0 { for y in -1...1 where y != 0 {
+            let h = SelectionHandle.resize(x: b.width == 0 ? 0 : x, y: b.height == 0 ? 0 : y)
+            if seen.insert(h).inserted { out.append((h, at(x, y))) }
         } }
+        if b.width >= minExtent && b.height >= minExtent {
+            for (x, y) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+                out.append((.resize(x: x, y: y), at(x, y)))
+            }
+        }
         let c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
         out.append((.rotate, CGPoint(x: c.x - v * sin(transform.rotation),
                                      y: c.y + v * cos(transform.rotation))))
-        return out.map { (handle: $0.0, at: $0.1) }
+        return out
     }
 }
