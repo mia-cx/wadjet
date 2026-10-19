@@ -143,6 +143,37 @@ struct PathGeometryTests {
         #expect(abs(b.minX - 9) < 0.5 && abs(b.maxX - 91) < 0.5)
     }
 
+    // a bent Line can double back past its tip, crossing the trim distance
+    // twice — trim must keep the endpoint-side crossing. (0,0)→(100,0) bent at
+    // (98,1) loops out to x≈111 before returning; the right crossing sits at
+    // t≈0.863, x > 100, 9 pt from the tip — the wrong one lands at x≈91
+    @Test func doubledBackHeadTrimsNearEnd() {
+        var s = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        s.head = .filledArrow
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0),
+                                     bend: CGPoint(x: 98, y: 1)), style: s)
+        let end = PathGeometry.drawing(for: a).stroke.currentPoint
+        #expect(abs(hypot(end.x - 100, end.y) - 9) < 0.5)
+        #expect(end.x > 100)
+    }
+
+    // the mirrored bug at the start: bend (2,1) sweeps the curve out to x≈-11
+    // and back past the start, crossing the trim distance twice; the
+    // start-side crossing sits at x<0
+    @Test func doubledBackTailTrimsNearStart() {
+        var s = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        s.tail = .filledArrow
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0),
+                                     bend: CGPoint(x: 2, y: 1)), style: s)
+        var first: CGPoint?
+        PathGeometry.drawing(for: a).stroke.applyWithBlock { e in
+            if first == nil { first = e.pointee.points.pointee }
+        }
+        #expect(first != nil)
+        #expect(abs(hypot(first!.x, first!.y) - 9) < 0.5)
+        #expect(first!.x < 0)
+    }
+
     // hit testing reaches the ends, not just the stroke body
     @Test func hitTestEnds() {
         let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)),

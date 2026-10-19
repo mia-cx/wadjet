@@ -131,25 +131,47 @@ extension Segment {
         return Segment(p0: p, c1: p, c2: p3, p3: p3, straight: true)
     }
 
-    /// the [0, t] piece where |B(t) − p3| ≈ d — the tail end trimmed off
+    /// the [0, t] piece where |B(t) − p3| ≈ d — the tail end trimmed off.
+    /// The distance isn't monotone when the curve doubles back, so march back
+    /// from the end until it first reaches d and bisect only that interval —
+    /// the crossing nearest the tip is the one to keep
     func splitEnd(by d: CGFloat) -> Segment {
-        var lo = 0.0, hi = 1.0
-        for _ in 0..<40 {
-            let mid = (lo + hi) / 2
-            let v = point(at: mid)
-            if hypot(v.x - p3.x, v.y - p3.y) > d { lo = mid } else { hi = mid }
+        var near = 1.0
+        for i in stride(from: 63, through: 0, by: -1) {
+            let t = CGFloat(i) / 64
+            let v = point(at: t)
+            if hypot(v.x - p3.x, v.y - p3.y) >= d {
+                var lo = t, hi = near
+                for _ in 0..<40 {
+                    let mid = (lo + hi) / 2
+                    let v = point(at: mid)
+                    if hypot(v.x - p3.x, v.y - p3.y) > d { lo = mid } else { hi = mid }
+                }
+                return split(at: hi).0
+            }
+            near = t
         }
-        return split(at: hi).0
+        return split(at: 0).0   // the whole segment is shorter than d: trim it all
     }
 
-    /// the [t, 1] piece where |B(t) − p0| ≈ d — the head end trimmed off
+    /// the [t, 1] piece where |B(t) − p0| ≈ d — the head end trimmed off;
+    /// splitEnd's mirror, marching out from the start
     func splitStart(by d: CGFloat) -> Segment {
-        var lo = 0.0, hi = 1.0
-        for _ in 0..<40 {
-            let mid = (lo + hi) / 2
-            let v = point(at: mid)
-            if hypot(v.x - p0.x, v.y - p0.y) < d { lo = mid } else { hi = mid }
+        var near = 0.0
+        for i in 1...64 {
+            let t = CGFloat(i) / 64
+            let v = point(at: t)
+            if hypot(v.x - p0.x, v.y - p0.y) >= d {
+                var lo = near, hi = t
+                for _ in 0..<40 {
+                    let mid = (lo + hi) / 2
+                    let v = point(at: mid)
+                    if hypot(v.x - p0.x, v.y - p0.y) < d { lo = mid } else { hi = mid }
+                }
+                return split(at: lo).1
+            }
+            near = t
         }
-        return split(at: lo).1
+        return split(at: 1).1   // the whole segment is shorter than d: trim it all
     }
 }
