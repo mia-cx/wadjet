@@ -114,4 +114,20 @@ struct AnnotationTransformTests {
         let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 5)), style: style)
         #expect(a.handle(at: CGPoint(x: 50, y: 50), radius: 6, minExtent: 12, rotateOffset: 20) == nil)
     }
+
+    // Proves dragging a censor's grip past its anchor re-standardizes the rect —
+    // a negative scale can't leave a mirrored CGRect with negative extents
+    @Test func censorResizePastAnchorStaysStandardized() {
+        let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 50),
+                                         method: .blackOut), style: style)
+        let r = a.dragging(.resize(x: 1, y: 1), from: .zero, to: CGPoint(x: -40, y: -20))
+        guard case let .censor(rect, method) = r.kind else { Issue.record(); return }
+        #expect(method == .blackOut)
+        #expect(rect.width >= 0 && rect.height >= 0)
+        #expect(near(rect, CGRect(x: -40, y: -20, width: 40, height: 20)))
+    }
+}
+
+private func near(_ a: CGRect, _ b: CGRect) -> Bool {
+    near(a.origin, b.origin) && near(a.width, b.width) && near(a.height, b.height)
 }

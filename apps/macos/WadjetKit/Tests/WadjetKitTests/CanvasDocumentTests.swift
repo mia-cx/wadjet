@@ -97,6 +97,28 @@ struct CanvasDocumentTests {
         #expect(try linearPixels(empty.flatten()).allSatisfy { $0 == 0 })
     }
 
+    // Proves a Black out censor flattens to exactly opaque black over whatever's beneath.
+    @Test func censorBlacksOutFlattenedRect() throws {
+        let line = Annotation(kind: .line(start: CGPoint(x: 0, y: 2), end: CGPoint(x: 4, y: 2)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
+        let censor = Annotation(kind: .censor(rect: CGRect(x: 1, y: 1, width: 2, height: 2), method: .blackOut),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 0.5), width: 3))
+        let document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 4, height: 4), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+            layerStack: LayerStack([line, censor]),
+            displayImages: [1: try solidImage([1, 1, 1, 1], width: 4, height: 4)])
+        let pixels = try linearPixels(document.flatten(scale: 1))
+        func px(_ x: Int, _ y: Int) -> [Float] { Array(pixels[4 * (y * 4 + x)..<4 * (y * 4 + x) + 4]) }
+        // the rect is symmetric in y, so either pixel row order puts rows 1…2 inside
+        for x in 1...2 { for y in 1...2 {
+            #expect(px(x, y) == [0, 0, 0, 1], "pixel (\(x), \(y))")
+        } }
+        for (x, y) in [(0, 0), (3, 0), (0, 3), (3, 3)] {
+            #expect(px(x, y) == [1, 1, 1, 1], "corner (\(x), \(y))")
+        }
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])

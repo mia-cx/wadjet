@@ -25,11 +25,23 @@ public enum SelectionHandle: Hashable, Sendable {
 extension AnnotationKind {
     /// the points that define the geometry
     var points: [CGPoint] {
-        switch self { case let .line(start, end): [start, end] }
+        switch self {
+        case let .line(start, end): [start, end]
+        case let .censor(rect, _):
+            [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
+        }
     }
     /// the same kind with every defining point mapped
     func mapPoints(_ f: (CGPoint) -> CGPoint) -> AnnotationKind {
-        switch self { case let .line(start, end): .line(start: f(start), end: f(end)) }
+        switch self {
+        case let .line(start, end): return .line(start: f(start), end: f(end))
+        case let .censor(rect, method):
+            // a negative resize scale mirrors the corners, so re-standardize
+            let a = f(CGPoint(x: rect.minX, y: rect.minY))
+            let b = f(CGPoint(x: rect.maxX, y: rect.maxY))
+            return .censor(rect: CGRect(x: a.x, y: a.y, width: b.x - a.x, height: b.y - a.y).standardized,
+                           method: method)
+        }
     }
     /// bounding box of `points` — may have zero width or height
     public var bounds: CGRect {

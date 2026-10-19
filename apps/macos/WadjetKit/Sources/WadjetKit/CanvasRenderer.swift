@@ -3,7 +3,7 @@ import CoreGraphics
 extension CanvasDocument {
     /// Composites displays, windows, then Annotations back to front. Crop and radius
     /// are global points; scale is output pixels per point. HDR pixels stay extended.
-    /// Censor/Magnify sampling and non-path Annotations belong to their own slices.
+    /// Black out fills opaque black; sampling Censor methods and Magnify belong to their own slices.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
@@ -39,6 +39,15 @@ extension CanvasDocument {
         }
         for annotation in layerStack.annotations {
             context.saveGState()
+            if case .censor = annotation.kind {
+                // Black out: opaque sRGB black, whatever the style
+                context.setFillColor(CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                             components: [0, 0, 0, 1])!)
+                context.addPath(PathGeometry.path(for: annotation))
+                context.fillPath()
+                context.restoreGState()
+                continue
+            }
             // The transform/opacity slice will apply its model fields here.
             let colour = annotation.style.colour
             let srgb = CGColorSpace(name: CGColorSpace.sRGB)!

@@ -45,6 +45,22 @@ struct LayerStackTests {
         #expect(try LayerStack(json: stack.json()) == stack)
     }
 
+    // Proves a censor annotation survives the annotations.json round trip, transform included.
+    @Test func censorJSONRoundTrip() throws {
+        let fixture = """
+            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"censor":{"method":"blackOut","rect":[10,20,30,40]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4},"transform":{"flipHorizontal":false,"flipVertical":false,"rotation":0.5}}]}
+            """
+        var expected = LayerStack()
+        expected.add(Annotation(id: UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!,
+                                kind: .censor(rect: CGRect(x: 10, y: 20, width: 30, height: 40),
+                                              method: .blackOut),
+                                style: red4,
+                                transform: AnnotationTransform(rotation: 0.5)))
+        let stack = try LayerStack(json: Data(fixture.utf8))
+        #expect(stack == expected)
+        #expect(try LayerStack(json: stack.json()) == stack)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }
