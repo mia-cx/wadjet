@@ -197,14 +197,13 @@ public struct TextLayout {
         if text {
             let c = a.style.colour
             ctx.setFillColor(CGColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha))
-            // CTFrame lays out top-down: flip inside the text rect so the
-            // first line sits at the box's top in y-up space
+            // CTFrameDraw already puts the first line at the top of its path
+            // in a y-up context — a manual flip would double-flip the glyphs
             let rect = CGRect(x: box.minX + layout.padding.width,
                               y: box.minY + layout.padding.height,
                               width: layout.textSize.width, height: layout.textSize.height)
             ctx.saveGState()
-            ctx.translateBy(x: rect.minX, y: rect.maxY)
-            ctx.scaleBy(x: 1, y: -1)
+            ctx.translateBy(x: rect.minX, y: rect.minY)
             ctx.textMatrix = .identity
             CTFrameDraw(layout.frame, ctx)
             ctx.restoreGState()

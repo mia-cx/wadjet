@@ -120,7 +120,7 @@ final class TextAnnotationLayer: CALayer {
                        width: (xs.max() ?? 0) - (xs.min() ?? 0),
                        height: (ys.max() ?? 0) - (ys.min() ?? 0))
             .insetBy(dx: -2, dy: -2)
-        if changed { needsDisplay() }
+        if changed { setNeedsDisplay() }
     }
 
     /// the Annotation's data lives in global points; the layer's bounds

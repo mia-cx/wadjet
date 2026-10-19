@@ -155,6 +155,36 @@ struct TextAnnotationTests {
         #expect(inside.contains { $0 > 0.5 })
         #expect(pix(2, 2) == 0 && pix(110, 75) == 0)
     }
+
+    // Proves committed text renders upright: the "MMM" line lights the top
+    // half of the text rect far more than the "." line lights the bottom —
+    // a flipped draw would light the bottom instead
+    @Test func flattenDrawsTextUpright() throws {
+        let display = CanvasDisplay(id: 1, frame: CGRect(x: 0, y: 0, width: 160, height: 160), scaleFactor: 1)
+        let data = TextData(string: "MMM\n.", origin: CGPoint(x: 10, y: 150),
+            format: TextFormat(font: "Monaco", size: 40, weight: .regular, alignment: .left, pill: false))
+        let text = Annotation(kind: .text(data),
+            style: AnnotationStyle(colour: RGBAColour(red: 1, green: 1, blue: 1, alpha: 1), width: 4))
+        let document = CanvasDocument(layout: [display], crop: display.frame,
+            layerStack: LayerStack([text]),
+            displayImages: [1: try solid([0, 0, 0, 1], width: 160, height: 160)])
+        let image = try document.flatten(scale: 1)
+        let px = try linear(image)
+        // CG pixels are y-down: the text rect (the box inset by padding) starts
+        // at the image's top edge of the box + vertical padding
+        let layout = TextLayout(data), box = layout.box
+        let top = Int(box.maxY.rounded(.down)) - Int(image.height)
+        let x0 = Int((box.minX + layout.padding.width).rounded(.down))
+        let x1 = Int((box.maxX - layout.padding.width).rounded(.up))
+        let y0 = Int((-top + Int(layout.padding.height.rounded(.down))))
+        let textRows = Int(layout.textSize.height.rounded(.up))
+        func brightness(_ rows: Range<Int>) -> Float {
+            rows.flatMap { y in (x0..<x1).map { x in px[4 * (y * image.width + x)] } }.reduce(0, +)
+        }
+        let upper = brightness(y0..<(y0 + textRows / 2))
+        let lower = brightness((y0 + textRows / 2)..<(y0 + textRows))
+        #expect(upper > 2 * lower)
+    }
 }
 
 private extension AnnotationKind {

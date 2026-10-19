@@ -102,7 +102,7 @@ final class MarkupView: NSView {
             l.contentsScale = s
             l.sublayers?.forEach { $0.contentsScale = s }
         }
-        for l in shapeLayers.values { (l as? TextAnnotationLayer)?.needsDisplay() }
+        for l in shapeLayers.values { (l as? TextAnnotationLayer)?.setNeedsDisplay() }
     }
 
     /// one layer per Annotation, keyed by id so strokes can persist
