@@ -570,7 +570,7 @@ final class MarkupController {
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen: break
-        case .drawing, .moving, .handle: commitGesture()
+        case .drawing, .moving, .movingSource, .handle: commitGesture()
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
