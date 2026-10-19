@@ -13,7 +13,7 @@ using namespace metal;
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
 // keep the whole sampled half4 and overwrite only r and b.
-#define kCentre 1.25   // > 1 minifies: the bar reads squeezed inside the lens
+#define kCentre 1.1111 // 1 / 0.9: the bar reads squeezed to 0.9× inside the lens
 #define kRim 2.1       // how far the rim reaches outward
 #define band 9.0       // rim band width in points
 #define disp 0.07      // dispersion at the very edge
