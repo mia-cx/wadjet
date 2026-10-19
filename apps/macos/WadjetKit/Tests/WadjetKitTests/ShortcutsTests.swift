@@ -98,6 +98,22 @@ struct ShortcutsTests {
 
 
 
+    @Test func markupShortcutNamesDrawAndRunsNoWorkflow() throws {
+        let sc = try JSONDecoder().decode(Shortcut.self, from: Data(
+            #"{"keys":"ctrl+opt+cmd+d","tool":"draw"}"#.utf8))
+        #expect(sc.tool == .draw)
+        #expect(sc.tool.produces == nil)
+
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
+        try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
+        try Data(#"{"shortcuts":[{"keys":"cmd+opt+1","tool":"draw","workflow":"Screenshot"}]}"#.utf8).write(to: url)
+        var errors: [ConfigError] = []
+        _ = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { errors.append($0) }
+        let err = try #require(errors.first)
+        #expect(err.location == "shortcuts.0.workflow")
+        #expect(err.message.contains("draw runs no Workflow"))
+    }
+
     @Test func recordingToolNamingScreenshotWorkflowFails() throws {
         let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathComponent("config.json")
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
