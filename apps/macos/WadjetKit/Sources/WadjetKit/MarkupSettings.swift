@@ -40,7 +40,8 @@ extension WadjetConfig {
         }
     }
     /// one Markup Tool's settings; later slices add theirs (Line ends, Text font…) here.
-    /// Shapes also reads `shapes.variant` and each variant's `shape`.
+    /// Shapes also reads `shapes.variant` and each variant's `shape`; Step
+    /// counter reads `counter.format` and `counter.size`.
     public struct MarkupTool: Codable, Equatable, Sendable {
         /// nil until the user restyles the Tool; the app then uses the Tool's built-in default
         public var style: AnnotationStyle?
@@ -50,12 +51,18 @@ extension WadjetConfig {
         public var shape: ShapeKind?
         /// Censor's default method for new Annotations; nil = .blackOut
         public var censorMethod: CensorMethod?
-        public init(style: AnnotationStyle? = nil, variant: ShapeVariant? = nil,
-                    shape: ShapeKind? = nil, censorMethod: CensorMethod? = nil) {
+        /// Step counter: numbers or letters, at `markup.tools.counter.format`
+        public var format: CounterFormat?
+        /// Step counter: the circle's diameter in points, at `markup.tools.counter.size`
+        public var size: CGFloat?
+        public init(style: AnnotationStyle? = nil, variant: ShapeVariant? = nil, shape: ShapeKind? = nil,
+                    censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil) {
             self.style = style
             self.variant = variant
             self.shape = shape
             self.censorMethod = censorMethod
+            self.format = format
+            self.size = size
         }
     }
 }

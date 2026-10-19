@@ -23,16 +23,20 @@ public enum SelectionHandle: Hashable, Sendable {
 }
 
 extension AnnotationKind {
-    /// the points that define the geometry — a Censor's or shape's are its rect's min and
-    /// max corners, so mapping them resizes the rect
+    /// the points that define the geometry — a Censor's, shape's or counter's
+    /// are its rect's min and max corners, so mapping them resizes
     var points: [CGPoint] {
         switch self {
         case let .line(start, end): [start, end]
         case let .censor(rect, _), let .shape(_, rect):
             [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
+        case let .counter(center, radius, _, _):
+            [CGPoint(x: center.x - radius, y: center.y - radius),
+             CGPoint(x: center.x + radius, y: center.y + radius)]
         }
     }
-    /// the same kind with every defining point mapped
+    /// the same kind with every defining point mapped — a counter rebuilds
+    /// from its mapped box so it stays a circle
     func mapPoints(_ f: (CGPoint) -> CGPoint) -> AnnotationKind {
         switch self {
         case let .line(start, end): return .line(start: f(start), end: f(end))
@@ -40,6 +44,12 @@ extension AnnotationKind {
             return .censor(rect: rect.mapCorners(f), method: method)
         case let .shape(kind, rect):
             return .shape(kind, rect: rect.mapCorners(f))
+        case let .counter(center, radius, value, format):
+            let a = f(CGPoint(x: center.x - radius, y: center.y - radius)),
+                b = f(CGPoint(x: center.x + radius, y: center.y + radius))
+            return .counter(center: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2),
+                            radius: min(abs(a.x - b.x), abs(a.y - b.y)) / 2,
+                            value: value, format: format)
         }
     }
     /// an upright box that mapPoints re-standardizes, so a negative resize

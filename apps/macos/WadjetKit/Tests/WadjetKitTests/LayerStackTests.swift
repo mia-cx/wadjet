@@ -96,6 +96,23 @@ struct LayerStackTests {
         #expect(try LayerStack(json: stack.json()) == stack)
     }
 
+    // Proves a counter on the wire — {"counter":{"center":[x,y],"radius":…,
+    // "value":…,"format":"letters"}} — decodes to the expected Annotation and
+    // round-trips.
+    @Test func counterAnnotationsJSONRoundTrip() throws {
+        let fixture = """
+            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"counter":{"center":[50,60],"format":"letters","radius":14,"value":3}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}
+            """
+        var expected = LayerStack()
+        expected.add(Annotation(id: UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!,
+                                kind: .counter(center: CGPoint(x: 50, y: 60), radius: 14,
+                                               value: 3, format: .letters),
+                                style: red4))
+        let stack = try LayerStack(json: Data(fixture.utf8))
+        #expect(stack == expected)
+        #expect(try LayerStack(json: stack.json()) == stack)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }

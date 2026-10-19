@@ -86,6 +86,11 @@ extension CanvasDocument {
                 context.addPath(path)
                 context.strokePath()
             }
+            if let label = PathGeometry.labelPath(for: annotation) {
+                context.setFillColor(RGBAColour(red: 1, green: 1, blue: 1, alpha: 1).cgColor)
+                context.addPath(label)
+                context.fillPath()
+            }
             context.endTransparencyLayer()
             context.restoreGState()
         }
