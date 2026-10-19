@@ -119,6 +119,24 @@ struct WindowFrameAnnotatorTests {
         #expect(px.r > 200 && px.b < 30, "expected the sampled red, got \(px)")
     }
 
+    // Proves a Text Annotation lands in a recorded frame: the white pill over
+    // black gives a bright pixel inside its box.
+    @Test func drawsTextOnWindowFrame() {
+        let row = Self.rows[0]
+        let pb = Self.buffer(width: Int(row.frame.width), height: Int(row.frame.height))
+        let annotator = WindowFrameAnnotator(window: row.window, primaryHeight: row.primaryHeight,
+                                             contentRect: row.contentRect, scaleFactor: row.scaleFactor,
+                                             frame: row.frame)
+        let d = TextData(string: "Hi", origin: CGPoint(x: 160, y: 885),
+                         format: TextFormat(font: "Menlo", size: 20, weight: .bold,
+                                            alignment: .left, pill: true))
+        let style = AnnotationStyle(colour: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1), width: 4)
+        annotator?.draw([Annotation(kind: .text(d), style: style), row.line], on: pb, source: pb)
+        let hit = Self.pixel(pb, x: 160, yFromTop: 40)
+        #expect(hit.a > 200 && Int(hit.r) + Int(hit.g) + Int(hit.b) > 300,
+                "expected bright pill at (160, 40), got \(hit)")
+    }
+
     // Proves degenerate inputs produce no annotator rather than a bad transform.
     @Test func rejectsDegenerateInput() {
         #expect(WindowFrameAnnotator(window: .zero, primaryHeight: 1000,

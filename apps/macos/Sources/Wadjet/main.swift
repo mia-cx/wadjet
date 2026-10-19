@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", draw = "draw", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
+    case select = "select", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear Annotations"
         case .moreMarkup: "More Markup Tools"
         }
     }
@@ -34,7 +34,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear"
         case .moreMarkup: "More"
         }
     }
@@ -53,7 +53,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .clearAnnotations: "trash"
         case .moreMarkup: "ellipsis"
         }
     }
@@ -70,7 +70,8 @@ enum Tool: String, CaseIterable {
     var hasMenu: Bool { ![.copyText, .clearAnnotations].contains(self) }
     /// a toolbar button that acts at once instead of arming: Clear clears, More opens its menu
     var isAction: Bool { self == .clearAnnotations || self == .moreMarkup }
-    init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
+    // exact rawValue first: "text" must find Text, not the earlier-titled Copy Text
+    init?(named s: String) { self = Tool(rawValue: s) ?? Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) }! }
 }
 
 // the overlay's phase only — a Recording lives in recActive. .toolbar = only
@@ -1439,13 +1440,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("esc hotkey unregistered")
         }
         // Space is claimed only while the overlay is actually frozen — it must
-        // drop as soon as we leave .frozen (e.g. a countdown starts)
-        if s.phase == .frozen && !spaceRegistered {
+        // drop as soon as we leave .frozen (e.g. a countdown starts), and it
+        // belongs to the text editor while a Markup Text is being typed
+        let spaceWanted = s.phase == .frozen && MarkupController.shared.editing == nil
+        if spaceWanted && !spaceRegistered {
             var ref: EventHotKeyRef?
             let err = RegisterEventHotKey(UInt32(kVK_Space), 0, EventHotKeyID(signature: OSType(0x77646A74), id: 30),
                                           GetApplicationEventTarget(), 0, &ref)
             spaceRef = ref; spaceRegistered = (err == noErr && ref != nil)
-        } else if s.phase != .frozen && spaceRegistered {
+        } else if !spaceWanted && spaceRegistered {
             if let r = spaceRef { UnregisterEventHotKey(r) }
             spaceRef = nil; spaceRegistered = false
         }
@@ -1457,6 +1460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
         if MarkupStyles.shared.cancelEyedropper() { AppLog.line("esc: cancelled eyedropper"); updateEscHotkey(); return }
         if MarkupController.shared.finishPen() { AppLog.line("esc: finished pen path"); return }
+        if MarkupController.shared.commitEditing() { AppLog.line("esc: committed text"); return }
         if MarkupController.shared.deselect() { AppLog.line("esc: deselected"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
@@ -2246,6 +2250,7 @@ enum WadjetCursors {
         switch t {
         case .capRegion, .recRegion, .copyText, .measure, .draw, .shapes, .counter, .censor, .magnify: return .crosshair
         case .select: return .arrow
+        case .text: return .iBeam
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
         case .pickColour: return symbol("eyedropper", centre: false)
@@ -2658,7 +2663,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText, .select, .draw, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
+        case .copyText, .select, .draw, .text, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -2743,6 +2748,12 @@ final class OverlayNSView: NSView {
     // called from the local key monitor (nonactivating panels don't get keyDown)
     @discardableResult
     func handleKey(_ e: NSEvent) -> Bool {
+        // while a Markup Text is being edited the NSTextView owns the keys;
+        // only Escape still routes here so it can commit
+        if MarkupController.shared.editing != nil {
+            if e.keyCode == 53 { app?.handleEsc(); return true }
+            return false
+        }
         if e.keyCode == 36, confirming { confirmSel(); return true } // Return
         if e.keyCode == 53 { app?.handleEsc(); return true }
         if e.keyCode == 49 { app?.toggleRegionWindow(); return true } // Space
@@ -4052,7 +4063,13 @@ struct ToolMenuView: View {
                 }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 if tool == .magnify { magnifyRows() }
-                selectionRows()
+                if MarkupStyles.shared.editsText(tool) {
+                    TextFormatControls(tool: tool, ctrl: ctrl)
+                }
+                // the Transform rows are hidden while a text is being edited
+                if MarkupController.active.editing == nil {
+                    selectionRows()
+                }
                 if tool == .select, !editor { markupGroupRows() }
             default: EmptyView()
             }

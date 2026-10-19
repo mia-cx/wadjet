@@ -22,6 +22,12 @@ extension CGContext {
                      blending: Bool = true) {
         guard !annotation.hidden else { return }
         saveGState()
+        // Text draws its own box — layout, pill and glyphs — in geometry space
+        if case .text = annotation.kind {
+            TextLayout.draw(annotation, in: self)
+            restoreGState()
+            return
+        }
         if case let .censor(_, method) = annotation.kind, method.samplesBeneath {
             // black underneath first: the fallback for parts off every source
             let path = PathGeometry.path(for: annotation)

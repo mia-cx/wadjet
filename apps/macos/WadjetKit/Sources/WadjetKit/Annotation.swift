@@ -38,7 +38,7 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
     }
 }
 
-/// What an Annotation is; later slices add cases (pen, text, images…)
+/// What an Annotation is; later slices add cases (pen, images…)
 public enum AnnotationKind: Codable, Equatable, Sendable {
     /// `bend` is the on-curve point the Line passes through at t = 0.5; nil = straight
     case line(start: CGPoint, end: CGPoint, bend: CGPoint? = nil)
@@ -51,8 +51,9 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     /// a Pen path: bezier nodes, optionally closed (closed paths can be filled)
     case path(PathData)
     case magnify(Magnifier)
+    case text(TextData)
 
-    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify }
+    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify, text }
     enum LineKeys: String, CodingKey { case start, end, bend }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
@@ -82,10 +83,12 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
                             format: try n.decode(CounterFormat.self, forKey: .format))
         } else if c.contains(.magnify) {
             self = .magnify(try c.decode(Magnifier.self, forKey: .magnify))
+        } else if c.contains(.text) {
+            self = .text(try c.decode(TextData.self, forKey: .text))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, or a magnify"))
+                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, a magnify, or a text"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -114,6 +117,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             try c.encode(data, forKey: .path)
         case let .magnify(m):
             try c.encode(m, forKey: .magnify)
+        case let .text(data):
+            try c.encode(data, forKey: .text)
         }
     }
 }
@@ -272,12 +277,13 @@ extension Annotation {
         case .line, .magnify: style.colour
         case let .path(d): !d.closed || style.stroked ? style.colour : nil
         case .shape: style.stroked ? style.colour : nil
-        case .censor, .counter: nil
+        case .censor, .counter, .text: nil
         }
     }
     /// what the inside fills with: a shape's or closed path's `style.fill`, a
     /// Black out's opaque black or a counter's `style.colour` whatever the
-    /// style, nil otherwise
+    /// style, nil otherwise. Text: its box's inside is drawn — the pill, or
+    /// the glyphs in the text colour
     public var fillColour: RGBAColour? {
         switch kind {
         case .line, .magnify: nil
@@ -285,6 +291,8 @@ extension Annotation {
         case .shape: style.fill
         case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
         case .counter: style.colour
+        case let .text(d): d.format.pill ? TextLayout.pillColour(text: style.colour, fill: style.fill)
+                                        : style.colour
         }
     }
     /// the global rect whose pixels it draws from: a sampling Censor's area, a

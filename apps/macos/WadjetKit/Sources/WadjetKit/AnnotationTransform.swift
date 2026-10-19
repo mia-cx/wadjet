@@ -32,7 +32,8 @@ extension AnnotationKind {
     /// the points that define the geometry — a Censor's, shape's or counter's
     /// are its rect's min and max corners, so mapping them resizes; a
     /// Magnify's are its magnifier frame's, so moving/resizing never re-aims
-    /// the source
+    /// the source; Text's are its box's top-left and top-right (the box's
+    /// height comes from the layout)
     var points: [CGPoint] {
         switch self {
         case let .line(start, end, bend): [start, end] + (bend.map { [$0] } ?? [])
@@ -45,10 +46,13 @@ extension AnnotationKind {
              CGPoint(x: center.x + radius, y: center.y + radius)]
         case let .magnify(m):
             [CGPoint(x: m.frame.minX, y: m.frame.minY), CGPoint(x: m.frame.maxX, y: m.frame.maxY)]
+        case let .text(d):
+            [d.origin, CGPoint(x: d.origin.x + TextLayout(d).size.width, y: d.origin.y)]
         }
     }
     /// the same kind with every defining point mapped — a counter rebuilds
-    /// from its mapped box so it stays a circle
+    /// from its mapped box so it stays a circle; Text keeps its own rule: the
+    /// mapped top edge becomes the new origin and wrapping width.
     func mapPoints(_ f: (CGPoint) -> CGPoint) -> AnnotationKind {
         switch self {
         case let .line(start, end, bend): return .line(start: f(start), end: f(end), bend: bend.map(f))
@@ -70,20 +74,28 @@ extension AnnotationKind {
             var m = m
             m.frame = m.frame.mapCorners(f)
             return .magnify(m)
+        case let .text(d):
+            let l = TextLayout(d), tl = f(d.origin)
+            let tr = f(CGPoint(x: d.origin.x + l.size.width, y: d.origin.y))
+            var new = d
+            new.origin = CGPoint(x: min(tl.x, tr.x), y: tl.y)
+            // the mapped box's width less padding, at least one em
+            new.width = max(abs(tr.x - tl.x) - 2 * l.padding.width, d.format.size)
+            return .text(new)
         }
     }
     /// resizes with one scale on both axes so it keeps its shape
     var keepsAspect: Bool {
         switch self {
         case .counter: true
-        case .line, .path, .censor, .shape, .magnify: false
+        case .line, .path, .censor, .shape, .magnify, .text: false
         }
     }
     /// an upright box that mapPoints re-standardizes, so a negative resize
-    /// scale has to become a flip instead
+    /// scale has to become a flip instead — Text's map handles its own mirror
     var isBox: Bool {
         switch self {
-        case .line, .path: false
+        case .line, .path, .text: false
         case .censor, .shape, .counter, .magnify: true
         }
     }
@@ -95,10 +107,21 @@ extension AnnotationKind {
         default: true
         }
     }
+    /// every defining point offset by `d`. Text shifts its origin alone so a
+    /// nil (fit-to-text) width stays nil — a box-width map would freeze it.
+    func translated(by d: CGVector) -> AnnotationKind {
+        if case var .text(t) = self {
+            t.origin = CGPoint(x: t.origin.x + d.dx, y: t.origin.y + d.dy)
+            return .text(t)
+        }
+        return mapPoints { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
+    }
     /// tight bounds of the untransformed geometry — a bent Line's frame hugs
     /// the curve; straight segments keep the points' box so a horizontal
-    /// Line's height stays exactly 0 (the grip logic keys on `== 0`)
+    /// Line's height stays exactly 0 (the grip logic keys on `== 0`); Text's
+    /// box comes from the layout
     public var bounds: CGRect {
+        if case let .text(d) = self { return TextLayout(d).box }
         let segs = segments
         guard segs.contains(where: { !$0.straight }) else {
             let xs = points.map(\.x), ys = points.map(\.y)
@@ -125,7 +148,7 @@ extension Annotation {
     /// every point offset by `d` — the transform is about the bounds centre, so it stays valid
     public func moved(by d: CGVector) -> Annotation {
         var a = self
-        a.kind = kind.mapPoints { CGPoint(x: $0.x + d.dx, y: $0.y + d.dy) }
+        a.kind = kind.translated(by: d)
         return a
     }
 
@@ -334,6 +357,11 @@ extension Annotation {
             }
             out.append(rotate)
             return out
+        // Text resizes its width alone — a box grip would imply a height it has
+        case .text:
+            return [(.resize(x: -1, y: 0), CGPoint(x: b.minX, y: b.midY).applying(m)),
+                    (.resize(x: 1, y: 0), CGPoint(x: b.maxX, y: b.midY).applying(m)),
+                    rotate]
         default:
             return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
@@ -357,6 +385,16 @@ extension Annotation {
         }
         var out: [(handle: SelectionHandle, at: CGPoint)] = []
         var seen = Set<SelectionHandle>()
+        // Text's height comes from the layout: its grips only set the
+        // wrapping width — the two edge midpoints, then .rotate
+        if case .text = kind {
+            out.append((.resize(x: -1, y: 0), at(-1, 0)))
+            out.append((.resize(x: 1, y: 0), at(1, 0)))
+            let c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
+            out.append((.rotate, CGPoint(x: c.x - v * sin(transform.rotation),
+                                         y: c.y + v * cos(transform.rotation))))
+            return out
+        }
         for x in -1...1 where x != 0 { for y in -1...1 where y != 0 {
             let h = SelectionHandle.resize(x: b.width == 0 ? 0 : x, y: b.height == 0 ? 0 : y)
             if seen.insert(h).inserted { out.append((h, at(x, y))) }

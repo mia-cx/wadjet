@@ -56,6 +56,7 @@ final class CanvasEditorDocument: NSDocument {
         if let markupCached { return markupCached }
         let m = MarkupController(editing: canvas.layerStack)
         m.undoManager = undoManager
+        m.document = self
         m.arm(.select)
         markupCached = m
         return m
@@ -99,6 +100,13 @@ final class CanvasEditorDocument: NSDocument {
             }
         }
         onReload?()
+    }
+
+    /// called after every successful save — tell Markup the text session's
+    /// dirty mark went with it so later keystrokes dirty the document again
+    override func updateChangeCount(withToken changeToken: Any, for saveOperation: SaveOperationType) {
+        super.updateChangeCount(withToken: changeToken, for: saveOperation)
+        markupCached?.textSessionSaved()
     }
 
     /// packages in the CanvasStore are History's — their UUID names are how

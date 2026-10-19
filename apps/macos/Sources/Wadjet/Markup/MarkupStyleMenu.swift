@@ -52,7 +52,9 @@ struct MarkupStyleControls: View {
         VStack(alignment: .leading, spacing: 0) {
             MarkupColourRow(tool: tool, target: .stroke, ctrl: ctrl)
             divider()
-            if tool != .counter { // a counter has no stroke — its Size slider replaces this
+            // a counter has no stroke — its Size slider replaces this — and
+            // Text sets its own format controls instead of a stroke weight
+            if tool != .counter && !styles.editsText(tool) {
                 MenuSliderRow(icon: "lineweight", label: "Stroke weight", text: "\(Int(width)) pt",
                               value: $width, range: 1...24, step: 1, editing: $editing) {
                     styles.restyle(tool) { $0.width = CGFloat(width) }
@@ -280,6 +282,8 @@ struct MenuSliderRow: View {
     let range: ClosedRange<Double>
     let step: Double
     @Binding var editing: Bool
+    /// the trailing value slot's width — a weight title needs more
+    var valueWidth: CGFloat = 44
     let commit: () -> Void
     var body: some View {
         HStack(spacing: 12) {
@@ -293,7 +297,7 @@ struct MenuSliderRow: View {
             .controlSize(.small)
             .accessibilityLabel(label)
             Text(text).font(.system(size: 12).monospacedDigit())
-                .foregroundStyle(.white.opacity(0.5)).frame(width: 44, alignment: .trailing)
+                .foregroundStyle(.white.opacity(0.5)).frame(width: valueWidth, alignment: .trailing)
         }
         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
         .padding(.horizontal, 14)
