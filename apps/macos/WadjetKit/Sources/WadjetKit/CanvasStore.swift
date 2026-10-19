@@ -251,12 +251,20 @@ public struct CanvasStore: Sendable {
     // Read all required metadata before planning any destructive action.
     private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL,
                                 crops: inout [String: [CGRect]]) throws -> [CanvasLink] {
-        var links = manifest.linkedCanvases
+        let preserved = manifest.preservedLinks ?? [:]
+        var links = manifest.linkedCanvases.filter { link in
+            !preserved.values.contains(where: { $0.url == link.url })
+        }
         let stack = try LayerStack(json: Data(contentsOf: url.appendingPathComponent("annotations.json")))
         for annotation in stack.annotations {
             guard case let .canvas(link, placement) = annotation.kind else { continue }
-            links.append(link)
-            crops[link.url.standardizedFileURL.path, default: []].append(placement.crop)
+            if let name = preserved.first(where: { $0.value.url == link.url })?.key {
+                crops[url.appendingPathComponent("embedded/\(name)").standardizedFileURL.path, default: []]
+                    .append(placement.crop)
+            } else {
+                links.append(link)
+                crops[link.url.standardizedFileURL.path, default: []].append(placement.crop)
+            }
         }
         for path in manifest.embeddedCanvases {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)

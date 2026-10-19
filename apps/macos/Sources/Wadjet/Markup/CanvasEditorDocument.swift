@@ -110,13 +110,15 @@ final class CanvasEditorDocument: NSDocument {
     }
 
     /// the package's image payloads and the linked Canvases its `linkedCanvases`
-    /// lists (only those, only when the files exist) so the document's image
-    /// kinds draw and recrop
+    /// lists, preferring archived full sources in saved copies over external
+    /// History links, so the document's image kinds can still recrop after expiry.
     private func seedAssets(into m: MarkupController) {
         m.assets.removeAll() // the reload's payload replaces everything, cached flattens too
         m.assets.images = canvas.images
         m.assets.embedded = canvas.embeddedCanvases
-        for link in canvas.linkedCanvases where FileManager.default.fileExists(atPath: link.url.path) {
+        m.assets.canvases = canvas.linkedDocuments
+        for link in canvas.linkedCanvases where m.assets.canvases[link.url] == nil
+            && FileManager.default.fileExists(atPath: link.url.path) {
             m.assets.canvases[link.url] = try? CanvasDocument.read(from: link.url)
         }
     }
@@ -141,7 +143,7 @@ final class CanvasEditorDocument: NSDocument {
     override func fileWrapper(ofType typeName: String) throws -> FileWrapper {
         // FileWrapper can't cross the isolation boundary even synchronously
         try MainActor.assumeIsolated {
-            UnsafeSendable(value: try current.fileWrapper())
+            UnsafeSendable(value: try isStorePackage ? current.fileWrapper() : current.savedFileWrapper())
         }.value
     }
 

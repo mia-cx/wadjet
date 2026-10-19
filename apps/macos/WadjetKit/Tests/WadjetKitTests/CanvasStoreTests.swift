@@ -6,6 +6,60 @@ import Testing
 import WadjetKit
 
 struct CanvasStoreTests {
+    // Proves Save file keeps full recroppable sources after both History
+    // packages expire, including links inside embedded hosts and Editor resaves.
+    @Test(arguments: [false, true]) func savedCanvasOutlivesLinkedHistory(embedded: Bool) async throws {
+        let root = temporaryCanvasDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let created = Date(timeIntervalSince1970: 1_000_000)
+        let clock = Mutex(created)
+        let store = CanvasStore(directory: root.appendingPathComponent("History"), now: { clock.withLock { $0 } })
+        let targetID = UUID(), hostID = UUID()
+        let target = try fixtureCanvas()
+        let targetURL = try store.add(target, for: targetID, createdAt: created)
+        var host = try fixtureCanvas()
+        let link = CanvasLink(url: targetURL)
+        host.linkedCanvases = [link]
+        host.linkedDocuments = [targetURL: target]
+        host.layerStack = LayerStack([Annotation(kind: .canvas(link,
+            .init(frame: host.crop, crop: CGRect(x: 8, y: 8, width: 8, height: 8))),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))])
+        if embedded {
+            var parent = try fixtureCanvas()
+            parent.embeddedCanvases = ["child.wadjet": host]
+            host = parent
+        }
+        let hostURL = try store.add(host, for: hostID, createdAt: created)
+        let image = root.appendingPathComponent("Screenshot.png")
+        try Data("image".utf8).write(to: image)
+        let savedDirectory = root.appendingPathComponent("Saved")
+        let workflow = Workflow(name: "Keep Canvas", takes: .screenshot,
+            steps: [.saveFile(folder: nil, format: .canvas)])
+        var events: [RunEvent] = []
+        for await event in WorkflowRunner(effects: FakeEffects()).run(image, through: workflow,
+            defaultFolder: savedDirectory, canvas: hostURL) { events.append(event) }
+        guard case let .done(saved, errors) = events.last else { Issue.record("no completion"); return }
+        #expect(errors.isEmpty)
+        let savedURL = try #require(saved.first)
+        let original = try packageBytes(at: savedURL)
+        clock.withLock { $0 = created.addingTimeInterval(90 * 86_400) }
+        try store.sweep()
+        try store.sweep()
+        #expect(try store.url(for: targetID) == nil)
+        #expect(try store.url(for: hostID) == nil)
+        #expect(try packageBytes(at: savedURL) == original)
+        let reopened = try CanvasDocument.read(from: savedURL)
+        let savedHost = embedded ? try #require(reopened.embeddedCanvases["child.wadjet"]) : reopened
+        let source = try #require(savedHost.linkedDocuments[targetURL])
+        #expect(source.layout == target.layout)
+        #expect(source.displayImages[1]?.width == target.displayImages[1]?.width)
+        #expect(try source.flatten(crop: CGRect(x: 32, y: 32, width: 16, height: 16)).width > 0)
+        // The Editor can save the archived dependency again after History is gone.
+        try reopened.savedFileWrapper().write(to: savedURL, options: .atomic, originalContentsURL: nil)
+        let edited = try CanvasDocument.read(from: savedURL)
+        #expect((embedded ? edited.embeddedCanvases["child.wadjet"] : edited)?.linkedDocuments[targetURL] != nil)
+    }
+
     // Proves an Editor's pending save is flushed before retention reads its
     // package, and deleting a presented package delivers deletion accommodation.
     @Test func sweepCoordinatesPresentedPackages() async throws {
