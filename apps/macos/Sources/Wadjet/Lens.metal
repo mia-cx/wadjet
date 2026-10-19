@@ -70,7 +70,7 @@ using namespace metal;
     float2 ldir = normalize(light - centre);
     float facing = 0.35 + 0.65 * clamp(dot(normalize(sc), ldir) * 0.5 + 0.5, 0.0, 1.0);
     float spec = exp(-length(light - position) / 140.0) * 0.09;
-    o.rgb += half(hair * (facing * 0.03 + spec * 0.5));
+    o.rgb += half(hair * (facing * 0.06 + spec));
     // coverage: sdf 0 → full effect, +half a px → plain backdrop
     return mix(layer.sample(position), o, half(clamp(0.5 - sdf / px, 0.0, 1.0)));
 }
