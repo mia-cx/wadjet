@@ -33,9 +33,11 @@ struct ScreenshotCanvasTests {
         let elsewhere = line(-18, 12, -12, 12)
         let coveringCensor = Annotation(kind: .censor(rect: CGRect(x: -5, y: -5, width: 20, height: 20), method: .blackOut),
             style: crossing.style)
+        let coveringShape = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: CGRect(x: -5, y: -5, width: 20, height: 20)),
+            style: .init(colour: crossing.style.colour, width: 2, fill: crossing.style.colour, stroked: false))
         let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(), crop: crop,
-            annotations: LayerStack([crossing, edge, rotated, misses, elsewhere, coveringCensor]), windowCapture: true)
-        #expect(canvas.layerStack.annotations == [crossing, edge, rotated, coveringCensor])
+            annotations: LayerStack([crossing, edge, rotated, misses, elsewhere, coveringCensor, coveringShape]), windowCapture: true)
+        #expect(canvas.layerStack.annotations == [crossing, edge, rotated, coveringCensor, coveringShape])
         #expect(canvas.layout.count == 2)
     }
 
@@ -70,6 +72,21 @@ struct ScreenshotCanvasTests {
         #expect(restored.crop == canvas.crop)
         #expect(restored.layerStack == canvas.layerStack)
         #expect(restored.displayImages.count == 2)
+    }
+
+    // Proves fill/stroke overlap is composited once at whole-Annotation opacity, as in a Markup panel.
+    @Test func shapeOpacityAppliesToTheWholeAnnotation() throws {
+        let red = RGBAColour(red: 1, green: 0, blue: 0, alpha: 1)
+        let shape = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: CGRect(x: 2, y: 2, width: 8, height: 8)),
+            style: .init(colour: red, width: 4, opacity: 0.25, fill: red))
+        let canvas = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 12, height: 12),
+            layerStack: LayerStack([shape]), displayImages: [:])
+        let values = try pixels(canvas.flatten())
+        for (x, y) in [(3, 6), (6, 6)] { // overlap, then fill only
+            let offset = 4 * (y * 12 + x)
+            #expect(abs(values[offset] - 0.25) < 0.001)
+            #expect(abs(values[offset + 3] - 0.25) < 0.001)
+        }
     }
 
     // Proves Save Canvas writes a readable, independently named package while later image effects receive the flattened image.

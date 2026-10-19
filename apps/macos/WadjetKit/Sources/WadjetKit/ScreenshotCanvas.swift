@@ -14,20 +14,18 @@ public struct CapturedCanvasDisplay {
 
 extension CanvasDocument {
     /// Keeps every captured display for recropping. Region/screen captures retain
-    /// off-crop Annotations; a window capture retains only strokes touching its frame.
+    /// off-crop Annotations; a window capture retains fills/strokes touching its frame.
     public init(capturedDisplays: [CapturedCanvasDisplay], crop: CGRect, cornerRadius: CGFloat = 0,
                 annotations: LayerStack, windowCapture: Bool = false) {
         let frames = windowCapture ? [crop] : capturedDisplays.map(\.display.frame)
         let kept = annotations.annotations.filter { annotation in
             let path = PathGeometry.path(for: annotation)
-            let area: CGPath
-            switch annotation.kind {
-            case .censor: area = path
-            case .line: area = path.copy(strokingWithWidth: annotation.style.width,
-                lineCap: .round, lineJoin: .round, miterLimit: 10)
-            }
+            let areas = [annotation.fillColour.map { _ in path }, annotation.strokeColour.map { _ in
+                path.copy(strokingWithWidth: annotation.style.width, lineCap: .round, lineJoin: .round, miterLimit: 10)
+            }].compactMap { $0 }
             return frames.contains { frame in
-                area.intersects(CGPath(rect: frame, transform: nil), using: .winding)
+                let rect = CGPath(rect: frame, transform: nil)
+                return areas.contains { $0.intersects(rect, using: .winding) }
             }
         }
         self.init(layout: capturedDisplays.map(\.display), crop: crop, cornerRadius: cornerRadius,
