@@ -820,7 +820,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: selection -> capture or recording
     // a live shot of one window, "through" the Freeze Frame; nil if SCK can't
     // find it anymore — callers fall back to cropping the frozen image
-    func captureWindow(id: CGWindowID, screen: NSScreen) async -> CGImage? {
+    func captureWindow(id: CGWindowID, screen: NSScreen, cursor: Bool) async -> CGImage? {
         guard let scw = overlayCtrl.scWindows[id] else { return nil }
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
         let sc = screen.backingScaleFactor
@@ -882,18 +882,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
-            // read the screen and the frozen-crop fallback before closeAll
-            // clears the Freeze Frame — afterwards both would be gone
+            // snapshot the context before closeAll — a second Shortcut could
+            // change shot toggles/the tool/the one-shot Workflow mid-capture
+            let shotWorkflow = takeShotWorkflow()
+            let cursor = s.shotCursor
             let screen = Freeze.shared.displays[display].screen
             let fallback = Freeze.shared.crop(rect: frame, on: display, hdr: true)
             overlayCtrl.closeAll()
             Task { @MainActor in
-                var thumb = await captureWindow(id: id, screen: screen)
+                var thumb = await captureWindow(id: id, screen: screen, cursor: cursor)
                 if thumb == nil {
                     AppLog.line("window \(id) not capturable; falling back to frozen crop")
                     thumb = fallback
                 }
-                runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))")
+                runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))", workflow: shotWorkflow)
             }
         } else {
             recordingWindowID = id
@@ -904,6 +906,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
+            // snapshot the context before closeAll — a second Shortcut could
+            // change shot toggles/the tool/the one-shot Workflow mid-capture
+            let shotWorkflow = takeShotWorkflow()
+            let cursor = s.shotCursor, wadjet = s.shotWadjet
             if !overlayCtrl.showsFrozen {
                 // the Screenshot is taken at confirm — collect every overlay-
                 // session window before teardown so it can be left out
@@ -915,15 +921,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if let m = overlayCtrl.menuPanel { ids.insert(m.windowNumber) }
                 overlayCtrl.closeAll()
                 Task { @MainActor in
-                    let thumb = await overlayCtrl.liveShot(rect: rect, screen: screen, excluding: ids)
-                    self.runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))")
+                    let thumb = await overlayCtrl.liveShot(rect: rect, screen: screen, excluding: ids, cursor: cursor, wadjet: wadjet)
+                    self.runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: shotWorkflow)
                 }
                 return
             }
             // screenshots keep HDR pixels when the display provides them
             let thumb = Freeze.shared.crop(rect: rect, on: display, hdr: true)
             overlayCtrl.closeAll()
-            runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))")
+            runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: shotWorkflow)
         } else {
             startRecording(rect: rect, display: display)
         }
@@ -934,7 +940,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // Screenshots write a temp file, then run the Workflow picked for the Tool —
     // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
-    func runCapture(thumb: CGImage?, label: String) {
+    /// the Screenshot Workflow for the current Tool, resolved at confirm —
+    /// consumes the Shortcut's one-shot pick
+    func takeShotWorkflow() -> String {
+        let s = AppState.shared
+        defer { s.triggerWorkflow = nil }
+        return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+    }
+    func runCapture(thumb: CGImage?, label: String, workflow: String) {
         guard let img = thumb else {
             AppLog.line("capture: no image — window capture and frozen crop both failed")
             return
@@ -951,9 +964,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
             return
         }
-        let state = AppState.shared
-        let workflow = state.workflowFor(state.tool) ?? state.config.value.defaultWorkflows.screenshot
-        state.triggerWorkflow = nil // the Shortcut's pick is one-shot; consumed
         runCapture(file: file, kind: .screenshot, label: label, workflow: workflow)
     }
     /// Run a finished capture file through `workflow` (resolved by the caller
@@ -2046,16 +2056,15 @@ final class OverlayController {
     /// a Screenshot taken at confirm, not at freeze — the desktop has moved on
     /// by then. Called after closeAll, so our session windows are already down;
     /// their window numbers leave the shot when Wadjet windows stay in.
-    func liveShot(rect: CGRect, screen: NSScreen, excluding: Set<Int>) async -> CGImage? {
+    func liveShot(rect: CGRect, screen: NSScreen, excluding: Set<Int>, cursor: Bool, wadjet: Bool) async -> CGImage? {
         guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
               let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
               let disp = content.displays.first(where: { $0.displayID == num }) else {
             AppLog.line("live shot: no shareable display")
             return nil
         }
-        let s = AppState.shared
         let filter: SCContentFilter
-        if s.shotWadjet {
+        if wadjet {
             filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluding.contains(Int($0.windowID)) })
         } else {
             let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
@@ -2064,7 +2073,7 @@ final class OverlayController {
         let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
         let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
         let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
-        guard let out = try? await screenshot(disp, width: w, height: h, cursor: s.shotCursor, hdr: hdr, filter: filter),
+        guard let out = try? await screenshot(disp, width: w, height: h, cursor: cursor, hdr: hdr, filter: filter),
               let img = out.hdr ?? out.sdr else {
             AppLog.line("live shot: capture failed")
             return nil
