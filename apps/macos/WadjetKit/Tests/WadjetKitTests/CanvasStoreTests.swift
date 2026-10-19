@@ -79,9 +79,9 @@ struct CanvasStoreTests {
         #expect(try history.recent().map(\.id) == [entry.id])
     }
 
-    // Proves links from canvas.json use the newest host's age and protect the target
-    // through the host's deletion sweep; the next sweep can delete the orphan.
-    @Test func newestLinkControlsLifetimeAndDegradation() throws {
+    // Proves root and nested links use the newest root host's age and protect the
+    // target through that host's deletion sweep; the next sweep deletes the orphan.
+    @Test(arguments: [0, 1, 2]) func newestLinkControlsLifetimeAndDegradation(depth: Int) throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let old = Date(timeIntervalSince1970: 0)
@@ -92,6 +92,11 @@ struct CanvasStoreTests {
         let targetURL = try store.add(fixtureCanvas(), for: targetID, createdAt: old)
         var host = try fixtureCanvas()
         host.linkedCanvases = [CanvasLink(url: targetURL)]
+        for _ in 0..<depth {
+            var parent = try fixtureCanvas()
+            parent.embeddedCanvases = ["child.wadjet": host]
+            host = parent
+        }
         try store.add(host, for: olderHost, createdAt: old.addingTimeInterval(150 * 86_400))
         try store.add(host, for: newestHost, createdAt: newest)
         #expect(try store.sweep().map(\.canvasID) == [olderHost])
@@ -141,15 +146,22 @@ struct CanvasStoreTests {
     }
 
     // Proves a damaged host's unreadable links cannot cause deletion of its target.
-    @Test func unreadableManifestAbortsBeforeDeletion() throws {
+    @Test(arguments: [0, 1, 2]) func unreadableManifestAbortsBeforeDeletion(depth: Int) throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let now = Date(timeIntervalSince1970: 100 * 86_400)
         let store = CanvasStore(directory: directory, now: { now })
         let target = UUID()
         try store.add(fixtureCanvas(), for: target, createdAt: Date(timeIntervalSince1970: 0))
-        let hostURL = try store.add(fixtureCanvas(), for: UUID(), createdAt: now)
-        try Data("broken".utf8).write(to: hostURL.appendingPathComponent("canvas.json"))
+        var host = try fixtureCanvas()
+        for _ in 0..<depth {
+            var parent = try fixtureCanvas()
+            parent.embeddedCanvases = ["child.wadjet": host]
+            host = parent
+        }
+        var damagedURL = try store.add(host, for: UUID(), createdAt: now)
+        for _ in 0..<depth { damagedURL.appendPathComponent("embedded/child.wadjet") }
+        try Data("broken".utf8).write(to: damagedURL.appendingPathComponent("canvas.json"))
         #expect(throws: (any Error).self) { try store.sweep() }
         #expect(try store.url(for: target) != nil)
     }

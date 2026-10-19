@@ -68,7 +68,7 @@ public struct CanvasStore: Sendable {
             let manifest = try manifest(at: url)
             guard let metadata = manifest.store else { continue }
             packages[id] = url.standardizedFileURL
-            links[id] = manifest.linkedCanvases
+            links[id] = try linkedCanvases(in: manifest, at: url)
             records.append(.init(id: id, createdAt: metadata.createdAt, state: metadata.state))
         }
         // Directory enumeration adds a trailing slash; file URL equality would
@@ -155,6 +155,25 @@ public struct CanvasStore: Sendable {
             throw CanvasDocumentError.unsupportedVersion(manifest.version)
         }
         return manifest
+    }
+
+    // Embedded Canvases age with their root package, so their links are root edges too.
+    // Read all required metadata before planning any destructive action.
+    private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL) throws -> [CanvasLink] {
+        var links = manifest.linkedCanvases
+        for path in manifest.embeddedCanvases {
+            let parts = path.split(separator: "/", omittingEmptySubsequences: false)
+            guard parts.count == 2, parts[0] == "embedded", parts[1] != ".", parts[1] != "..",
+                  !path.contains("\0") else { throw CanvasDocumentError.invalidPackage(path) }
+            let embedded = url.appendingPathComponent("embedded")
+            let values = try embedded.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            let child = url.appendingPathComponent(path)
+            guard values.isDirectory == true, values.isSymbolicLink != true, try isPackage(child) else {
+                throw CanvasDocumentError.invalidPackage(path)
+            }
+            links += try linkedCanvases(in: self.manifest(at: child), at: child)
+        }
+        return links
     }
 
     private func isPackage(_ url: URL) throws -> Bool {
