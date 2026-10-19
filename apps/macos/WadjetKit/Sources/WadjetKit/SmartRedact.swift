@@ -47,24 +47,32 @@ public enum SmartRedact {
 
     /// One Black out Censor per box, padded by `padding`, in `style`. Boxes
     /// are taken largest first; a padded box already covered by an accepted
-    /// one or by an existing visible Black out Censor in `existing` (all four
-    /// corners inside its transformed path) is skipped.
+    /// one (rect containment, so identical or edge-sharing boxes dedupe) or
+    /// by an existing visible Black out Censor in `existing` that no later
+    /// visible Annotation overlaps — a Blur or Pixelate above it repaints
+    /// original pixels — is skipped. Existing coverage tests the four corners
+    /// of a 0.5 pt shrink inside the Censor's transformed path, so an equal
+    /// rect counts.
     public static func censors(covering boxes: [CGRect], style: AnnotationStyle,
                                existing: LayerStack) -> [Annotation] {
-        let blackOuts = existing.annotations.compactMap { a -> CGPath? in
-            guard !a.hidden, case .censor(_, .blackOut) = a.kind else { return nil }
-            return PathGeometry.path(for: a)
-        }
+        let layers = existing.annotations
         var placed: [CGRect] = []
         var annotations: [Annotation] = []
         for box in boxes.sorted(by: { $0.width * $0.height > $1.width * $1.height }) {
             let padded = box.insetBy(dx: -padding, dy: -padding)
-            let corners = [
-                CGPoint(x: padded.minX, y: padded.minY), CGPoint(x: padded.maxX, y: padded.minY),
-                CGPoint(x: padded.minX, y: padded.maxY), CGPoint(x: padded.maxX, y: padded.maxY),
-            ]
-            let covered = placed.contains { r in corners.allSatisfy(r.contains) }
-                || blackOuts.contains { p in corners.allSatisfy { p.contains($0) } }
+            let inner = padded.insetBy(dx: 0.5, dy: 0.5)
+            let corners = [CGPoint(x: inner.minX, y: inner.minY), CGPoint(x: inner.maxX, y: inner.minY),
+                           CGPoint(x: inner.minX, y: inner.maxY), CGPoint(x: inner.maxX, y: inner.maxY)]
+            let covered = placed.contains { $0.contains(padded) }
+                || layers.indices.contains { i in
+                    let a = layers[i]
+                    guard !a.hidden, case .censor(_, .blackOut) = a.kind else { return false }
+                    let path = PathGeometry.path(for: a)
+                    guard corners.allSatisfy({ path.contains($0) }) else { return false }
+                    return !layers[(i + 1)...].contains {
+                        !$0.hidden && PathGeometry.path(for: $0).boundingBoxOfPath.intersects(padded)
+                    }
+                }
             guard !covered else { continue }
             placed.append(padded)
             annotations.append(Annotation(kind: .censor(rect: padded, method: .blackOut), style: style))

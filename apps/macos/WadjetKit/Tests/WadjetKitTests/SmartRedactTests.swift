@@ -61,6 +61,32 @@ struct SmartRedactTests {
         #expect(history.undo(from: stack) == before)
     }
 
+    // Proves coverage needs the Black out still on top there, and edge-sharing boxes dedupe.
+    @Test func censorsCoverageRules() {
+        let style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 2)
+        var existing = LayerStack()
+        existing.add(Annotation(kind: .censor(rect: CGRect(x: 400, y: 400, width: 54, height: 24),
+                                              method: .blackOut), style: style))
+        existing.add(Annotation(kind: .censor(rect: CGRect(x: 300, y: 300, width: 50, height: 50),
+                                              method: .blackOut), style: style))
+        // a later Blur over the second Black out repaints the pixels beneath it
+        existing.add(Annotation(kind: .censor(rect: CGRect(x: 315, y: 305, width: 20, height: 20),
+                                              method: .blur(radius: 4)), style: style))
+        let placed = SmartRedact.censors(covering: [
+            CGRect(x: 402, y: 402, width: 50, height: 20),   // padded = the (400,400) Black out's rect
+            CGRect(x: 100, y: 100, width: 200, height: 20),
+            CGRect(x: 150, y: 100, width: 100, height: 20), // edge-shares inside the box above
+            CGRect(x: 310, y: 310, width: 10, height: 10),  // inside a Black out a later Blur repaints
+        ], style: style, existing: existing)
+        let pad = SmartRedact.padding
+        #expect(placed.map(\.kind) == [
+            .censor(rect: CGRect(x: 100 - pad, y: 100 - pad, width: 200 + 2 * pad, height: 20 + 2 * pad),
+                    method: .blackOut),
+            .censor(rect: CGRect(x: 310 - pad, y: 310 - pad, width: 10 + 2 * pad, height: 10 + 2 * pad),
+                    method: .blackOut),
+        ])
+    }
+
     /// one box per display's frame, padded by `SmartRedact.padding` covering
     /// the text's ink
     private func expectBoxesPerDisplay(in sources: [SmartRedactSource],
