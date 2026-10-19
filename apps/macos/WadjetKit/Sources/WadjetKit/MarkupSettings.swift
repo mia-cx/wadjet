@@ -56,14 +56,19 @@ extension WadjetConfig {
         public var format: CounterFormat?
         /// Step counter: the circle's diameter in points, at `markup.tools.counter.size`
         public var size: CGFloat?
+        /// Magnify's default options for new Annotations, at
+        /// `markup.tools.magnify.magnifier`; nil = the stock magnifier
+        public var magnifier: MagnifierOptions?
         public init(style: AnnotationStyle? = nil, variant: String? = nil, shape: ShapeKind? = nil,
-                    censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil) {
+                    censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil,
+                    magnifier: MagnifierOptions? = nil) {
             self.style = style
             self.variant = variant
             self.shape = shape
             self.censorMethod = censorMethod
             self.format = format
             self.size = size
+            self.magnifier = magnifier
         }
     }
 }

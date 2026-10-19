@@ -5,7 +5,8 @@ extension CanvasDocument {
     /// Composites displays, windows, then Annotations back to front. Crop and radius
     /// are global points; scale is output pixels per point. HDR pixels stay extended.
     /// Black out fills opaque black; Blur and Pixelate sample each display's
-    /// image beneath the Censor; Magnify belongs to its own slice.
+    /// image beneath the Censor; a Magnify strokes its source outline and
+    /// composites its magnified viewport through MagnifyRenderer.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
@@ -44,12 +45,13 @@ extension CanvasDocument {
             context.draw(window.image, in: window.frame)
             context.restoreGState()
         }
-        // the pixels Blur and Pixelate sample: each display's image beneath the Censor
+        // the pixels Blur and Pixelate sample: each display's image beneath
+        // the Censor; a Magnify's magnified viewport comes from the same set
         let sources = layout.compactMap { d in
             displayImages[d.id].map { CensorSource(image: $0, frame: d.frame) }
         }
         for annotation in layerStack.annotations {
-            context.draw(annotation, sources: sources, format: .RGBAh,
+            context.draw(annotation, sources: sources, scale: scale, format: .RGBAh,
                          colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)
         }
         context.endTransparencyLayer()

@@ -52,7 +52,7 @@ extension AnnotationKind {
                                     straight: last.handleOut == nil && first.handleIn == nil))
             }
             return segs
-        case .censor, .shape, .counter:
+        case .censor, .shape, .counter, .magnify:
             return []
         }
     }
@@ -73,8 +73,9 @@ public struct AnnotationDrawing {
 }
 
 /// Builds each Annotation's drawable path and hit-tests it — the stroked
-/// outline and a Line's ends, or the filled area when filled. Strokes have
-/// round caps and joins, as the Markup panels draw them.
+/// outline and a Line's ends, or the filled area when filled. A Magnify's
+/// path is its source outline and leader; the magnifier box draws separately.
+/// Strokes have round caps and joins, as the Markup panels draw them.
 public enum PathGeometry {
     /// the segments' path, before any transform; `closed` joins it back to its start
     static func path(segments: [Segment], closed: Bool = false) -> CGPath {
@@ -103,6 +104,11 @@ public enum PathGeometry {
             p.addPath(CGPath(ellipseIn: CGRect(x: center.x - radius, y: center.y - radius,
                                                width: 2 * radius, height: 2 * radius),
                              transform: nil))
+        case let .magnify(m):
+            p.addRect(m.source)
+            if m.options.leader, let l = m.leader {
+                p.move(to: l.start); p.addLine(to: l.end)
+            }
         }
         var t = a.affineTransform
         return p.copy(using: &t) ?? p
@@ -178,8 +184,11 @@ public enum PathGeometry {
 
     /// whether `point` lands on the filled area, on the stroked outline — the
     /// stroke geometry is untrimmed and undashed, so a click between two
-    /// dashes still selects — or on a Line's ends, each widened by `tolerance`
+    /// dashes still selects — or on a Line's ends, each widened by `tolerance`;
+    /// a Magnify also hits anywhere inside its magnifier box
     public static func hitTest(_ a: Annotation, at point: CGPoint, tolerance: CGFloat = 0) -> Bool {
+        if case let .magnify(m) = a.kind,
+           m.options.shape.path(in: m.frame).contains(point) { return true }
         let p = path(for: a)
         if a.fillColour != nil && p.contains(point) { return true }
         if p.copy(strokingWithWidth: (a.strokeColour == nil ? 0 : a.style.width) + 2 * tolerance,

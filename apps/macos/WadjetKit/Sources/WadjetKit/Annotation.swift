@@ -50,8 +50,9 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     case counter(center: CGPoint, radius: CGFloat, value: Int, format: CounterFormat)
     /// a Pen path: bezier nodes, optionally closed (closed paths can be filled)
     case path(PathData)
+    case magnify(Magnifier)
 
-    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path }
+    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify }
     enum LineKeys: String, CodingKey { case start, end, bend }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
@@ -79,10 +80,12 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
                             radius: try n.decode(CGFloat.self, forKey: .radius),
                             value: try n.decode(Int.self, forKey: .value),
                             format: try n.decode(CounterFormat.self, forKey: .format))
+        } else if c.contains(.magnify) {
+            self = .magnify(try c.decode(Magnifier.self, forKey: .magnify))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, or a counter"))
+                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, or a magnify"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -109,6 +112,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             try n.encode(format, forKey: .format)
         case let .path(data):
             try c.encode(data, forKey: .path)
+        case let .magnify(m):
+            try c.encode(m, forKey: .magnify)
         }
     }
 }
@@ -175,7 +180,7 @@ public enum CensorMethod: Codable, Equatable, Sendable {
 
 /// a CGPoint on the wire as `[x, y]` and a CGRect as `[x, y, width, height]` —
 /// later Annotation kinds reuse these for their geometry
-private extension KeyedDecodingContainer {
+extension KeyedDecodingContainer {
     func decodePoint(forKey key: Key) throws -> CGPoint {
         let v = try decode([CGFloat].self, forKey: key)
         guard v.count == 2 else {
@@ -198,7 +203,7 @@ private extension KeyedDecodingContainer {
         return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
     }
 }
-private extension KeyedEncodingContainer {
+extension KeyedEncodingContainer {
     mutating func encodePoint(_ p: CGPoint, forKey key: Key) throws {
         try encode([p.x, p.y], forKey: key)
     }
@@ -250,10 +255,11 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
 
 extension Annotation {
     /// what the outline strokes with: Lines, paths, and stroked shapes —
-    /// a closed path drops its stroke with `stroked` off, like a shape
+    /// a closed path drops its stroke with `stroked` off, like a shape;
+    /// a Magnify's source outline and leader
     public var strokeColour: RGBAColour? {
         switch kind {
-        case .line: style.colour
+        case .line, .magnify: style.colour
         case let .path(d): !d.closed || style.stroked ? style.colour : nil
         case .shape: style.stroked ? style.colour : nil
         case .censor, .counter: nil
@@ -264,11 +270,21 @@ extension Annotation {
     /// style, nil otherwise
     public var fillColour: RGBAColour? {
         switch kind {
-        case .line: nil
+        case .line, .magnify: nil
         case let .path(d): d.closed ? style.fill : nil
         case .shape: style.fill
         case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
         case .counter: style.colour
+        }
+    }
+    /// the global rect whose pixels it draws from: a sampling Censor's area, a
+    /// Magnify's viewport — nil for Annotations that need no live source
+    public var sampledRect: CGRect? {
+        switch kind {
+        case let .censor(_, method) where method.samplesBeneath:
+            PathGeometry.path(for: self).boundingBox
+        case let .magnify(m): m.viewport
+        default: nil
         }
     }
 }
