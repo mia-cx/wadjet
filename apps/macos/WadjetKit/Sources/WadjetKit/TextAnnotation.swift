@@ -151,9 +151,11 @@ public struct TextLayout {
                                 height: .greatestFiniteMagnitude)
         let suggested = CTFramesetterSuggestFrameSizeWithConstraints(setter,
             CFRange(location: 0, length: 0), nil, constraint, &fit)
-        // an empty string still occupies one empty line
+        // an empty string still occupies one empty line, and the framesetter's
+        // height doesn't count the empty line a trailing newline opens
         textSize = CGSize(width: data.width ?? ceil(suggested.width),
-                          height: data.string.isEmpty ? lineHeight : ceil(suggested.height))
+                          height: (data.string.isEmpty ? 0 : ceil(suggested.height))
+                            + (data.string.isEmpty || data.string.hasSuffix("\n") ? lineHeight : 0))
         let path = CGPath(rect: CGRect(origin: .zero, size: textSize), transform: nil)
         frame = CTFramesetterCreateFrame(setter, CFRange(location: 0, length: 0), path, nil)
     }

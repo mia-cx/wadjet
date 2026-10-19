@@ -72,11 +72,25 @@ public enum TextFonts {
         }
     }
 
+    /// the weight in `weights` nearest `weight`'s trait; ties go heavier —
+    /// the same rule `font(family:weight:size:)` applies to family members
+    public static func nearest(_ weight: TextWeight, in weights: [TextWeight]) -> TextWeight? {
+        weights.min { a, b in
+            let da = abs(a.trait - weight.trait), db = abs(b.trait - weight.trait)
+            return da == db ? a.trait > b.trait : da < db
+        }
+    }
+
     /// the menu's three sections; no family appears twice
     public struct Sections: Equatable, Sendable {
         public var pinned: [String]
         public var recent: [String]
         public var all: [String]
+        public init(pinned: [String] = [], recent: [String] = [], all: [String] = []) {
+            self.pinned = pinned
+            self.recent = recent
+            self.all = all
+        }
     }
 
     /// `installed` is the family's name list (NSFontManager's); `recent` has

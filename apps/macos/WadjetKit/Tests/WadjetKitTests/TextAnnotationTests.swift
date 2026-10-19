@@ -1,4 +1,5 @@
 import CoreGraphics
+import CoreText
 import Foundation
 import Testing
 import WadjetKit
@@ -47,9 +48,27 @@ struct TextAnnotationTests {
             origin: CGPoint(x: 100, y: 500), width: 30,
             format: TextFormat(font: "Monaco", size: 20, weight: .regular, alignment: .left, pill: false))),
             style: red4)
-        let lineHeight = TextLayout(TextData(string: "x", origin: .zero,
-            format: wrapped.kind.textData!.format)).lineHeight
+        let format = wrapped.kind.textData!.format
+        let lineHeight = TextLayout(TextData(string: "x", origin: .zero, format: format)).lineHeight
         #expect(wrapped.kind.bounds.height >= 2 * lineHeight + 2 * 0.15 * 20 - 0.01)
+        // a trailing newline still costs a line — the caret lives there
+        let trailing = Annotation(kind: .text(TextData(string: "Hi\n",
+            origin: CGPoint(x: 100, y: 500), format: format)), style: red4)
+        let plain = Annotation(kind: .text(TextData(string: "Hi",
+            origin: CGPoint(x: 100, y: 500), format: format)), style: red4)
+        #expect(abs(trailing.kind.bounds.height - plain.kind.bounds.height - lineHeight) < 0.01)
+    }
+
+    // Proves the default really is Noteworthy Bold, weights reach the system
+    // font, and a missing family falls back to the system font at that weight
+    @Test func fontResolution() {
+        func ps(_ family: String, _ weight: TextWeight) -> String {
+            CTFontCopyPostScriptName(TextFonts.font(family: family, weight: weight, size: 20)) as String
+        }
+        #expect(ps(TextFormat.default.font, TextFormat.default.weight) == "Noteworthy-Bold")
+        let regular = ps(TextFonts.system, .regular), bold = ps(TextFonts.system, .bold)
+        #expect(regular != bold)
+        #expect(ps("NoSuchFamily", .bold) == bold)
     }
 
     // Proves Text's grips only set the wrapping width and moving keeps a nil width nil
@@ -138,7 +157,7 @@ struct TextAnnotationTests {
     }
 }
 
-extension AnnotationKind {
+private extension AnnotationKind {
     var textData: TextData? { if case let .text(d) = self { d } else { nil } }
 }
 
