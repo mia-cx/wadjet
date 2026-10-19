@@ -48,8 +48,10 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     case censor(rect: CGRect, method: CensorMethod)
     case shape(ShapeKind, rect: CGRect)
     case counter(center: CGPoint, radius: CGFloat, value: Int, format: CounterFormat)
+    /// a Pen path: bezier nodes, optionally closed (closed paths can be filled)
+    case path(PathData)
 
-    enum CodingKeys: String, CodingKey { case line, censor, shape, counter }
+    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path }
     enum LineKeys: String, CodingKey { case start, end, bend }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
@@ -61,6 +63,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             self = .line(start: try l.decodePoint(forKey: .start),
                          end: try l.decodePoint(forKey: .end),
                          bend: try l.decodePointIfPresent(forKey: .bend))
+        } else if c.contains(.path) {
+            self = .path(try c.decode(PathData.self, forKey: .path))
         } else if c.contains(.censor) {
             let n = try c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
             self = .censor(rect: try n.decodeRect(forKey: .rect),
@@ -78,7 +82,7 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line, a censor, a shape, or a counter"))
+                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, or a counter"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -103,6 +107,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             try n.encode(radius, forKey: .radius)
             try n.encode(value, forKey: .value)
             try n.encode(format, forKey: .format)
+        case let .path(data):
+            try c.encode(data, forKey: .path)
         }
     }
 }
@@ -203,7 +209,8 @@ private extension KeyedEncodingContainer {
 
 /// How an Annotation draws: stroke colour, width, and opacity. `head` sits at
 /// the end point, `tail` at the start point; `dash` patterns the stroke;
-/// shapes add a `fill` and can drop their stroke.
+/// `fill` paints the inside of a shape or a closed path (nil = unfilled);
+/// `stroked` lets shapes drop their stroke.
 public struct AnnotationStyle: Codable, Equatable, Sendable {
     public var colour: RGBAColour
     public var width: CGFloat // stroke width, points
@@ -212,7 +219,7 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
     public var head: LineEnd
     public var tail: LineEnd
     public var dash: LineDash
-    /// the inside's colour — shapes, and closed paths in a later slice; nil = unfilled
+    /// the inside's colour — shapes, and closed paths; nil = unfilled
     public var fill: RGBAColour?
     /// shapes only: false leaves just the fill
     public var stroked: Bool
@@ -242,19 +249,23 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
 }
 
 extension Annotation {
-    /// what the outline strokes with: Lines always, shapes while `style.stroked`
+    /// what the outline strokes with: Lines, paths, and stroked shapes —
+    /// a closed path drops its stroke with `stroked` off, like a shape
     public var strokeColour: RGBAColour? {
         switch kind {
         case .line: style.colour
+        case let .path(d): !d.closed || style.stroked ? style.colour : nil
         case .shape: style.stroked ? style.colour : nil
         case .censor, .counter: nil
         }
     }
-    /// what the inside fills with: a shape's `style.fill`, a Black out's opaque
-    /// black or a counter's `style.colour` whatever the style, nil otherwise
+    /// what the inside fills with: a shape's or closed path's `style.fill`, a
+    /// Black out's opaque black or a counter's `style.colour` whatever the
+    /// style, nil otherwise
     public var fillColour: RGBAColour? {
         switch kind {
         case .line: nil
+        case let .path(d): d.closed ? style.fill : nil
         case .shape: style.fill
         case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
         case .counter: style.colour

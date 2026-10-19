@@ -134,6 +134,34 @@ struct CanvasDocumentTests {
         #expect(pixel(5, 1) == [1, 0, 0, 1]) // the stroke on the shape's edge
     }
 
+    // Proves a flattened open path draws like a Line — ends, dashes, trim —
+    // not just a bare stroke: the filled arrowhead colours a point off the
+    // stroke body.
+    @Test func flattenedPathDrawsEndsAndFill() throws {
+        let open = Annotation(
+            kind: .path(PathData(nodes: [PathNode(anchor: CGPoint(x: 2, y: 6)),
+                                         PathNode(anchor: CGPoint(x: 10, y: 6))])),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2,
+                         head: .filledArrow))
+        let closed = Annotation(
+            kind: .path(PathData(nodes: [PathNode(anchor: CGPoint(x: 12, y: 2)),
+                                         PathNode(anchor: CGPoint(x: 18, y: 2)),
+                                         PathNode(anchor: CGPoint(x: 18, y: 8)),
+                                         PathNode(anchor: CGPoint(x: 12, y: 8))],
+                                 closed: true)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 4,
+                         fill: .init(red: 0, green: 0, blue: 1, alpha: 1), stroked: false))
+        let document = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 20, height: 12),
+            layerStack: LayerStack([open, closed]), displayImages: [:])
+        let px = try linearPixels(document.flatten())
+        func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[(4 * (y * 20 + x))..<(4 * (y * 20 + x) + 4)]) }
+        // the arrowhead (12 long, ~6.9 half-height at its base) covers (4,4),
+        // which the 2-wide stroke body alone would leave clear
+        #expect(pixel(4, 4) == [1, 0, 0, 1])
+        #expect(pixel(15, 5) == [0, 0, 1, 1]) // the closed path's fill
+        #expect(pixel(11, 5) == [0, 0, 0, 0]) // stroked off: nothing outside it
+    }
+
     // Proves a Pixelate censor flattens to uniform blocks of the content beneath.
     @Test func censorPixelatesFlattenedRect() throws {
         // every pixel a distinct grey dominated by its quadrant, so blocks only

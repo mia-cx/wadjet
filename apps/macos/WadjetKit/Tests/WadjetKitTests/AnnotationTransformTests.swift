@@ -201,6 +201,67 @@ struct AnnotationTransformTests {
         #expect(r.transform == .identity)
         #expect(near(s, CGPoint(x: 50, y: -50)) && near(e, CGPoint(x: 50, y: 100)))
     }
+
+    // a path's grips: one per anchor, then a tangent grip per non-nil handle
+    // off its anchor, then rotate — no frame resize grips
+    @Test func pathHandles() {
+        let a = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 80, y: -20),
+                     handleOut: CGPoint(x: 120, y: 20)),
+            PathNode(anchor: CGPoint(x: 200, y: 0)),
+        ])), style: style)
+        let hs = a.handles(minExtent: 12, rotateOffset: 20)
+        #expect(hs.map(\.handle) == [.vertex(0), .vertex(1), .vertex(2),
+                                     .tangent(1, outgoing: true), .tangent(1, outgoing: false), .rotate])
+        #expect(near(hs[3].at, CGPoint(x: 120, y: 20)) && near(hs[4].at, CGPoint(x: 80, y: -20)))
+    }
+
+    // a vertex drag moves the anchor and rides both its handles along
+    @Test func pathVertexDrag() {
+        let a = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 80, y: -20),
+                     handleOut: CGPoint(x: 120, y: 20)),
+        ])), style: style)
+        let r = a.dragging(.vertex(1), from: CGPoint(x: 100, y: 0), to: CGPoint(x: 150, y: 40))
+        guard case let .path(d) = r.kind else { Issue.record(); return }
+        #expect(near(d.nodes[1].anchor, CGPoint(x: 150, y: 40)))
+        #expect(near(d.nodes[1].handleIn!, CGPoint(x: 130, y: 20)))
+        #expect(near(d.nodes[1].handleOut!, CGPoint(x: 170, y: 60)))
+    }
+
+    // a tangent drag turns the opposite handle to stay collinear through the
+    // anchor at its own length — the node stays smooth
+    @Test func tangentDragStaysCollinear() {
+        let a = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 80, y: -10),
+                     handleOut: CGPoint(x: 120, y: 10)),
+        ])), style: style)
+        let r = a.dragging(.tangent(1, outgoing: true), from: CGPoint(x: 120, y: 10),
+                           to: CGPoint(x: 100, y: 40))
+        guard case let .path(d) = r.kind else { Issue.record(); return }
+        let n = d.nodes[1]
+        #expect(near(n.handleOut!, CGPoint(x: 100, y: 40)))
+        // handleIn: opposite direction through the anchor, still 22.36 long
+        #expect(near(n.handleIn!, CGPoint(x: 100, y: -22.3607)))
+        #expect(near(hypot(n.handleIn!.x - n.anchor.x, n.handleIn!.y - n.anchor.y),
+                     hypot(20, 10)))
+    }
+
+    // with no opposite handle the tangent drag changes only its own side
+    @Test func tangentDragNilOpposite() {
+        let a = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleOut: CGPoint(x: 120, y: 10)),
+        ])), style: style)
+        let r = a.dragging(.tangent(1, outgoing: true), from: CGPoint(x: 120, y: 10),
+                           to: CGPoint(x: 100, y: 40))
+        guard case let .path(d) = r.kind else { Issue.record(); return }
+        #expect(near(d.nodes[1].handleOut!, CGPoint(x: 100, y: 40)))
+        #expect(d.nodes[1].handleIn == nil)
+    }
 }
 
 private func near(_ a: CGRect, _ b: CGRect) -> Bool {

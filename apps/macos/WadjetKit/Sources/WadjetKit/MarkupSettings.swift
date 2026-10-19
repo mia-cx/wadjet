@@ -45,8 +45,9 @@ extension WadjetConfig {
     public struct MarkupTool: Codable, Equatable, Sendable {
         /// nil until the user restyles the Tool; the app then uses the Tool's built-in default
         public var style: AnnotationStyle?
-        /// Shapes: the variant it draws, at `markup.tools.shapes.variant`
-        public var variant: ShapeVariant?
+        /// the Tool's last-picked variant — a ShapeVariant for Shapes at
+        /// `markup.tools.shapes.variant`, a Draw variant ("line"/"pen") for Draw
+        public var variant: String?
         /// a Shapes variant's option, at `markup.tools.<variant>.shape`
         public var shape: ShapeKind?
         /// Censor's default method for new Annotations; nil = .blackOut
@@ -55,7 +56,7 @@ extension WadjetConfig {
         public var format: CounterFormat?
         /// Step counter: the circle's diameter in points, at `markup.tools.counter.size`
         public var size: CGFloat?
-        public init(style: AnnotationStyle? = nil, variant: ShapeVariant? = nil, shape: ShapeKind? = nil,
+        public init(style: AnnotationStyle? = nil, variant: String? = nil, shape: ShapeKind? = nil,
                     censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil) {
             self.style = style
             self.variant = variant

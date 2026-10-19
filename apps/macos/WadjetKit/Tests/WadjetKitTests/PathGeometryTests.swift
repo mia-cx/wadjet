@@ -183,4 +183,70 @@ struct PathGeometryTests {
         // inside the arrowhead but off the stroke body (4 > width/2)
         #expect(PathGeometry.hitTest(a, at: CGPoint(x: 92, y: 4)))
     }
+
+    let tri = [PathNode(anchor: .zero), PathNode(anchor: CGPoint(x: 100, y: 0)),
+               PathNode(anchor: CGPoint(x: 50, y: 80))]
+
+    // a closed path hit-tests inside only while its style fills it; the
+    // outline always hits
+    @Test func closedPathInteriorHit() {
+        let red = RGBAColour(red: 1, green: 0, blue: 0, alpha: 1)
+        let filled = Annotation(kind: .path(PathData(nodes: tri, closed: true)),
+                                style: AnnotationStyle(colour: red, width: 4, fill: red))
+        #expect(PathGeometry.hitTest(filled, at: CGPoint(x: 50, y: 30)))
+        let unfilled = Annotation(kind: .path(PathData(nodes: tri, closed: true)),
+                                  style: AnnotationStyle(colour: red, width: 4))
+        #expect(!PathGeometry.hitTest(unfilled, at: CGPoint(x: 50, y: 30)))
+        #expect(PathGeometry.hitTest(unfilled, at: CGPoint(x: 50, y: 0)))
+    }
+
+    // a closed path draws no ends even with head/tail set, and a fill path
+    // only when the style fills
+    @Test func closedPathDrawing() {
+        let red = RGBAColour(red: 1, green: 0, blue: 0, alpha: 1)
+        let filled = Annotation(kind: .path(PathData(nodes: tri, closed: true)),
+                                style: AnnotationStyle(colour: red, width: 4,
+                                                       head: .filledArrow, tail: .dot, fill: red))
+        let d = PathGeometry.drawing(for: filled)
+        #expect(d.ends.isEmpty && d.fill != nil && d.fill!.contains(CGPoint(x: 50, y: 30)))
+        var unfilledStyle = filled.style
+        unfilledStyle.fill = nil
+        #expect(PathGeometry.drawing(for: Annotation(kind: filled.kind, style: unfilledStyle)).fill == nil)
+        // an open path still takes ends
+        var openStyle = filled.style
+        openStyle.fill = nil
+        let open = Annotation(kind: .path(PathData(nodes: tri)), style: openStyle)
+        #expect(!PathGeometry.drawing(for: open).ends.isEmpty)
+    }
+
+    // `stroked` off drops a closed path's stroke like a shape's — its fill
+    // still hit-tests inside; an open path ignores `stroked` and always hits
+    @Test func unstrokedClosedPathFillsOnly() {
+        let red = RGBAColour(red: 1, green: 0, blue: 0, alpha: 1)
+        let closed = Annotation(kind: .path(PathData(nodes: tri, closed: true)),
+                                style: AnnotationStyle(colour: red, width: 4,
+                                                       fill: red, stroked: false))
+        #expect(closed.strokeColour == nil)
+        #expect(closed.fillColour == red)
+        #expect(PathGeometry.hitTest(closed, at: CGPoint(x: 50, y: 30)))
+        let open = Annotation(kind: .path(PathData(nodes: tri)),
+                              style: closed.style)
+        #expect(open.strokeColour == red)
+        #expect(PathGeometry.hitTest(open, at: CGPoint(x: 50, y: 0)))
+    }
+
+    // an open path's end marks sit on the last segment's tangent: with
+    // handleIn (100,-50) the tangent at (100,0) points +y — inside at T−4u is
+    // (100,-4), where a chord-direction arrow would put nothing
+    @Test func openPathEndTangent() {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        style.head = .filledArrow
+        let a = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 100, y: -50)),
+        ])), style: style)
+        let ends = PathGeometry.drawing(for: a).ends
+        #expect(ends.contains(CGPoint(x: 100, y: -4)))
+        #expect(!ends.contains(CGPoint(x: 96, y: 0)))
+    }
 }

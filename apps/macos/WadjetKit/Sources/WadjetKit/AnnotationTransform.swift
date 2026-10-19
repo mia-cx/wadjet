@@ -19,10 +19,12 @@ public struct AnnotationTransform: Codable, Equatable, Sendable {
 public enum SelectionHandle: Hashable, Sendable {
     /// x and y are each -1, 0 or 1: the min edge, the middle, or the max edge of the untransformed bounds
     case resize(x: Int, y: Int)
-    /// a Line end (0 start, 1 end); Pen will reuse it for path nodes
+    /// a Line end (0 start, 1 end) or a Pen node's anchor
     case vertex(Int)
     /// the Line's on-curve midpoint — drag it to bend
     case bend
+    /// a Pen node's bezier handle (outgoing steers the segment after the node)
+    case tangent(Int, outgoing: Bool)
     case rotate
 }
 
@@ -32,6 +34,8 @@ extension AnnotationKind {
     var points: [CGPoint] {
         switch self {
         case let .line(start, end, bend): [start, end] + (bend.map { [$0] } ?? [])
+        case let .path(data):
+            data.nodes.flatMap { [$0.anchor] + [$0.handleIn, $0.handleOut].compactMap { $0 } }
         case let .censor(rect, _), let .shape(_, rect):
             [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
         case let .counter(center, radius, _, _):
@@ -44,6 +48,10 @@ extension AnnotationKind {
     func mapPoints(_ f: (CGPoint) -> CGPoint) -> AnnotationKind {
         switch self {
         case let .line(start, end, bend): return .line(start: f(start), end: f(end), bend: bend.map(f))
+        case let .path(data):
+            return .path(PathData(nodes: data.nodes.map {
+                PathNode(anchor: f($0.anchor), handleIn: $0.handleIn.map(f), handleOut: $0.handleOut.map(f))
+            }, closed: data.closed))
         case let .censor(rect, method):
             return .censor(rect: rect.mapCorners(f), method: method)
         case let .shape(kind, rect):
@@ -60,14 +68,14 @@ extension AnnotationKind {
     var keepsAspect: Bool {
         switch self {
         case .counter: true
-        case .line, .censor, .shape: false
+        case .line, .path, .censor, .shape: false
         }
     }
     /// an upright box that mapPoints re-standardizes, so a negative resize
     /// scale has to become a flip instead
     var isBox: Bool {
         switch self {
-        case .line: false
+        case .line, .path: false
         case .censor, .shape, .counter: true
         }
     }
@@ -124,8 +132,30 @@ extension Annotation {
         case let .vertex(i):
             // the grip's position at drag start plus the drag — the press needn't land dead-on
             var a = baked
-            guard case var .line(s, e, b) = a.kind else { return a }
             let d = CGPoint(x: point.x - start.x, y: point.y - start.y)
+            if case var .path(data) = a.kind {
+                guard data.nodes.indices.contains(i) else { return a }
+                var anchor = CGPoint(x: data.nodes[i].anchor.x + d.x,
+                                     y: data.nodes[i].anchor.y + d.y)
+                // 45° from the previous node (the next one for node 0 of an
+                // open path — a closed path wraps)
+                if constrained {
+                    let j = data.closed ? (i + data.nodes.count - 1) % data.nodes.count
+                                        : i == 0 ? (data.nodes.count > 1 ? 1 : i) : i - 1
+                    anchor = PathGeometry.snapAngle(anchor, from: data.nodes[j].anchor)
+                }
+                let delta = CGPoint(x: anchor.x - data.nodes[i].anchor.x,
+                                    y: anchor.y - data.nodes[i].anchor.y)
+                // the node's handles ride along with its anchor
+                data.nodes[i].anchor = anchor
+                data.nodes[i].handleIn = data.nodes[i].handleIn.map {
+                    CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
+                data.nodes[i].handleOut = data.nodes[i].handleOut.map {
+                    CGPoint(x: $0.x + delta.x, y: $0.y + delta.y) }
+                a.kind = .path(data)
+                return a
+            }
+            guard case var .line(s, e, b) = a.kind else { return a }
             var p = i == 0 ? CGPoint(x: s.x + d.x, y: s.y + d.y)
                            : CGPoint(x: e.x + d.x, y: e.y + d.y)
             if constrained { p = PathGeometry.snapAngle(p, from: i == 0 ? e : s) }
@@ -155,6 +185,27 @@ extension Annotation {
             let p = CGPoint(x: grip.x + point.x - start.x, y: grip.y + point.y - start.y)
             a.kind = .line(start: s, end: e,
                            bend: hypot(p.x - mid.x, p.y - mid.y) < Self.bendStraightenRadius ? nil : p)
+            return a
+        case let .tangent(i, outgoing):
+            var a = baked
+            guard case var .path(data) = a.kind, data.nodes.indices.contains(i) else { return a }
+            let n = data.nodes[i]
+            let old = outgoing ? n.handleOut : n.handleIn
+            var h = CGPoint(x: (old?.x ?? n.anchor.x) + point.x - start.x,
+                            y: (old?.y ?? n.anchor.y) + point.y - start.y)
+            if constrained { h = PathGeometry.snapAngle(h, from: n.anchor) }
+            if outgoing { data.nodes[i].handleOut = h } else { data.nodes[i].handleIn = h }
+            // a smooth node stays smooth: the opposite handle turns to stay
+            // collinear through the anchor at its own length; a nil one stays nil
+            if let other = outgoing ? n.handleIn : n.handleOut {
+                let ux = n.anchor.x - h.x, uy = n.anchor.y - h.y, l = hypot(ux, uy)
+                if l > 1e-9 {
+                    let len = hypot(other.x - n.anchor.x, other.y - n.anchor.y)
+                    let opp = CGPoint(x: n.anchor.x + ux / l * len, y: n.anchor.y + uy / l * len)
+                    if outgoing { data.nodes[i].handleIn = opp } else { data.nodes[i].handleOut = opp }
+                }
+            }
+            a.kind = .path(data)
             return a
         case let .resize(x, y):
             let b = kind.bounds, m = affineTransform
@@ -221,20 +272,36 @@ extension Annotation {
     }
 
     /// screen positions of the selection's grips — a Line gets a grip per end
-    /// and one on its curve; every kind also gets `.rotate` above the frame
-    /// (other kinds fall back to the bounds' resize grips)
+    /// and one on its curve, a Pen path one per node plus one per bezier
+    /// handle (nodes edit the shape, so paths get no frame resize grips);
+    /// every kind also gets `.rotate` above the frame — placed by rotation
+    /// alone, and everything else falls back to the bounds' resize grips
     public func handles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
-        guard case let .line(start, end, bend) = kind else {
+        let m = affineTransform, b = kind.bounds
+        let c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
+        let rotate = (SelectionHandle.rotate,
+                      CGPoint(x: c.x - v * sin(transform.rotation),
+                              y: c.y + v * cos(transform.rotation)))
+        switch kind {
+        case let .line(start, end, bend):
+            let mid = bend ?? CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+            return [(.vertex(0), start.applying(m)),
+                    (.vertex(1), end.applying(m)),
+                    (.bend, mid.applying(m)),
+                    rotate]
+        case let .path(data):
+            var out: [(handle: SelectionHandle, at: CGPoint)] = data.nodes.indices.map {
+                (.vertex($0), data.nodes[$0].anchor.applying(m))
+            }
+            for (i, n) in data.nodes.enumerated() {
+                if let h = n.handleOut, h != n.anchor { out.append((.tangent(i, outgoing: true), h.applying(m))) }
+                if let h = n.handleIn, h != n.anchor { out.append((.tangent(i, outgoing: false), h.applying(m))) }
+            }
+            out.append(rotate)
+            return out
+        default:
             return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
-        let m = affineTransform
-        let mid = bend ?? CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
-        let b = kind.bounds, c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
-        return [(.vertex(0), start.applying(m)),
-                (.vertex(1), end.applying(m)),
-                (.bend, mid.applying(m)),
-                (.rotate, CGPoint(x: c.x - v * sin(transform.rotation),
-                                  y: c.y + v * cos(transform.rotation)))]
     }
 
     /// screen positions of the bounds-based grips:

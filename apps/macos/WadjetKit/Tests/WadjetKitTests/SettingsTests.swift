@@ -67,6 +67,15 @@ struct SettingsTests {
         for i in 1 ... 7 { #expect(!used.contains(String(format: "#%06X", i))) }
     }
 
+    // MarkupTool.variant decodes absent as nil and round-trips a pick
+    @Test func markupToolVariantRoundTrip() throws {
+        let plain = try JSONDecoder().decode(WadjetConfig.MarkupTool.self, from: Data("{}".utf8))
+        #expect(plain.variant == nil)
+        let pen = WadjetConfig.MarkupTool(variant: "pen")
+        #expect(try JSONDecoder().decode(WadjetConfig.MarkupTool.self,
+                                         from: JSONEncoder().encode(pen)).variant == "pen")
+    }
+
     @Test func stepsAllowedPerKind() {
         let mp4 = Step.allowed(for: .mp4).map(\.title)
         let shot = Step.allowed(for: .screenshot).map(\.title)

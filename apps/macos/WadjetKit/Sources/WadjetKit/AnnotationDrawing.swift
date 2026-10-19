@@ -44,22 +44,30 @@ extension CGContext {
         if case .censor = annotation.kind { setAlpha(1) }
         else { setAlpha(annotation.style.opacity) }
         beginTransparencyLayer(auxiliaryInfo: nil)
-        if case .line = annotation.kind {
-            // a Line strokes its trimmed drawing and fills its ends,
-            // dash pattern scaled to the stroke width
-            let cg = annotation.style.colour.cgColor
+        switch annotation.kind {
+        case .line, .path:
+            // Lines and paths stroke their trimmed drawing and fill their
+            // ends, a closed path's fill under both — dash scaled to the
+            // stroke width; `stroked` off drops stroke and ends
             let drawing = PathGeometry.drawing(for: annotation)
-            setStrokeColor(cg)
-            setFillColor(cg)
-            setLineWidth(annotation.style.width)
-            setLineCap(.round)
-            setLineJoin(.round)
-            setLineDash(phase: 0, lengths: annotation.style.dash.pattern(width: annotation.style.width) ?? [])
-            addPath(drawing.stroke)
-            strokePath()
-            addPath(drawing.ends)
-            fillPath()
-        } else {
+            if let fill = drawing.fill, let f = annotation.fillColour {
+                setFillColor(f.cgColor)
+                addPath(fill)
+                fillPath()
+            }
+            if let c = annotation.strokeColour {
+                setStrokeColor(c.cgColor)
+                setFillColor(c.cgColor)
+                setLineWidth(annotation.style.width)
+                setLineCap(.round)
+                setLineJoin(.round)
+                setLineDash(phase: 0, lengths: annotation.style.dash.pattern(width: annotation.style.width) ?? [])
+                addPath(drawing.stroke)
+                strokePath()
+                addPath(drawing.ends)
+                fillPath()
+            }
+        default:
             let path = PathGeometry.path(for: annotation)
             if let fill = annotation.fillColour {
                 setFillColor(fill.cgColor)
