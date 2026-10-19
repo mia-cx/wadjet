@@ -1467,10 +1467,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
-            s.tool = nil; AppLog.line("esc: disarmed Markup"); updateEscHotkey(); return
+            s.tool = nil; s.triggerWorkflow = nil; AppLog.line("esc: disarmed Markup"); updateEscHotkey(); return
         }
         if s.phase == .frozen { s.triggerWorkflow = nil; AppLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
-        if s.phase == .toolbar { AppLog.line("esc: closed toolbar"); overlayCtrl.closeAll(); return }
+        if s.phase == .toolbar { s.triggerWorkflow = nil; AppLog.line("esc: closed toolbar"); overlayCtrl.closeAll(); return }
         if s.phase == .countdown { s.triggerWorkflow = nil; cancelCountdown(); return }
         if let t = toastCtrl.items.first(where: { $0.showBar || $0.showRing }) {
             t.showBar = false; t.showRing = false; t.showCancel = false
