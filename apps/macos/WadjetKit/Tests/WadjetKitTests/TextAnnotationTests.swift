@@ -43,6 +43,9 @@ struct TextAnnotationTests {
         let stack = LayerStack([a])
         #expect(stack.topmost(at: CGPoint(x: b.midX, y: b.midY), tolerance: 0)?.id == a.id)
         #expect(stack.topmost(at: CGPoint(x: b.maxX + 2, y: b.midY), tolerance: 0) == nil)
+        // `a` has no pill — the box still hits because Text's fillColour is
+        // the text colour, so the generic filled-area rule drives its hit area
+        #expect(PathGeometry.hitTest(a, at: CGPoint(x: b.midX, y: b.midY), tolerance: 0))
         // a narrow wrap makes a long string at least two lines tall
         let wrapped = Annotation(kind: .text(TextData(string: "Hello world",
             origin: CGPoint(x: 100, y: 500), width: 30,
