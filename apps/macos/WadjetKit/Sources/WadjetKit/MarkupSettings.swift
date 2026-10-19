@@ -8,10 +8,11 @@ extension WadjetConfig {
     /// drawing, moving, and resizing with windows, displays, and other
     /// Annotations within `snapRange` points.
     /// `tools` holds per-Tool settings keyed by the Markup Tool's raw name
-    /// ("draw"); `recentColours` ranks the colours used in Markup for the
-    /// colour control's swatches (hex "#RRGGBB"); `toolRanking` ranks Markup
-    /// Tools by raw name for the toolbar's shortlist (and the menu bar's last
-    /// Markup Tool).
+    /// ("draw", "text"); `recentColours` ranks the colours used in Markup for
+    /// the colour control's swatches (hex "#RRGGBB"); `recentFonts` the font
+    /// families picked in Text for the font list's recent section;
+    /// `toolRanking` ranks Markup Tools by raw name for the toolbar's
+    /// shortlist (and the menu bar's last Markup Tool).
     public struct Markup: Codable, Equatable, Sendable {
         public var clearAfterScreenshot = false
         public var peerThrough = true
@@ -20,8 +21,14 @@ extension WadjetConfig {
         public var tools: [String: MarkupTool] = [:]
         public var recentColours = FrecencyRanker<String>()
         public var toolRanking = FrecencyRanker<String>()
+        public var recentFonts = FrecencyRanker<String>()
         /// the colour history's bound — enough recents to pick from, no hoarding
         public static let recentColourLimit = 24
+        /// the Text Tool's default format — the last font picked etc.
+        public var textFormat: TextFormat {
+            get { tools["text"]?.textFormat ?? .default }
+            set { tools["text", default: MarkupTool()].textFormat = newValue }
+        }
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -32,6 +39,7 @@ extension WadjetConfig {
             tools = try c.decodeIfPresent([String: MarkupTool].self, forKey: .tools) ?? [:]
             recentColours = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .recentColours) ?? FrecencyRanker()
             toolRanking = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .toolRanking) ?? FrecencyRanker()
+            recentFonts = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .recentFonts) ?? FrecencyRanker()
         }
         /// records a colour use; the history keeps the `recentColourLimit` best-ranked colours
         public mutating func recordColour(_ hex: String, at date: Date = .now) {
@@ -39,9 +47,10 @@ extension WadjetConfig {
             recentColours.prune(keeping: Self.recentColourLimit, at: date)
         }
     }
-    /// one Markup Tool's settings; later slices add theirs (Line ends, Text font…) here.
+    /// one Markup Tool's settings; later slices add theirs (Line ends…) here.
     /// Shapes also reads `shapes.variant` and each variant's `shape`; Step
-    /// counter reads `counter.format` and `counter.size`.
+    /// counter reads `counter.format` and `counter.size`; `textFormat` is
+    /// Text's type default.
     public struct MarkupTool: Codable, Equatable, Sendable {
         /// nil until the user restyles the Tool; the app then uses the Tool's built-in default
         public var style: AnnotationStyle?
@@ -64,10 +73,12 @@ extension WadjetConfig {
         public var smartRedact: Set<SmartRedactCategory>?
         /// Brush variants' Smoothing, 0…1; nil = the default
         public var smoothing: Double?
+        /// Text's default format; nil until it changes, then the app uses .default
+        public var textFormat: TextFormat?
         public init(style: AnnotationStyle? = nil, variant: String? = nil, shape: ShapeKind? = nil,
                     censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil,
                     magnifier: MagnifierOptions? = nil, smartRedact: Set<SmartRedactCategory>? = nil,
-                    smoothing: Double? = nil) {
+                    smoothing: Double? = nil, textFormat: TextFormat? = nil) {
             self.style = style
             self.variant = variant
             self.shape = shape
@@ -77,6 +88,7 @@ extension WadjetConfig {
             self.magnifier = magnifier
             self.smartRedact = smartRedact
             self.smoothing = smoothing
+            self.textFormat = textFormat
         }
     }
 }

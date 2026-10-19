@@ -52,7 +52,7 @@ extension AnnotationKind {
                                     straight: last.handleOut == nil && first.handleIn == nil))
             }
             return segs
-        case .censor, .shape, .counter, .magnify:
+        case .censor, .shape, .counter, .magnify, .text:
             return []
         }
     }
@@ -109,6 +109,8 @@ public enum PathGeometry {
             if m.options.leader, let l = m.leader {
                 p.move(to: l.start); p.addLine(to: l.end)
             }
+        case let .text(d):
+            p.addRect(TextLayout(d).box)
         }
         var t = a.affineTransform
         return p.copy(using: &t) ?? p
