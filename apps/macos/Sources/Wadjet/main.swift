@@ -4203,7 +4203,8 @@ final class AppWorkflowEffects: WorkflowEffects {
     }
 }
 
-/// A thumbnail for a capture file: ImageIO for images, the first frame via
+/// A thumbnail for a capture file: the package thumbnail for Canvases,
+/// ImageIO for images, the first frame via
 /// AVAssetImageGenerator for .mp4 (ImageIO can't read video). Async because the
 /// video path is.
 func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
@@ -4213,7 +4214,8 @@ func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
         gen.maximumSize = CGSize(width: maxPixels, height: maxPixels)
         return try? await gen.image(at: .zero).image
     }
-    if let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+    let imageFile = file.pathExtension.lowercased() == "wadjet" ? file.appendingPathComponent("thumbnail.png") : file
+    if let src = CGImageSourceCreateWithURL(imageFile as CFURL, nil),
        let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
            kCGImageSourceCreateThumbnailFromImageAlways: true,
            kCGImageSourceThumbnailMaxPixelSize: maxPixels,
