@@ -6,6 +6,29 @@ import Testing
 import WadjetKit
 
 struct CanvasStoreTests {
+    // Proves an Editor's pending save is flushed before retention reads its
+    // package, and deleting a presented package delivers deletion accommodation.
+    @Test func sweepCoordinatesPresentedPackages() async throws {
+        let directory = temporaryCanvasDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let created = Date(timeIntervalSince1970: 1_000_000)
+        let clock = Mutex(created.addingTimeInterval(7 * 86_400))
+        let store = CanvasStore(directory: directory, now: { clock.withLock { $0 } })
+        let id = UUID()
+        let url = try store.add(fixtureCanvas(), for: id, createdAt: created)
+        let presenter = RetentionEditorPresenter(url: url)
+        NSFileCoordinator.addFilePresenter(presenter)
+        defer { NSFileCoordinator.removeFilePresenter(presenter) }
+        _ = try await Task.detached { try store.sweep() }.value
+        #expect(try store.canvas(for: id)?.crop.width == 20)
+        #expect(try !hasGainMap(at: url.appendingPathComponent("display-1.heic")))
+        #expect(try store.sweep().isEmpty) // the Editor save and stage markers both survived
+        clock.withLock { $0 = created.addingTimeInterval(90 * 86_400) }
+        _ = try await Task.detached { try store.sweep() }.value
+        #expect(presenter.deleted.withLock { $0 })
+        #expect(try store.url(for: id) == nil)
+    }
+
     // Proves root and embedded linking Annotations preserve whole displays for
     // recropping, even when those displays are outside the target's own crop.
     @Test(arguments: [false, true]) func linkedRecropKeepsItsDisplays(embedded: Bool) throws {
@@ -283,6 +306,36 @@ struct CanvasStoreTests {
             .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
         #expect(CGSize(width: image.width, height: image.height)
             == edited.crop.size.applying(CGAffineTransform(scaleX: 2, y: 2)))
+    }
+}
+
+/// A native file presenter with a pending crop edit, using the same save and
+/// deletion callbacks NSDocument participates in, without opening app windows.
+private final class RetentionEditorPresenter: NSObject, NSFilePresenter, @unchecked Sendable {
+    let presentedItemURL: URL?
+    let presentedItemOperationQueue = OperationQueue()
+    let deleted = Mutex(false)
+    private let needsSave = Mutex(true)
+
+    init(url: URL) {
+        presentedItemURL = url
+        presentedItemOperationQueue.maxConcurrentOperationCount = 1
+    }
+
+    func savePresentedItemChanges(completionHandler: @escaping @Sendable (Error?) -> Void) {
+        do {
+            if needsSave.withLock({ pending in let save = pending; pending = false; return save }) {
+                var canvas = try CanvasDocument.read(from: presentedItemURL!)
+                canvas.crop.size.width = 20
+                try canvas.write(to: presentedItemURL!)
+            }
+            completionHandler(nil)
+        } catch { completionHandler(error) }
+    }
+
+    func accommodatePresentedItemDeletion(completionHandler: @escaping @Sendable (Error?) -> Void) {
+        deleted.withLock { $0 = true }
+        completionHandler(nil)
     }
 }
 

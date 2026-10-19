@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import Synchronization
 
 /// Persisted in canvas.json, independently of filesystem creation/modification dates.
 struct CanvasStoreMetadata: Codable {
@@ -56,13 +57,55 @@ public struct CanvasStore: Sendable {
     /// package with its completed stages. A failed package is left intact; other
     /// decisions still run and failures surface together. An unreadable manifest
     /// aborts planning, because its links may protect another package from deletion.
+    /// Blocks for file presenters; run off the main thread in an app with Editors.
     @discardableResult
     public func sweep(settings: CanvasRetentionSettings = .init()) throws -> [CanvasRetentionDecision] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        return try coordinateMutation { try sweepCoordinated(settings: settings) }
+        // A plain directory writer does not lock its children. Acquire the
+        // directory (for additions) and every actual package in one batch, so
+        // Editor saves finish before link planning and cannot race its commits.
+        while true {
+            let urls = try packageURLs()
+            let intents = [NSFileAccessIntent.writingIntent(with: directory, options: [])]
+                + urls.map { NSFileAccessIntent.writingIntent(with: $0, options: .forMerging) }
+            let result = Mutex<Result<[CanvasRetentionDecision]?, Error>?>(nil)
+            let finished = DispatchSemaphore(value: 0)
+            // The accessor exclusively uses this coordinator after the batch
+            // is granted; no other thread calls it during the operation.
+            nonisolated(unsafe) let coordinator = NSFileCoordinator()
+            let queue = OperationQueue()
+            coordinator.coordinate(with: intents, queue: queue) { error in
+                defer { finished.signal() }
+                let outcome = Result<[CanvasRetentionDecision]?, Error> {
+                    if let error { throw error }
+                    let granted = intents.dropFirst().map(\.url)
+                    // An add may have won the directory before the batch was
+                    // granted. Retry with that new package included in the lock.
+                    func paths(_ urls: [URL]) -> Set<String> {
+                        Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+                    }
+                    guard try paths(packageURLs()) == paths(Array(granted)) else { return nil }
+                    return try sweepCoordinated(settings: settings, coordinator: coordinator)
+                }
+                result.withLock { $0 = outcome }
+            }
+            withExtendedLifetime(queue) { finished.wait() }
+            if let decisions = try result.withLock({ try $0!.get() }) { return decisions }
+        }
     }
 
-    private func sweepCoordinated(settings: CanvasRetentionSettings) throws -> [CanvasRetentionDecision] {
+    private func packageURLs() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            .filter { url in
+                guard UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil else { return false }
+                return try isPackage(url)
+            }
+            .sorted { $0.path < $1.path }
+    }
+
+    private func sweepCoordinated(settings: CanvasRetentionSettings,
+                                  coordinator: NSFileCoordinator) throws -> [CanvasRetentionDecision] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path) else { return [] }
         let urls = try fm.contentsOfDirectory(at: directory,
@@ -94,7 +137,13 @@ public struct CanvasStore: Sendable {
             do {
                 let url = packages[decision.canvasID]!
                 if decision.actions == [.delete] {
-                    try fm.removeItem(at: url)
+                    var deletionError: NSError?
+                    var deletion: Result<Void, Error>?
+                    coordinator.coordinate(writingItemAt: url, options: .forDeleting, error: &deletionError) { url in
+                        deletion = Result { try fm.removeItem(at: url) }
+                    }
+                    if let deletionError { throw deletionError }
+                    try deletion!.get()
                 } else {
                     try apply(decision.actions, to: url, linkedCrops: linkedCrops)
                 }
