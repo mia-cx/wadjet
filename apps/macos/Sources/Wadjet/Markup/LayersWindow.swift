@@ -119,15 +119,16 @@ struct LayerThumbnail: View {
             let t = CGAffineTransform(translationX: size.width / 2, y: size.height / 2)
                 .scaledBy(x: s, y: -s)
                 .translatedBy(x: -b.midX, y: -b.midY)
+            // fill and stroke as MarkupView draws them: fillColour for the
+            // inside (a Black out's opaque black), strokeColour for the outline
+            let o = annotation.style.opacity
+            func colour(_ c: RGBAColour) -> Color {
+                Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: c.alpha * o)
+            }
             let p = Path(path).applying(t)
-            if case .censor = annotation.kind {
-                // Black out: opaque black fill, no stroke — as MarkupView draws it
-                ctx.fill(p, with: .color(.black))
-            } else {
-                let c = annotation.style.colour
-                ctx.stroke(p,
-                           with: .color(Color(.sRGB, red: c.red, green: c.green, blue: c.blue,
-                                              opacity: c.alpha * annotation.style.opacity)),
+            if let f = annotation.fillColour { ctx.fill(p, with: .color(colour(f))) }
+            if let c = annotation.strokeColour {
+                ctx.stroke(p, with: .color(colour(c)),
                            style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
             }
         }
@@ -141,6 +142,7 @@ extension AnnotationKind {
         switch self {
         case .line: "Line"
         case .censor: "Black out"
+        case let .shape(kind, _): kind.variant.rawValue.capitalized
         }
     }
 }
