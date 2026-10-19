@@ -848,10 +848,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard (w[kCGWindowLayer as String] as? Int) == 0,
                   (w[kCGWindowOwnerPID as String] as? Int32) == front.processIdentifier,
                   let wn = w[kCGWindowNumber as String] as? Int else { continue }
+            // every display's windowFrames holds all windows in its own view
+            // coords — keep the display whose copy overlaps that screen most
+            var best: (id: CGWindowID, frame: CGRect, display: Int, area: CGFloat)?
             for (di, fd) in Freeze.shared.displays.enumerated() {
-                if let e = fd.windowFrames.first(where: { Int($0.id) == wn }) {
-                    return (e.id, e.frame, di)
-                }
+                guard let e = fd.windowFrames.first(where: { Int($0.id) == wn }) else { continue }
+                let inter = e.frame.intersection(CGRect(origin: .zero, size: fd.screen.frame.size))
+                let area = inter.isNull ? 0 : inter.width * inter.height
+                if area > (best?.area ?? 0) { best = (e.id, e.frame, di, area) }
+            }
+            if let best {
+                AppLog.line("focused window \(wn) on d\(best.display)")
+                return (best.id, best.frame, best.display)
             }
         }
         return nil
