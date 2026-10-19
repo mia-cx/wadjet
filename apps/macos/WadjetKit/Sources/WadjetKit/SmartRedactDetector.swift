@@ -9,7 +9,7 @@ public enum SmartRedactCategory: String, CaseIterable, Codable, Sendable {
 }
 
 /// One OCR line. Bounds use the caller's coordinate space and a left-to-right text axis.
-/// The current History OCR API returns only a String, so callers supply boxes separately.
+/// `recognizeTextLines(in:)` supplies them from Vision; other callers supply boxes separately.
 public struct SmartRedactTextLine: Equatable, Sendable {
     public var text: String
     public var bounds: CGRect

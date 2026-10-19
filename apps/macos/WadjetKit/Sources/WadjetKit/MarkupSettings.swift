@@ -59,9 +59,11 @@ extension WadjetConfig {
         /// Magnify's default options for new Annotations, at
         /// `markup.tools.magnify.magnifier`; nil = the stock magnifier
         public var magnifier: MagnifierOptions?
+        /// Censor: the categories Smart Redact blacks out, at `markup.tools.censor.smartRedact`; nil = every category
+        public var smartRedact: Set<SmartRedactCategory>?
         public init(style: AnnotationStyle? = nil, variant: String? = nil, shape: ShapeKind? = nil,
                     censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil,
-                    magnifier: MagnifierOptions? = nil) {
+                    magnifier: MagnifierOptions? = nil, smartRedact: Set<SmartRedactCategory>? = nil) {
             self.style = style
             self.variant = variant
             self.shape = shape
@@ -69,6 +71,7 @@ extension WadjetConfig {
             self.format = format
             self.size = size
             self.magnifier = magnifier
+            self.smartRedact = smartRedact
         }
     }
 }
