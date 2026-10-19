@@ -60,6 +60,10 @@ final class MarkupController {
         case pen
         /// a Brush stroke collecting samples; the Annotation is its live preview
         case brush(Annotation, raw: [CGPoint])
+        /// an Eraser drag; the sweep's `marked` is what release removes
+        case erasing(EraserSweep)
+        /// a Knife cut in flight; release cuts along the segment
+        case cutting(from: CGPoint, to: CGPoint)
         case moving(Annotation, from: CGPoint)
         /// a Magnify grabbed outside its magnifier box: the source moves, the
         /// magnifier stays put
@@ -77,6 +81,12 @@ final class MarkupController {
     var draft: Annotation? {
         if case let .drawing(a, _) = gesture { return a }
         if case let .brush(a, _) = gesture { return a }
+        if case let .cutting(from, to) = gesture {
+            // the cut line previews dashed in malachite at screen weight
+            return Annotation(kind: .line(start: from, end: to),
+                              style: AnnotationStyle(colour: MarkupEraser.cutLineColour,
+                                                     width: 1 / zoom, dash: .dashed))
+        }
         guard let pen else { return nil }
         // mid-press the handles are being pulled — a stale hover node would
         // draw a phantom segment; the hover preview only matters between presses
@@ -268,6 +278,11 @@ final class MarkupController {
                 }
                 // ⇧/⌥ mid-drag reshape a Shapes draft without the pointer moving
                 if case .drawing = self.gesture { self.drag(to: NSEvent.mouseLocation) }
+                // ⇧ snaps the Knife's cut to 45° mid-drag, and releases it
+                if case .cutting = self.gesture {
+                    self.drag(to: NSEvent.mouseLocation,
+                              constrained: e.modifierFlags.contains(.shift))
+                }
                 return e
             }
             keyMon = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
@@ -645,6 +660,14 @@ final class MarkupController {
             render()
             return
         }
+        if armed == .eraser {
+            selection = nil
+            gesture = MarkupEraser.variant == .knife
+                ? .cutting(from: p, to: p)
+                : .erasing(EraserSweep(stack: stack, at: p, radius: MarkupEraser.width / 2))
+            render()
+            return
+        }
         selection = nil // a new Annotation takes the Tool's style and options, not the selection's
         if armed == .text {
             gestureStart = nil // the text session records its own one step
@@ -750,6 +773,12 @@ final class MarkupController {
             raw.append(p)
             a.kind = .path(PathData(nodes: raw.map { PathNode(anchor: $0) }))
             gesture = .brush(a, raw: raw)
+        case var .erasing(sweep):
+            sweep.drag(to: p)
+            gesture = .erasing(sweep)
+        case let .cutting(from, _):
+            gesture = .cutting(from: from,
+                               to: constrained ? PathGeometry.snapAngle(p, from: from) : p)
         case let .moving(start, from):
             let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
             // a Magnify snaps its magnifier frame, not its whole path's box
@@ -812,6 +841,24 @@ final class MarkupController {
             if pen?.builder.path.closed == true { finishPen() } else { render() }
             return
         }
+        if case let .erasing(sweep) = gesture {
+            gesture = nil
+            stack.erase(sweep.marked)
+            commitGesture() // the sweep's whole drag is its one undo step
+            syncPanels()
+            render()
+            return
+        }
+        if case let .cutting(from, to) = gesture {
+            gesture = nil
+            if hypot(to.x - from.x, to.y - from.y) >= Self.minDraftSize {
+                stack.cut(from: from, to: to)
+            }
+            commitGesture()
+            syncPanels()
+            render()
+            return
+        }
         if case let .drawing(d, _) = gesture {
             let drawn: Bool = switch d.kind {
             case let .line(start, end, _):
@@ -847,7 +894,7 @@ final class MarkupController {
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen, .brush: break
-        case .drawing, .moving, .movingSource, .handle, .recrop, .pan: commitGesture()
+        case .drawing, .moving, .movingSource, .handle, .recrop, .pan, .erasing, .cutting: commitGesture()
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
@@ -948,9 +995,12 @@ final class MarkupController {
     }
 
     func render() {
+        // the Eraser dims what its sweep has marked for removal
+        let dimmed: Set<Annotation.ID> = if case let .erasing(s) = gesture { s.marked } else { [] }
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         guard isScreen else {
-            surface?.show(shown, selection: selected, editing: editing, cropping: cropping)
+            surface?.show(shown, selection: selected, editing: editing,
+                          cropping: cropping, dimmed: dimmed)
             surface?.showGuides(guides)
             syncEditor()
             return
@@ -967,7 +1017,11 @@ final class MarkupController {
         Self.onScreen.canvasPixels = pixels
         AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
         ScreenSamples.shared.watch(shown.compactMap(\.sampledRect))
-        for p in panels { p.view.show(shown, selection: selected, editing: editing, cropping: cropping); p.view.showGuides(guides) }
+        for p in panels {
+            p.view.show(shown, selection: selected, editing: editing,
+                        cropping: cropping, dimmed: dimmed)
+            p.view.showGuides(guides)
+        }
         PeerThrough.shared.sync()
         syncEditor()
     }

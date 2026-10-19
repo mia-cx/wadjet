@@ -6,7 +6,7 @@ public enum ToolID: String, Codable, CaseIterable, Sendable {
     case recordRegion, recordWindow, recordScreen
     case pickColour, copyText, measure
     /// Markup Tools, named in config.json like any Tool; later Markup Tools join as cases
-    case draw, text, censor, shapes, counter, magnify
+    case eraser, draw, text, censor, shapes, counter, magnify
 
     /// What the Tool's capture feeds a Workflow, if it captures at all.
     public var produces: CaptureKind? {

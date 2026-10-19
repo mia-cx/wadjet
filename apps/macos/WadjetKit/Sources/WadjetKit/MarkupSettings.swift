@@ -64,7 +64,8 @@ extension WadjetConfig {
         public var censorMethod: CensorMethod?
         /// Step counter: numbers or letters, at `markup.tools.counter.format`
         public var format: CounterFormat?
-        /// Step counter: the circle's diameter in points, at `markup.tools.counter.size`
+        /// Step counter: the circle's diameter in points, at
+        /// `markup.tools.counter.size`; Eraser: its diameter, at `markup.tools.eraser.size`
         public var size: CGFloat?
         /// Magnify's default options for new Annotations, at
         /// `markup.tools.magnify.magnifier`; nil = the stock magnifier

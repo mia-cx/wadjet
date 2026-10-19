@@ -217,6 +217,10 @@ public enum PathGeometry {
                     lineCap: .round, lineJoin: .round, miterLimit: 10), using: .winding)
             }
         }
+        // a Text paints glyphs inside its box — the box is its coverage, pill or not
+        if case .text = a.kind {
+            covered = covered.union(p, using: .winding)
+        }
         return covered
     }
     /// whether `point` lands on the filled area, on the stroked outline — the

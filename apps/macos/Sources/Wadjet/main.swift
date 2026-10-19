@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
+    case select = "select", eraser = "eraser", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear Annotations"
         case .moreMarkup: "More Markup Tools"
         }
     }
@@ -34,7 +34,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear"
         case .moreMarkup: "More"
         }
     }
@@ -53,7 +53,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .eraser: "eraser"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .clearAnnotations: "trash"
         case .moreMarkup: "ellipsis"
         }
     }
@@ -2244,12 +2244,15 @@ final class OverlayController {
 enum WadjetCursors {
     static var cache: [Tool: NSCursor] = [:]
     static func cursor(for t: Tool) -> NSCursor {
+        // the eraser ring follows its width and variant — never cached here
+        if t == .eraser { return MarkupEraser.cursor(zoom: 1) }
         if let c = cache[t] { return c }
         let c = make(t); cache[t] = c; return c
     }
     static func make(_ t: Tool) -> NSCursor {
         switch t {
         case .capRegion, .recRegion, .copyText, .measure, .draw, .shapes, .counter, .censor, .magnify: return .crosshair
+        case .eraser: return MarkupEraser.cursor(zoom: 1)
         case .select: return .arrow
         case .text: return .iBeam
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
@@ -2652,7 +2655,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText, .select, .draw, .text, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
+        case .copyText, .select, .eraser, .draw, .text, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -4053,7 +4056,9 @@ struct ToolMenuView: View {
                     if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                     if tool == .counter { CounterControls(ctrl: ctrl) }
                     if tool == .magnify { MagnifyShapeControls() }
-                    if tool == .censor { CensorControls(ctrl: ctrl); smartRedactRows() } else {
+                    if tool == .eraser { eraserRows() } else if tool == .censor {
+                        CensorControls(ctrl: ctrl); smartRedactRows()
+                    } else {
                         if tool == .draw { tileRow(drawTiles) }
                         MarkupStyleControls(tool: tool, ctrl: ctrl)
                     }
