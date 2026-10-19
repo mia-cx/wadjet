@@ -57,7 +57,7 @@ enum Tool: String, CaseIterable {
         case .moreMarkup: "ellipsis"
         }
     }
-    enum Kind: CaseIterable { case shot, rec, util, markup
+    enum Kind: CaseIterable { case markup, shot, rec, util
         var badge: String {
             switch self { case .shot: "camera.fill"; case .rec: "video.fill"; case .util: "wrench.and.screwdriver.fill"; case .markup: "pencil.and.scribble" }
         }
@@ -3115,17 +3115,6 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
-    let compactD: CGFloat = 44 // More's button: an icon, no label
-    func cellW(_ t: Tool) -> CGFloat { t == .moreMarkup ? compactD : toolD }
-    /// More's look: an ellipsis in a circle, no label — shared by cell() and
-    /// iconCell() so the lens strip lines up
-    var moreButton: some View {
-        Image(systemName: "ellipsis").font(.system(size: 14, weight: .semibold))
-            .frame(width: 28, height: 28)
-            .background(Circle().fill(.white.opacity(s.openMenu == .moreMarkup ? 0.22 : 0.12)))
-            .frame(width: compactD, height: selH)
-            .accessibilityLabel(Tool.moreMarkup.title)
-    }
     let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
     // the capsule overhangs its cell by (selW − toolD)/2 on each side; the
@@ -3323,7 +3312,7 @@ struct ToolbarView: View {
     /// the Tool whose visible cell actually contains x — gaps and hidden
     /// stacked cells return nil
     func hitTool(at x: CGFloat) -> Tool? {
-        cellCentres.first { visibleTools.contains($0.key) && abs($0.value.x - x) <= cellW($0.key) / 2 }?.key
+        cellCentres.first { visibleTools.contains($0.key) && abs($0.value.x - x) <= toolD / 2 }?.key
     }
     /// press and drag targets skip disabled Tools; a gap still snaps to the
     /// nearest live cell
@@ -3340,7 +3329,7 @@ struct ToolbarView: View {
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
         HStack(spacing: cellGap) {
             ForEach(Tool.Kind.allCases, id: \.self) { k in
-                if k != .shot { // thin divider between groups, clear of the highlight capsule
+                if k != Tool.Kind.allCases.first { // thin divider between groups, clear of the highlight capsule
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                         .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
@@ -3361,21 +3350,18 @@ struct ToolbarView: View {
                             .opacity(shown ? (toolDisabled(t) ? 0.35 : 1) : 0) // a Recording greys the video group
                             .allowsHitTesting(shown)
                             .accessibilityHidden(!shown)
-                            .frame(width: open && shown ? cellW(t) + (t != v.last ? cellGap : 0) : 0,
+                            .frame(width: open && shown ? toolD + (t != v.last ? cellGap : 0) : 0,
                                    alignment: .leading)
                             .zIndex(rep ? 1 : 0)
                     }
                 }
-                .frame(width: open ? v.map(cellW).reduce(0, +) + cellGap * CGFloat(max(v.count - 1, 0)) : toolD, alignment: .leading)
+                .frame(width: open ? toolD * CGFloat(v.count) + cellGap * CGFloat(max(v.count - 1, 0)) : toolD, alignment: .leading)
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
     }
     // the icon strip once, for the accent-tint mask — same layout as the row
     @ViewBuilder func iconCell(_ t: Tool, collapsed: Bool) -> some View {
-        if t == .moreMarkup {
-            moreButton
-        } else {
         // pixel-identical layout to cell() so the masked splice joins equal:
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
@@ -3403,7 +3389,6 @@ struct ToolbarView: View {
                 }
         }
         .frame(width: toolD, height: selH)
-        }
     }
 
     /// pixel-res Freeze Frame crop under the whole toolbar panel — the
@@ -3528,11 +3513,6 @@ struct ToolbarView: View {
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
         return VStack(spacing: 3) {
-            if t == .moreMarkup {
-                // the rest of cell()'s modifier chain (mask, RightClickCatcher,
-                // geometry) still applies to More
-                moreButton
-            } else {
             Image(systemName: collapsed ? t.kind.badge : t.icon).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
@@ -3558,10 +3538,9 @@ struct ToolbarView: View {
                             .offset(x: 11)
                     }
                 }
-            }
         }
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
-            .frame(width: cellW(t), height: selH)
+            .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space
             .background {
@@ -3583,10 +3562,10 @@ struct ToolbarView: View {
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
-                cellCentres[t] = CGPoint(x: $0.x + cellW(t) / 2, y: $0.y + selH / 2)
-                if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + cellW(t) / 2, y: $0.y + selH / 2)) }
+                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
+                if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
                 // a tap's travel follows its Tool if a group reflow moves it mid-flight
-                else if travelling, !dragging, !pressing, s.tool == t { setLensTarget(x: $0.x + cellW(t) / 2) }
+                else if travelling, !dragging, !pressing, s.tool == t { setLensTarget(x: $0.x + toolD / 2) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
