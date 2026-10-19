@@ -23,7 +23,7 @@ final class MarkupAssets {
         switch a.kind {
         case let .image(asset, _): images[asset] != nil
         case let .canvas(link, _): canvases[link.url] != nil
-        case .line, .path, .censor, .shape, .counter, .magnify, .text: false
+        case .line, .path, .censor, .shape, .counter, .magnify, .text, .window: false
         }
     }
 
@@ -51,7 +51,7 @@ final class MarkupAssets {
             // the persisted snapshot displays too; recrop clamps to the crop
             guard let snapshot = images[a.id] else { return nil }
             return CanvasPixels(image: snapshot, bounds: placement.crop)
-        case .line, .path, .censor, .shape, .counter, .magnify, .text:
+        case .line, .path, .censor, .shape, .counter, .magnify, .text, .window:
             return nil
         }
     }
