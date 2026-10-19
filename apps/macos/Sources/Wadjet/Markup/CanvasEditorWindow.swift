@@ -322,8 +322,7 @@ final class EditorCanvasView: NSView {
 
     /// Censors in an Editor sample exactly what output flattens: the same
     /// renderer over the whole Canvas, without Annotations or the crop's
-    /// corner — re-run when the visible windows change so moved windows
-    /// filter where they are
+    /// corner — `render` re-runs per Censor with the windows stacked beneath it
     private func censorSource() -> CensorLayers? {
         let canvas = doc.canvas
         return CensorLayers(coverage: canvas.displayBounds, scale: 1) { windows in
