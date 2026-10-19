@@ -834,6 +834,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
         if tool.isAction { if tool == .clearAnnotations { clearAnnotations() }; return }
+        if tool.kind == .markup { Tool.lastMarkup = tool }
+        if !tool.opensFreezeFrame, s.phase == .desktop || s.phase == .frozen { overlayCtrl.showLiveToolbar(armed: tool); return }
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
         if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup) {
@@ -1854,7 +1856,8 @@ final class OverlayController {
     func frozenExcludedWindows(from content: SCShareableContent) -> [SCWindow] {
         var nums: [CGWindowID] = []
         let expanded = AppState.shared.expandedDisplay
-        let recIsland = AppState.shared.recActive && AppState.shared.showIslandWhileRecording && AppState.shared.phase == .desktop
+        let recIsland = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
+            && AppState.shared.phase == .desktop && MarkupController.shared.stack.isEmpty
         for (di, p) in toolbarPanels {
             // only the expanded Recording island freezes in; the collapsed
             // island and the live/expanded Markup toolbar never do
@@ -2024,12 +2027,12 @@ final class OverlayController {
         syncBubbles()
     }
 
-    /// the recording bubble exists only while a Freeze Frame is open mid-
-    /// Recording with the island shown — one per display, 8 pt right of the
-    /// island/toolbar shape
+    /// the recording bubble exists only while the Recording can't own the island —
+    /// a Freeze Frame or live toolbar is open mid-Recording, or Annotations hold the
+    /// island — one per display, beside the island/toolbar shape
     func syncBubbles() {
         let want = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
-            && AppState.shared.toolbarOpen
+            && (AppState.shared.toolbarOpen || !MarkupController.shared.stack.isEmpty)
         for di in chromeScreens.indices {
             if want, recBubblePanels[di] == nil {
                 if let d = dyingBubbles[di] { d.close(); dyingBubbles[di] = nil } // cancel a merge still in flight
@@ -2068,17 +2071,49 @@ final class OverlayController {
         let pillH = islandH - 2 * gap
         return (sc.frame.maxY - gap - pillH / 2, pillH)
     }
-    /// leading edge 8 pt off the right edge of whatever shape is up (island or
-    /// expanded bar), centred on the island pill — called on every
-    /// shape/layout change via syncHit
+    /// a Screenshot taken at confirm, not at freeze — the desktop has moved on
+    /// by then. Called after closeAll, so our session windows are already down;
+    /// their window numbers leave the shot when Wadjet windows stay in.
+    func liveShot(rect: CGRect, screen: NSScreen, excluding: Set<Int>, cursor: Bool, wadjet: Bool) async -> CGImage? {
+        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
+              let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+              let disp = content.displays.first(where: { $0.displayID == num }) else {
+            AppLog.line("live shot: no shareable display")
+            return nil
+        }
+        let filter: SCContentFilter
+        if wadjet {
+            // closeAll may have rebuilt the desktop islands since `excluding` was taken
+            let excluded = excluding.union(toolbarPanels.values.map(\.windowNumber))
+            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluded.contains(Int($0.windowID)) })
+        } else {
+            let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
+            filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
+        }
+        let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
+        let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
+        let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
+        guard let out = try? await screenshot(disp, width: w, height: h, cursor: cursor, hdr: hdr, filter: filter),
+              let img = out.hdr ?? out.sdr else {
+            AppLog.line("live shot: capture failed")
+            return nil
+        }
+        AppLog.line("live shot \(img.width)x\(img.height)")
+        return Freeze.pixelCrop(of: img, rect: rect, in: screen)
+    }
+    /// `gap` off the right edge of whatever shape is up (island or expanded
+    /// bar), top-aligned with the island pill — flipping to the shape's left
+    /// when the right side would leave the screen, under it when neither side
+    /// has room. Called on every shape/layout change via syncHit
     func layoutBubble(on di: Int, size: CGSize? = nil) {
         if let size { bubbleSizes[di] = size }
         guard let p = recBubblePanels[di], let shape = toolbarShapeScreenRect(on: di),
-              let pill = islandPill(on: di) else { return }
+              let pill = islandPill(on: di), di < chromeScreens.count else { return }
         let sz = bubbleSizes[di] ?? p.frame.size
         // top edge anchored to the pill's top: the compact bubble IS the pill,
         // and the taller expanded controls grow downward, staying on screen
-        let r = NSRect(x: shape.maxX + 8, y: pill.midY + pill.h / 2 - sz.height, width: sz.width, height: sz.height)
+        let r = BubbleLayout.frame(size: sz, beside: shape, top: pill.midY + pill.h / 2,
+                                   in: chromeScreens[di].frame)
         guard r != p.frame else { return }
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.3
@@ -2810,9 +2845,11 @@ struct ToolbarView: View {
         let l = sc.auxiliaryTopLeftArea?.width ?? 0, r = sc.auxiliaryTopRightArea?.width ?? 0
         return max(0, sc.frame.width - l - r)
     }
-    // the compact recording island — only while no Freeze Frame is up;
-    // during one the island holds the toolbar and the Recording is the bubble
-    var recording: Bool { s.recActive && s.showIslandWhileRecording && !s.toolbarOpen }
+    // the compact recording island — only while no Freeze Frame is up; during one the
+    // island holds the toolbar and the Recording is the bubble, as it also is while
+    // Annotations hold the island
+    var recording: Bool { s.recActive && s.showIslandWhileRecording && !s.toolbarOpen
+        && MarkupController.shared.stack.isEmpty }
 
     // Notched display: black, flush with the top edge, rounded bottom corners,
     // centred on (and slightly wider than) the notch.
