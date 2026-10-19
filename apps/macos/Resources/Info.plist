@@ -28,6 +28,23 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Wadjet captures a Freeze Frame of the screen.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Wadjet Canvas</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array><string>cx.mia.wadjet.canvas</string></array>
+            <key>LSTypeIsPackage</key>
+            <true/>
+            <key>NSDocumentClass</key>
+            <string>CanvasEditorDocument</string>
+        </dict>
+    </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
         <dict>

@@ -638,13 +638,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         win.submenu!.addItem(mi("Minimize", #selector(NSWindow.performMiniaturize(_:)), "m"))
         win.submenu!.addItem(mi("Close", #selector(NSWindow.performClose(_:)), "w"))
         main.items = [app, editM, win]
+        installEditorMenus(into: main)
         return main
     }
-    /// a Dock-icon click (or ⌘-Tab back) reopens Settings
+    /// a Dock-icon click (or ⌘-Tab back) reopens Settings — unless Editor
+    /// documents are open, which the system brings forward itself
     func applicationShouldHandleReopen(_ a: NSApplication, hasVisibleWindows f: Bool) -> Bool {
+        if !NSDocumentController.shared.documents.isEmpty { return true }
         openSettings()
         return true
     }
+    /// never offer an untitled Canvas — Editors open only from packages
+    func applicationShouldOpenUntitledFile(_ sender: NSApplication) -> Bool { false }
     var settingsWindow: NSWindow?
     @objc func openSettings() {
         if settingsWindow == nil {
@@ -662,7 +667,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         AppLog.line("settings: window opened (regular)")
     }
     @objc func settingsClosed(_ n: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        syncActivationPolicy(closing: n.object as? NSWindow)
         AppLog.line("settings: closed")
     }
 
@@ -742,13 +747,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
             it.isEnabled = e.existingFile != nil || e.link != nil
+                || ((try? canvasStore.url(for: e.id)) ?? nil) != nil
             menu.addItem(it)
         }
     }
     @objc func recentItem(_ s: NSMenuItem) {
         guard let raw = s.representedObject as? String,
               let e = try? history?.recent(limit: 10).first(where: { $0.id.uuidString == raw }) else { return }
-        if let file = e.existingFile {
+        if let canvas = try? canvasStore.url(for: e.id) {
+            openCanvas(canvas)
+        } else if let file = e.existingFile {
             NSWorkspace.shared.activateFileViewerSelecting([file])
         } else if let link = e.link {
             NSPasteboard.general.clearContents()
@@ -3999,6 +4007,8 @@ struct ToolMenuView: View {
     let tool: Tool
     let ctrl: OverlayController
     var backdrop: CGImage? = nil // Freeze Frame crop under the menu body
+    /// the Editor's menus drop the screen-only Markup group settings
+    var editor = false
     @ObservedObject var s = AppState.shared
     @State var shown = false // spring in from the cell it hangs under
     /// the menu's rows — scrolled when they outgrow the space under the top edge
@@ -4030,7 +4040,7 @@ struct ToolMenuView: View {
                 if tool == .censor { CensorControls(ctrl: ctrl) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 selectionRows()
-                if tool == .select { markupGroupRows() }
+                if tool == .select, !editor { markupGroupRows() }
             default: EmptyView()
             }
         }
@@ -4285,7 +4295,8 @@ final class AppWorkflowEffects: WorkflowEffects {
 
     func showToast(_ file: URL, run: UUID) async throws {
         let img = await captureThumbnail(file, maxPixels: 400)
-        let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent, url: file, duration: nil))
+        let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent,
+                                     url: file, duration: nil, canvas: canvases[run]))
         t.title = "Captured"
         toast.items.insert(t, at: 0)
         toast.relayout()
@@ -4318,6 +4329,8 @@ func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
 
 struct Capture {
     let thumb: CGImage?; let label: String; var url: URL?; let duration: TimeInterval?
+    /// the capture's editable Canvas package — a Screenshot toast opens it in the Editor
+    var canvas: URL? = nil
     var kindShot: Bool { duration == nil }
 }
 
@@ -4560,7 +4573,14 @@ struct ToastView: View {
             }
         }
     }
-    func open() { if let u = item.cap.url { NSWorkspace.shared.open(u) } }
+    /// a Screenshot's Canvas opens in the Editor; anything else opens its file
+    func open() {
+        if let u = item.cap.canvas, FileManager.default.fileExists(atPath: u.path) {
+            AppDelegate.shared?.openCanvas(u)
+        } else if let u = item.cap.url {
+            NSWorkspace.shared.open(u)
+        }
+    }
     func retry() {
         let s = AppState.shared
         item.showRetry = false; item.err = nil
