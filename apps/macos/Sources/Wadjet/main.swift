@@ -858,8 +858,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if shortcut != nil || s.phase != .frozen { overlayCtrl.freezeContext = FreezeContext(recording: s.recActive, shortcut: shortcut) }
         if tool.freezeUse == .markup, !overlayCtrl.freezeContext.freezes(tool), s.phase == .desktop || s.phase == .frozen { overlayCtrl.showLiveToolbar(armed: tool); return }
         // switching Tools while frozen keeps the same Freeze Frame — Record
-        // Tools are disabled while a Recording runs
-        if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup && tool != .freezeRegion) {
+        // Tools are disabled while a Recording runs; toolbar switches on the
+        // live toolbar stay live, but a freezing Shortcut opens a Freeze Frame
+        if s.phase == .frozen || (s.phase == .toolbar && tool.freezeUse == .markup && (shortcut == nil || !overlayCtrl.freezeContext.freezes(tool))) {
             if s.tool != tool {
                 guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
                 s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.swapFrozenImages(); AppLog.line("tool switched to \(tool.title)")
@@ -1692,13 +1693,12 @@ final class OverlayController {
             let tContent = start.duration(to: .now)
             Freeze.shared.displays = []
             scWindows = Dictionary(content.windows.map { ($0.windowID, $0) }, uniquingKeysWith: { a, _ in a })
-            let shown = freezeContext.freezes(tool)
             // displays stay sequential: FrozenDisplay holds a raw bitmap
             // pointer, so it can't cross a task boundary without a sendability
             // hack — the two screenshots of each display still run concurrently
             var failures: [String] = []
             for screen in NSScreen.screens {
-                do { Freeze.shared.displays.append(try await frozenDisplay(on: screen, from: content, shown: shown)) } catch {
+                do { Freeze.shared.displays.append(try await frozenDisplay(on: screen, from: content)) } catch {
                     failures.append("\(screen.localizedName): \(error.localizedDescription)")
                     AppLog.line("freeze \(screen.localizedName) failed: \(error.localizedDescription)")
                 }
@@ -1746,7 +1746,7 @@ final class OverlayController {
     // panel shows (cursor, HDR as the display allows) and `clean` (cursor-free
     // SDR) that every pixel read uses, so the frozen cursor never lands in a
     // Pick Colour, loupe or Measure reading
-    func frozenDisplay(on screen: NSScreen, from content: SCShareableContent, shown: Bool) async throws -> FrozenDisplay {
+    func frozenDisplay(on screen: NSScreen, from content: SCShareableContent) async throws -> FrozenDisplay {
         guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
               let disp = content.displays.first(where: { $0.displayID == num }) else { throw CaptureError("no shareable display") }
         let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
@@ -1776,9 +1776,8 @@ final class OverlayController {
         let ownWindows = content.windows.filter { w in
             ownWindow(w) && w.isOnScreen && !chromeIDs.contains(w.windowID) && w.frame.intersects(scrTL)
         }
-        // bare images only feed the frozen display swap — skip them when the
-        // Freeze Frame isn't shown (the live shot at confirm decides then)
-        let needBare = shown && !ownWindows.isEmpty
+        // bare images feed the Wadjet-off swap; take them whenever a Wadjet window is up, since a later Shortcut or a Utility can reveal a Freeze Frame that opened hidden
+        let needBare = !ownWindows.isEmpty
         if !ownWindows.isEmpty {
             AppLog.line("bare: own windows \(ownWindows.map { "\($0.title ?? "?")@\($0.frame)" })")
         }
