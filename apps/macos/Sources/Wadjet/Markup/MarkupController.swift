@@ -309,7 +309,7 @@ final class MarkupController {
     func clear() {
         // a live text session commits as its own step before Clear's
         commitEditing()
-        textEditStart = nil
+        textEditStart = nil; textSavedDuringSession = false
         commitGesture()
         gesture = nil; snapper = nil; selection = nil; counterNext = nil
         // the Pen preview dies with the stack it wasn't part of — clear it
@@ -414,6 +414,9 @@ final class MarkupController {
     /// this session's unrecorded edits already dirtied the document — the
     /// recorded step then marks it the normal way, so commit balances it
     @ObservationIgnored private var textDirtyMarked = false
+    /// a save happened inside this session — its disk image carries the
+    /// unrecorded edits, so a net-zero session can't go clean again
+    @ObservationIgnored private var textSavedDuringSession = false
     /// changes the stack without a history step — only the in-place text
     /// editor uses it; its session's one step is recorded by recordTextEdit()
     func mutateUnrecorded(_ change: (inout LayerStack) -> Void) {
@@ -428,14 +431,25 @@ final class MarkupController {
     /// discarded empty box records nothing (LayerHistory skips no-ops)
     func recordTextEdit() {
         guard let before = textEditStart else { return }
-        if textDirtyMarked { document?.updateChangeCount(.changeUndone); textDirtyMarked = false }
+        if textDirtyMarked {
+            // the recorded step re-dirties via its undo registration; a net-zero
+            // session registers nothing, so a mark made after a save must stay
+            if before != stack || !textSavedDuringSession {
+                document?.updateChangeCount(.changeUndone)
+            }
+            textDirtyMarked = false
+        }
         record(from: before)
         textEditStart = nil
+        textSavedDuringSession = false
     }
     /// a save (explicit or autosave) consumed this session's dirty mark — the
     /// next unrecorded keystroke must mark again, and commit balances only a
     /// mark made since
-    func textSessionSaved() { textDirtyMarked = false }
+    func textSessionSaved() {
+        textDirtyMarked = false
+        textSavedDuringSession = true
+    }
     func setEditing(_ id: Annotation.ID?) { editing = id }
     func setSelection(_ id: Annotation.ID?) { selection = id }
     /// the panel whose screen holds `p`
