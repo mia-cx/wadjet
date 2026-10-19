@@ -48,12 +48,20 @@ final class TextEditorView: NSTextView {
         insertionPointColor = colour
         alphaValue = CGFloat(style.opacity)
         textContainerInset = layout.padding
-        typingAttributes = [
+        let attrs: [NSAttributedString.Key: Any] = [
             .font: font,
             .foregroundColor: colour,
             .paragraphStyle: paragraph,
         ]
+        typingAttributes = attrs
         defaultParagraphStyle = paragraph
+        // realign/re-pitch text already in the view (a mid-edit menu pick or
+        // a re-edited string) — setAttributes doesn't move the selection
+        if let storage = textStorage, storage.length > 0 {
+            storage.beginEditing()
+            storage.setAttributes(attrs, range: NSRange(location: 0, length: storage.length))
+            storage.endEditing()
+        }
         // 1 pt of slack so TextKit never wraps a line CoreText didn't
         textContainer?.containerSize = NSSize(
             width: (layout.data.width ?? layout.textSize.width) + 1, height: 1e7)
@@ -131,7 +139,13 @@ extension MarkupController {
     /// origin, magnified by the scroll view along with everything inside it
     private func editorHost(for box: CGRect) -> (view: NSView, frame: NSRect)? {
         if isScreen {
-            guard let panel = panel(containing: box.origin) else { return nil }
+            // the box's top-left may sit off every display — fall back to its
+            // centre, then the pointer's panel, then any panel
+            guard let panel = panel(containing: box.origin)
+                ?? panel(containing: CGPoint(x: box.midX, y: box.midY))
+                ?? panels.first(where: {
+                    NSMouseInRect(NSEvent.mouseLocation, $0.screen?.frame ?? .zero, false) })
+                ?? panels.first else { return nil }
             return (panel.view, panel.convertFromScreen(box))
         }
         guard let surface else { return nil }
@@ -153,13 +167,15 @@ extension MarkupController {
         tv.onChange = { [weak self] s in self?.editorTextChanged(s) }
         tv.onCommit = { [weak self] in self?.commitEditing() }
         host.view.addSubview(tv)
+        // the string goes in before the first configure so it inherits the
+        // Annotation's face, not the view's default
+        tv.string = data.string
         editor = tv
         setEditing(id)
         // selecting it too lets the style and format seams restyle the box
         // being typed
         setSelection(id)
         syncEditor()
-        tv.string = data.string
         host.view.window?.makeKey()
         host.view.window?.makeFirstResponder(tv)
         if isScreen { AppDelegate.shared?.updateEscHotkey() }
@@ -179,6 +195,7 @@ extension MarkupController {
         if var a = stack.annotations.first(where: { $0.id == id }),
            case var .text(d) = a.kind {
             d.string = tv?.string ?? d.string
+            while d.string.hasSuffix("\n") { d.string.removeLast() }
             a.kind = .text(d)
             kept = !d.string.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
             mutateUnrecorded { s in

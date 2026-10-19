@@ -7,7 +7,7 @@ extension MarkupStyles {
     /// whether the Tool menu's text controls apply: the selection is a .text
     /// Annotation, or nothing is selected and the armed Tool is Text
     func editsText(_ tool: Tool) -> Bool {
-        if let sel = MarkupController.shared.selected {
+        if let sel = MarkupController.active.selected {
             if case .text = sel.kind { return true }
             return false
         }
@@ -16,7 +16,7 @@ extension MarkupStyles {
 
     /// the selected text's format, else the Tool's configured default
     func textFormat(for tool: Tool) -> TextFormat {
-        if let sel = MarkupController.shared.selected, case let .text(d) = sel.kind {
+        if let sel = MarkupController.active.selected, case let .text(d) = sel.kind {
             return d.format
         }
         return config.value.markup.textFormat
@@ -25,8 +25,8 @@ extension MarkupStyles {
     /// the same rule as `restyle`: the selection only when a text is
     /// selected, else the change becomes the Tool's default format
     func restyleText(_ tool: Tool, _ change: (inout TextFormat) -> Void) {
-        if let sel = MarkupController.shared.selected, case .text = sel.kind {
-            MarkupController.shared.restyleSelectedText { change(&$0.format) }
+        if let sel = MarkupController.active.selected, case .text = sel.kind {
+            MarkupController.active.restyleSelectedText { change(&$0.format) }
             return
         }
         config.update {
@@ -39,8 +39,8 @@ extension MarkupStyles {
     /// a font pick styles the selected text if any AND always becomes the new
     /// default; the family joins the recent ranking
     func pickFont(family: String, weight: TextWeight, for tool: Tool) {
-        if let sel = MarkupController.shared.selected, case .text = sel.kind {
-            MarkupController.shared.restyleSelectedText { $0.format.font = family; $0.format.weight = weight }
+        if let sel = MarkupController.active.selected, case .text = sel.kind {
+            MarkupController.active.restyleSelectedText { $0.format.font = family; $0.format.weight = weight }
         }
         config.update {
             $0.markup.textFormat.font = family
@@ -87,15 +87,14 @@ struct TextFormatControls: View {
     var styles: MarkupStyles { .shared }
     @State var size: Double = 0
     @State var weightIndex: Double = 0
+    /// filled in onAppear — enumerating + sorting every family per body call
+    /// is too expensive for a computed property
+    @State var sections = TextFonts.Sections()
     /// a slider is mid-drag — re-seeding then would fight the user's thumb
     @State var editing = false
 
     var format: TextFormat { styles.textFormat(for: tool) }
     var weights: [TextWeight] { TextFonts.weights(of: format.font) }
-    var sections: TextFonts.Sections {
-        TextFonts.sections(installed: NSFontManager.shared.availableFontFamilies,
-                           recent: s.config.value.markup.recentFonts)
-    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -117,6 +116,8 @@ struct TextFormatControls: View {
         }
         .onAppear {
             styles.refreshFonts()
+            sections = TextFonts.sections(installed: NSFontManager.shared.availableFontFamilies,
+                                          recent: s.config.value.markup.recentFonts)
             size = Double(format.size)
             seedWeight()
         }
@@ -179,13 +180,11 @@ struct TextFormatControls: View {
         }
     }
 
-    /// the stored weight snapped to the nearest weight the family ships
+    /// the stored weight snapped to the nearest weight the family ships —
+    /// ties go heavier, the same rule the font resolution applies
     func seedWeight() {
-        guard !weights.isEmpty else { return }
-        let current = format.weight.trait
-        weightIndex = Double(weights.enumerated().min { a, b in
-            abs(a.element.trait - current) < abs(b.element.trait - current)
-        }?.offset ?? 0)
+        guard let w = TextFonts.nearest(format.weight, in: weights) else { return }
+        weightIndex = Double(weights.firstIndex(of: w) ?? 0)
     }
 
     func hairline() -> some View {
