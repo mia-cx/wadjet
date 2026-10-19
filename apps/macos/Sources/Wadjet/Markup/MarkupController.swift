@@ -196,7 +196,8 @@ final class MarkupController {
     /// arms a Tool on an Editor; the screen follows AppState through syncArmed
     func arm(_ tool: Tool?) {
         commitGesture(); gesture = nil
-        if tool != armed { finishPen() } // a Tool switch commits any Pen path in progress
+        // a Tool switch commits a Pen path or a text session in progress
+        if tool != armed { finishPen(); commitEditing() }
         if tool == nil { selection = nil; cmdHeld = false }
         armed = tool
         render()
