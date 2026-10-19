@@ -4049,14 +4049,16 @@ struct ToolMenuView: View {
             case .markup where tool == .moreMarkup:
                 overflowRows()
             case .markup:
-                if MarkupController.active.selected?.placement != nil {
+                if tool == .eraser {
+                    eraserRows()
+                } else if MarkupController.active.selected?.placement != nil {
                     // an image kind's menu: opacity, radius, border
                     ImageStyleControls(tool: tool, ctrl: ctrl)
                 } else {
                     if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                     if tool == .counter { CounterControls(ctrl: ctrl) }
                     if tool == .magnify { MagnifyShapeControls() }
-                    if tool == .eraser { eraserRows() } else if tool == .censor {
+                    if tool == .censor {
                         CensorControls(ctrl: ctrl); smartRedactRows()
                     } else {
                         if tool == .draw { tileRow(drawTiles) }
