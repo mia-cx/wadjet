@@ -8,7 +8,12 @@ import WadjetKit
 extension OverlayController {
     /// Every on-screen app window over `screens`, front first, captured whole
     /// (unobscured, like Capture Window) with `desktopIndependentWindow`.
-    func captureWindowLayers(over screens: [NSScreen], cursor: Bool) async -> [(id: CGWindowID, window: CapturedWindow)] {
+    /// A floating window is kept only when it covers a kept window behind it,
+    /// so the flat screen's occlusion survives; a window whose capture fails —
+    /// or that ScreenCaptureKit doesn't list — keeps its flat-screen pixels
+    /// through `fallback` (nil return drops it).
+    func captureWindowLayers(over screens: [NSScreen], cursor: Bool, wadjet: Bool,
+                             fallback: @escaping (CGRect, CGFloat) -> CGImage?) async -> [(id: CGWindowID, window: CapturedWindow)] {
         let started = Date()
         let content: SCShareableContent
         do {
@@ -23,60 +28,67 @@ extension OverlayController {
         // ordered, so the list supplies both the order and the frontmost hit
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                kCGNullWindowID) as? [[String: Any]] ?? []
-        var candidates: [(id: CGWindowID, scw: SCWindow)] = []
-        for w in infos {
-            guard (w[kCGWindowLayer as String] as? Int) == 0,
-                  (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
-                  (w[kCGWindowOwnerPID as String] as? Int32) != getpid(),
+        let listed = infos.compactMap { w -> ListedWindow? in
+            guard (w[kCGWindowAlpha as String] as? Double ?? 0) > 0,
+                  let level = w[kCGWindowLayer as String] as? Int,
                   let b = w[kCGWindowBounds as String] as? [String: CGFloat],
-                  let wn = w[kCGWindowNumber as String] as? Int else { continue }
+                  let wn = w[kCGWindowNumber as String] as? Int else { return nil }
             // top-left global -> AppKit global (bottom-left of the primary display)
             let frame = CGRect(x: b["X"] ?? 0, y: primaryH - (b["Y"] ?? 0) - (b["Height"] ?? 0),
                                width: b["Width"] ?? 0, height: b["Height"] ?? 0)
-            guard screens.contains(where: { $0.frame.intersects(frame) }),
-                  let scw = byID[CGWindowID(truncatingIfNeeded: wn)] else { continue }
-            candidates.append((CGWindowID(truncatingIfNeeded: wn), scw))
+            return ListedWindow(id: UInt32(truncatingIfNeeded: wn), level: level, frame: frame,
+                                ownedByWadjet: (w[kCGWindowOwnerPID as String] as? Int32) == getpid())
         }
+        let candidates = windowLayerCandidates(listed, includeWadjet: wadjet,
+                                               over: screens.map(\.frame))
+            .map { (id: CGWindowID(truncatingIfNeeded: $0.id), scw: byID[CGWindowID(truncatingIfNeeded: $0.id)], frame: $0.frame) }
         // MainActor-inheriting tasks created on the actor: the SCK calls suspend
         // off-actor so the captures overlap while SCWindow never crosses a region
         let tasks = candidates.map { c in
-            Task { @MainActor () -> (id: CGWindowID, window: CapturedWindow?, hdr: Bool) in
-                let frame = CGRect(x: c.scw.frame.minX, y: primaryH - c.scw.frame.maxY,
-                                   width: c.scw.frame.width, height: c.scw.frame.height)
+            Task { @MainActor () -> (id: CGWindowID, window: CapturedWindow?, hdr: Bool, flat: Bool) in
+                let frame = c.scw.map { CGRect(x: $0.frame.minX, y: primaryH - $0.frame.maxY,
+                                               width: $0.frame.width, height: $0.frame.height) } ?? c.frame
                 let hit = screens.filter { $0.frame.intersects(frame) }
                 let scale = hit.map(\.backingScaleFactor).max() ?? 2
-                let hdr = hit.contains { $0.maximumPotentialExtendedDynamicRangeColorComponentValue > 1 }
-                let cfg = SCScreenshotConfiguration()
-                cfg.width = Int((c.scw.frame.width * scale).rounded())
-                cfg.height = Int((c.scw.frame.height * scale).rounded())
-                cfg.ignoreShadows = true
-                cfg.showsCursor = cursor
-                cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
+                let app = c.scw?.owningApplication?.applicationName
+                let title = c.scw?.title.flatMap { $0.isEmpty ? nil : $0 }
                 do {
+                    guard let scw = c.scw else { throw CaptureError("not in shareable content") }
+                    let hdr = hit.contains { $0.maximumPotentialExtendedDynamicRangeColorComponentValue > 1 }
+                    let cfg = SCScreenshotConfiguration()
+                    cfg.width = Int((scw.frame.width * scale).rounded())
+                    cfg.height = Int((scw.frame.height * scale).rounded())
+                    cfg.ignoreShadows = true
+                    cfg.showsCursor = cursor
+                    cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
                     let out = try await SCScreenshotManager.captureScreenshot(
-                        contentFilter: SCContentFilter(desktopIndependentWindow: c.scw), configuration: cfg)
+                        contentFilter: SCContentFilter(desktopIndependentWindow: scw), configuration: cfg)
                     guard let image = out.hdrImage ?? out.sdrImage else {
                         throw CaptureError("window capture returned no image")
                     }
-                    let app = c.scw.owningApplication?.applicationName
-                    return (c.id, CapturedWindow(frame: frame, image: image, app: app,
-                                                 title: c.scw.title.flatMap { $0.isEmpty ? nil : $0 }),
-                            image.hasExtendedRange)
+                    return (c.id, CapturedWindow(frame: frame, image: image, app: app, title: title),
+                            image.hasExtendedRange, false)
                 } catch {
-                    AppLog.line("window layers: \(c.scw.owningApplication?.applicationName ?? "window \(c.id)") failed: \(error.localizedDescription)")
-                    return (c.id, nil, false)
+                    let name = app ?? "window \(c.id)"
+                    guard let flat = fallback(frame, scale) else {
+                        AppLog.line("window layers: \(name) failed: \(error.localizedDescription); dropped")
+                        return (c.id, nil, false, false)
+                    }
+                    AppLog.line("window layers: \(name) failed: \(error.localizedDescription); kept its flat pixels")
+                    return (c.id, CapturedWindow(frame: frame, image: flat, app: app, title: title), false, true)
                 }
             }
         }
         var windows: [(id: CGWindowID, window: CapturedWindow)] = []
-        var hdrCount = 0
+        var hdrCount = 0, fallbacks = 0
         for task in tasks {
             let r = await task.value
             if let w = r.window { windows.append((r.id, w)) }
             if r.hdr { hdrCount += 1 }
+            if r.flat { fallbacks += 1 }
         }
         let ms = Int(Date().timeIntervalSince(started) * 1000)
-        AppLog.line("window layers: captured \(windows.count) of \(candidates.count) windows in \(ms) ms (\(hdrCount) HDR)")
+        AppLog.line("window layers: captured \(windows.count - fallbacks) of \(candidates.count) windows in \(ms) ms (\(hdrCount) HDR, \(fallbacks) from the flat screen)")
         return windows
     }
 }

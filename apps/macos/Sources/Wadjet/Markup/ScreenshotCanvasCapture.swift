@@ -44,7 +44,19 @@ extension AppDelegate {
                 var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius ?? 0,
                     annotations: annotations, windowCapture: windowID != nil)
                 if keepWindows {
-                    var windows = await overlayCtrl.captureWindowLayers(over: screens, cursor: cursor)
+                    // a capture failure keeps the window's flat pixels, so it
+                    // still occludes what the flat displays show behind it
+                    let flat = { () -> CanvasDocument in
+                        var c = canvas; c.layerStack = LayerStack(); c.cornerRadius = 0; return c
+                    }()
+                    var windows = await overlayCtrl.captureWindowLayers(over: screens, cursor: cursor,
+                        wadjet: wadjet) { frame, scale in
+                        do { return try flat.flatten(crop: frame, scale: scale) }
+                        catch {
+                            AppLog.line("window layers: flat fallback: \(error.localizedDescription)")
+                            return nil
+                        }
+                    }
                     if let windowID {
                         // the captured window stays topmost so the output
                         // matches a plain Capture Window
