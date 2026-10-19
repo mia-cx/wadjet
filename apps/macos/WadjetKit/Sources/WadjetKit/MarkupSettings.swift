@@ -46,7 +46,8 @@ extension WadjetConfig {
         /// nil until the user restyles the Tool; the app then uses the Tool's built-in default
         public var style: AnnotationStyle?
         /// the Tool's last-picked variant — a ShapeVariant for Shapes at
-        /// `markup.tools.shapes.variant`, a Draw variant ("line"/"pen") for Draw
+        /// `markup.tools.shapes.variant`, a Draw variant ("line"/"pen"/…)
+        /// for Draw
         public var variant: String?
         /// a Shapes variant's option, at `markup.tools.<variant>.shape`
         public var shape: ShapeKind?
@@ -61,9 +62,12 @@ extension WadjetConfig {
         public var magnifier: MagnifierOptions?
         /// Censor: the categories Smart Redact blacks out, at `markup.tools.censor.smartRedact`; nil = every category
         public var smartRedact: Set<SmartRedactCategory>?
+        /// Brush variants' Smoothing, 0…1; nil = the default
+        public var smoothing: Double?
         public init(style: AnnotationStyle? = nil, variant: String? = nil, shape: ShapeKind? = nil,
                     censorMethod: CensorMethod? = nil, format: CounterFormat? = nil, size: CGFloat? = nil,
-                    magnifier: MagnifierOptions? = nil, smartRedact: Set<SmartRedactCategory>? = nil) {
+                    magnifier: MagnifierOptions? = nil, smartRedact: Set<SmartRedactCategory>? = nil,
+                    smoothing: Double? = nil) {
             self.style = style
             self.variant = variant
             self.shape = shape
@@ -72,6 +76,7 @@ extension WadjetConfig {
             self.size = size
             self.magnifier = magnifier
             self.smartRedact = smartRedact
+            self.smoothing = smoothing
         }
     }
 }

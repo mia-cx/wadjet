@@ -15,9 +15,11 @@ extension CGContext {
     /// draws one Annotation as the Markup panels do; hidden ones not at all. Blur and Pixelate render
     /// from `sources` in `format` and `colorSpace`, over black where no source covers them. A Magnify
     /// composites its viewport through MagnifyRenderer at `scale` pixels per point.
+    /// `blending: false` draws with the caller's blend mode — for mask passes.
     public func draw(_ annotation: Annotation, sources: [CensorSource] = [], scale: CGFloat = 1,
                      format: CIFormat = .RGBA8,
-                     colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!) {
+                     colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!,
+                     blending: Bool = true) {
         guard !annotation.hidden else { return }
         saveGState()
         if case let .censor(_, method) = annotation.kind, method.samplesBeneath {
@@ -44,6 +46,8 @@ extension CGContext {
         // at the panel's whole-Annotation opacity; Black out stays opaque.
         if case .censor = annotation.kind { setAlpha(1) }
         else { setAlpha(annotation.style.opacity) }
+        // a multiply Annotation darkens what's beneath it in the composite
+        if blending, annotation.style.blend == .multiply { setBlendMode(.multiply) }
         beginTransparencyLayer(auxiliaryInfo: nil)
         switch annotation.kind {
         case .line, .path:

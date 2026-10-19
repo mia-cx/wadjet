@@ -178,6 +178,12 @@ public enum CensorMethod: Codable, Equatable, Sendable {
     }
 }
 
+/// how an Annotation composites; Highlighter multiplies (named Blend — not
+/// BlendMode, which collides with SwiftUI's in app files)
+public enum AnnotationBlend: String, Codable, CaseIterable, Sendable {
+    case normal, multiply
+}
+
 /// a CGPoint on the wire as `[x, y]` and a CGRect as `[x, y, width, height]` —
 /// later Annotation kinds reuse these for their geometry
 extension KeyedDecodingContainer {
@@ -226,11 +232,13 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
     public var dash: LineDash
     /// the inside's colour — shapes, and closed paths; nil = unfilled
     public var fill: RGBAColour?
-    /// shapes only: false leaves just the fill
+    /// shapes and closed paths only: false leaves just the fill
     public var stroked: Bool
+    /// how the Annotation composites over what's beneath; a Highlighter multiplies
+    public var blend: AnnotationBlend
     public init(colour: RGBAColour, width: CGFloat, opacity: Double = 1,
                 head: LineEnd = .none, tail: LineEnd = .none, dash: LineDash = .solid,
-                fill: RGBAColour? = nil, stroked: Bool = true) {
+                fill: RGBAColour? = nil, stroked: Bool = true, blend: AnnotationBlend = .normal) {
         self.colour = colour
         self.width = width
         self.opacity = opacity
@@ -239,6 +247,7 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
         self.dash = dash
         self.fill = fill
         self.stroked = stroked
+        self.blend = blend
     }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -250,6 +259,7 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
         dash = try c.decodeIfPresent(LineDash.self, forKey: .dash) ?? .solid // saved before dashes existed
         fill = try c.decodeIfPresent(RGBAColour.self, forKey: .fill) // saved before shapes existed
         stroked = try c.decodeIfPresent(Bool.self, forKey: .stroked) ?? true
+        blend = try c.decodeIfPresent(AnnotationBlend.self, forKey: .blend) ?? .normal // saved before blends existed
     }
 }
 
