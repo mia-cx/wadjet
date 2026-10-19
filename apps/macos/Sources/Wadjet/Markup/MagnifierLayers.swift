@@ -89,23 +89,41 @@ import WadjetKit
                 host.sizingOptions = []
                 ordered.append(wrapper)
                 // cut the rim wherever a later Annotation paints over the
-                // magnifier — the wrappers are views above every canvas layer
-                var cut = CGMutablePath() as CGPath
-                for later in annotations.suffix(from: i + 1) {
-                    let c = PathGeometry.coverage(for: later)
-                    if c.boundingBoxOfPath.intersects(m.frame) {
-                        cut = cut.union(c, using: .winding)
-                    }
+                // magnifier, at real paint and real opacity — the wrappers are
+                // views above every canvas layer. coverage bbox stays the
+                // cheap pre-filter; the mask itself renders the annotations
+                let occluders = annotations.suffix(from: i + 1).filter {
+                    PathGeometry.coverage(for: $0).boundingBoxOfPath.intersects(m.frame)
                 }
-                if !cut.isEmpty {
-                    let mask = wrapper.layer?.mask as? CAShapeLayer ?? CAShapeLayer()
-                    var t = CGAffineTransform(translationX: -m.frame.minX, y: -m.frame.minY)
-                    mask.path = m.options.shape.path(in: m.frame)
-                        .subtracting(cut, using: .winding).copy(using: &t)
-                    mask.frame = CGRect(origin: .zero, size: m.frame.size)
-                    wrapper.layer?.mask = mask
-                } else {
+                if occluders.isEmpty {
                     wrapper.layer?.mask = nil
+                } else {
+                    let w = max(1, Int(ceil(m.frame.width * scale))),
+                        h = max(1, Int(ceil(m.frame.height * scale)))
+                    if let ctx = CGContext(data: nil, width: w, height: h,
+                        bitsPerComponent: 8, bytesPerRow: 0,
+                        space: CGColorSpaceCreateDeviceGray(),
+                        bitmapInfo: CGImageAlphaInfo.only.rawValue) {
+                        ctx.scaleBy(x: scale, y: scale)
+                        ctx.translateBy(x: -m.frame.minX, y: -m.frame.minY)
+                        ctx.setFillColor(CGColor(gray: 1, alpha: 1))
+                        ctx.addPath(m.options.shape.path(in: m.frame))
+                        ctx.fillPath()
+                        ctx.setBlendMode(.destinationOut)
+                        for later in occluders {
+                            ctx.draw(later, sources: [], scale: scale)
+                            // a later Magnify's content can't draw without
+                            // sources — its silhouette still occludes this rim
+                            if case let .magnify(lm) = later.kind {
+                                ctx.addPath(lm.options.shape.path(in: lm.frame))
+                                ctx.fillPath()
+                            }
+                        }
+                        let mask = wrapper.layer?.mask ?? CALayer()
+                        mask.contents = ctx.makeImage()
+                        mask.frame = wrapper.bounds
+                        wrapper.layer?.mask = mask
+                    }
                 }
             } else {
                 wrappers[a.id]?.removeFromSuperview()
