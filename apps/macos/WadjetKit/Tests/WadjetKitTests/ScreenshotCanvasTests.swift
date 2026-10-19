@@ -35,9 +35,13 @@ struct ScreenshotCanvasTests {
             style: crossing.style)
         let coveringShape = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: CGRect(x: -5, y: -5, width: 20, height: 20)),
             style: .init(colour: crossing.style.colour, width: 2, fill: crossing.style.colour, stroked: false))
+        // a window's coverage is its frame, like a fill: this one paints the crop
+        let window = Annotation(kind: .window(layerID: UUID(), frame: CGRect(x: 2, y: 2, width: 4, height: 4)),
+            style: crossing.style)
         let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(), crop: crop,
-            annotations: LayerStack([crossing, edge, rotated, misses, elsewhere, coveringCensor, coveringShape]), windowCapture: true)
-        #expect(canvas.layerStack.annotations == [crossing, edge, rotated, coveringCensor, coveringShape])
+            annotations: LayerStack([crossing, edge, rotated, misses, elsewhere, coveringCensor, coveringShape, window]),
+            windowCapture: true)
+        #expect(canvas.layerStack.annotations == [crossing, edge, rotated, coveringCensor, coveringShape, window])
         #expect(canvas.layout.count == 2)
     }
 

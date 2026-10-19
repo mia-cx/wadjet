@@ -16,7 +16,7 @@ extension AppDelegate {
         let annotations = MarkupController.shared.stack
         let workflow = takeShotWorkflow()
         let cursor = state.shotCursor, wadjet = state.shotWadjet
-        let keepWindows = tool.keepWindowsKey.map { state.config.value[keyPath: $0] } ?? false
+        let keepWindows = tool.captureSettings.map { state.config.value.tools[keyPath: $0].windowLayers } ?? false
         let clear = state.config.value.markup.clearAfterScreenshot
         let live = !overlayCtrl.showsFrozen
         let redact = tool.captureSettings.map { state.config.value.tools[keyPath: $0].smartRedact } ?? false

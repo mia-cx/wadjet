@@ -102,26 +102,14 @@ extension CGImage {
     }
 }
 
-extension Tool {
-    /// the config flag for Keep Windows as Layers, where the Tool has one
-    var keepWindowsKey: WritableKeyPath<WadjetConfig, Bool>? {
-        switch self {
-        case .capRegion: \.tools.captureRegion.windowLayers
-        case .capWindow: \.tools.captureWindow.windowLayers
-        case .capScreen: \.tools.captureScreen.windowLayers
-        default: nil
-        }
-    }
-}
-
 extension ToolMenuView {
-    /// the Keep Windows as Layers toggle, shown only on Capture Tools
+    /// the Screenshot Tools' Keep Windows as Layers toggle — it follows
+    /// autoRedactRow, whose divider covers both
     @ViewBuilder func keepWindowsRow() -> some View {
-        if let key = tool.keepWindowsKey {
-            divider()
+        if let key = tool.captureSettings {
             row("Keep Windows as Layers", icon: "square.3.layers.3d",
-                on: s.config.value[keyPath: key], isToggle: true) {
-                s.config.update { $0[keyPath: key].toggle() }
+                on: s.config.value.tools[keyPath: key].windowLayers, isToggle: true) {
+                s.config.update { $0.tools[keyPath: key].windowLayers.toggle() }
             }
         }
     }

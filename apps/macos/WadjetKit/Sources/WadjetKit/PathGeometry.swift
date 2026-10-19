@@ -186,8 +186,9 @@ public enum PathGeometry {
             ends: ends.copy(using: &t) ?? ends)
     }
 
-    /// the area an Annotation paints, as one path: its fill when `fillColour`
-    /// is set, ∪ its stroked outline when `strokeColour` is (∪ a Line's filled
+    /// the area an Annotation paints, as one path: its fill when it fills an
+    /// area (`fillsArea` — filled kinds and windows), ∪ its stroked outline
+    /// when `strokeColour` is (∪ a Line's filled
     /// end marks), ∪ for a Magnify the magnifier's silhouette (∪ that
     /// silhouette stroked at style.width when it carries a border). Use it
     /// where "does it paint here" matters — retention, coverage masks — where
@@ -195,7 +196,7 @@ public enum PathGeometry {
     public static func coverage(for a: Annotation) -> CGPath {
         let p = path(for: a)
         var covered = CGMutablePath() as CGPath
-        if a.fillColour != nil {
+        if a.fillsArea {
             covered = covered.union(p, using: .winding)
         }
         if a.strokeColour != nil {
