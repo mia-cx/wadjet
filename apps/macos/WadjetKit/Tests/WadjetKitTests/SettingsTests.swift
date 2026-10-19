@@ -32,6 +32,16 @@ struct SettingsTests {
         #expect(c.defaultWorkflows.recording == "MP4")
     }
 
+    @Test func clearAfterScreenshotDefaultsOffAndRoundTrips() throws {
+        let c = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
+        #expect(c.markup.clearAfterScreenshot == false)
+
+        var on = WadjetConfig()
+        on.markup.clearAfterScreenshot = true
+        let back = try JSONDecoder().decode(WadjetConfig.self, from: JSONEncoder().encode(on))
+        #expect(back.markup.clearAfterScreenshot == true)
+    }
+
     @Test func stepsAllowedPerKind() {
         let mp4 = Step.allowed(for: .mp4).map(\.title)
         let shot = Step.allowed(for: .screenshot).map(\.title)

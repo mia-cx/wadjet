@@ -56,9 +56,9 @@ enum Tool: String, CaseIterable {
             switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities"; case .markup: "Markup" }
         }
     }
-    /// nil for Markup Tools, which no Shortcut names yet
+    /// nil for Tools no Shortcut can name (Clear)
     var toolID: ToolID? { ToolID(rawValue: rawValue) }
-    var hasMenu: Bool { ![.copyText, .draw, .clearAnnotations].contains(self) }
+    var hasMenu: Bool { ![.copyText, .clearAnnotations].contains(self) }
     /// a toolbar button that acts at once instead of arming
     var isAction: Bool { self == .clearAnnotations }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
@@ -382,6 +382,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         rebuildMenu()
         overlayCtrl = OverlayController(app: self)
         toastCtrl = ToastController()
+        // a display plugged in while the island or live toolbar is up gets one too
+        NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
+                                               object: nil, queue: .main) { _ in
+            Task { @MainActor in AppDelegate.shared?.overlayCtrl.screensChanged() }
+        }
         Task { @MainActor in // live reload shows up in app.log
             var lastMode = AppState.shared.config.value.tools.measure.mode
             var lastShortcuts = AppState.shared.config.value.shortcuts
@@ -546,6 +551,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             m.addItem(it)
             if i == 2 || i == 5 { m.addItem(.separator()) }
         }
+        m.addItem(.separator())
+        // arms the last Markup Tool — a Shortcut naming it shows here too
+        let markup = NSMenuItem(title: "Markup", action: #selector(armLastMarkupTool), keyEquivalent: "")
+        markup.target = self
+        if let si = s.config.value.shortcuts.firstIndex(where: { $0.tool.rawValue == Tool.lastMarkup.rawValue }) {
+            markup.setShortcut(for: KeyboardShortcuts.Name("shortcut.\(si)"))
+        }
+        m.addItem(markup)
         m.addItem(.separator())
         let recent = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
         let rsub = NSMenu()
@@ -805,7 +818,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: trigger
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
-        if tool.isAction { MarkupController.shared.clear(); AppLog.line("markup: cleared"); return }
+        if tool.isAction { clearAnnotations(); return }
+        if tool.kind == .markup { Tool.lastMarkup = tool }
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
         if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup) {
@@ -990,6 +1004,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
             return
         }
+        if AppState.shared.config.value.markup.clearAfterScreenshot { clearAnnotations() }
         runCapture(file: file, kind: .screenshot, label: label, workflow: workflow)
     }
     /// Run a finished capture file through `workflow` (resolved by the caller
@@ -1241,7 +1256,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             guard live() else { return } // cancelled: nothing to report
             AppLog.line("record: could not resolve the source or name the file")
             s.recActive = false; s.phase = .desktop; recContext = nil
-            rebuildMenu(); overlayCtrl.closeAllPanelsOnly(); overlayCtrl.chromeScreens = []
+            rebuildMenu(); overlayCtrl.closeAllPanelsOnly(); overlayCtrl.syncDesktopChrome()
             recordingPanel?.close(); recordingPanel = nil
             errorToast("Couldn't record", "No capture source — Screen Recording permission may be off.")
             return
@@ -1277,7 +1292,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("record: stream failed to start: \(error.localizedDescription)")
             guard live() else { return } // a cancelled attempt must not reset a newer one
             s.recActive = false; s.phase = .desktop; recContext = nil
-            rebuildMenu(); overlayCtrl.closeAllPanelsOnly(); overlayCtrl.chromeScreens = []
+            rebuildMenu(); overlayCtrl.closeAllPanelsOnly(); overlayCtrl.syncDesktopChrome()
             recordingPanel?.close(); recordingPanel = nil
             errorToast("Couldn't record", error.localizedDescription)
         }
@@ -1311,6 +1326,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         s.phase = .desktop; recStart = nil; recContext = nil
         recordingPanel?.close(); recordingPanel = nil
         overlayCtrl.closeAllPanelsOnly()
+        overlayCtrl.syncDesktopChrome()
         AppLog.line("esc: cancelled countdown")
         rebuildMenu(); updateEscHotkey()
     }
@@ -1329,8 +1345,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // Workflow survives too). Without one, the recording chrome goes.
         if !s.toolbarOpen {
             s.phase = .desktop
-            overlayCtrl.chromeScreens = []
             overlayCtrl.closeAllPanelsOnly()
+            overlayCtrl.syncDesktopChrome()
         } else {
             // the bubble dies without the merge (there's no recording island to
             // merge into) and the island returns to the plain toolbar
@@ -1874,16 +1890,18 @@ final class OverlayController {
     // one display screenshot at pixel resolution: `cursor` decides whether the
     // pointer is composited in, `hdr` asks for an extended-sRGB variant
     // every full-display capture leaves out Wadjet's compact chrome — the
-    // collapsed island/notch and the collapsed recording bubble — so no stale
-    // remnant of our own UI freezes under the live one. Expanded toolbars and
-    // expanded bubble controls DO freeze into the shot, like any window.
+    // collapsed island/notch, the collapsed recording bubble, and the Markup
+    // toolbar, live or expanded — so no stale remnant of our own UI freezes
+    // under the live one. Expanded Recording-island controls and expanded
+    // bubble controls DO freeze into the shot, like any window.
     func frozenExcludedWindows(from content: SCShareableContent) -> [SCWindow] {
         var nums: [CGWindowID] = []
         let expanded = AppState.shared.expandedDisplay
+        let recIsland = AppState.shared.recActive && AppState.shared.showIslandWhileRecording && AppState.shared.phase == .desktop
         for (di, p) in toolbarPanels {
-            // while only the toolbar is up, every toolbar panel stays out of
-            // the next Freeze Frame (expanded included)
-            if di != expanded || AppState.shared.phase == .toolbar { nums.append(CGWindowID(p.windowNumber)) }
+            // only the expanded Recording island freezes in; the collapsed
+            // island and the live/expanded Markup toolbar never do
+            if di != expanded || !recIsland { nums.append(CGWindowID(p.windowNumber)) }
         }
         nums.append(contentsOf: MarkupController.shared.windowNumbers.map(CGWindowID.init))
         for (di, p) in recBubblePanels {
@@ -2105,7 +2123,9 @@ final class OverlayController {
         }
         let filter: SCContentFilter
         if wadjet {
-            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluding.contains(Int($0.windowID)) })
+            // closeAll may have rebuilt the desktop islands since `excluding` was taken
+            let excluded = excluding.union(toolbarPanels.values.map(\.windowNumber))
+            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluded.contains(Int($0.windowID)) })
         } else {
             let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
             filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
@@ -2170,7 +2190,8 @@ final class OverlayController {
     func refreshToolbars() {
         toolbarPanels.values.forEach { $0.close() }
         toolbarPanels = [:]
-        if AppState.shared.toolbarOpen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording) { showToolbars() }
+        if AppState.shared.toolbarOpen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording)
+            || !MarkupController.shared.stack.isEmpty { showToolbars() }
         AppLog.line("chrome: \(toolbarPanels.count) islands, \(recBubblePanels.count) bubbles on \(chromeScreens.count) screens")
     }
     func closeAllPanelsOnly() {
@@ -2216,11 +2237,10 @@ final class OverlayController {
         if AppState.shared.phase != .desktop { AppLog.line("phase=desktop (overlay closed)") }
         AppState.shared.phase = .desktop
         closeAllPanelsOnly()
-        // mid-Recording the recording island returns once the overlay is gone;
-        // the Freeze Frame is about to be freed, so the islands ride the live
-        // screens from here on
-        if AppState.shared.recActive { chromeScreens = NSScreen.screens; refreshToolbars() }
-        else { chromeScreens = [] }
+        // mid-Recording the recording island returns once the overlay is gone,
+        // and the island stays while Annotations exist; the Freeze Frame is
+        // about to be freed, so the islands ride the live screens from here on
+        syncDesktopChrome()
         AppState.shared.expandedDisplay = nil
         Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
         NSCursor.arrow.set()
@@ -2871,10 +2891,12 @@ struct ToolbarView: View {
     // menu bar band with a small gap above it. Both show the current Tool's icon
     // and an expand chevron (or the recording dot and time) in ears either side
     // of the notch, so the toolbar is visible while collapsed.
-    var earW: CGFloat { recording ? 48 : 28 }
+    /// the wide collapsed island: recording dot + time, or the Annotation count
+    var wideIsland: Bool { recording || annotationCount != nil }
+    var earW: CGFloat { wideIsland ? 48 : 28 }
     // A fake island sizes like the notched one: the notch-width formula with
     // a 185 pt stand-in notch on displays that don't have one.
-    var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (recording ? 120 : 100) }
+    var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (wideIsland ? 120 : 100) }
     var islandH: CGFloat { max(22, barH) }
     var gap: CGFloat { hasNotch ? 0 : 3 }
     var pillH: CGFloat { islandH - 2 * gap }
@@ -2932,8 +2954,12 @@ struct ToolbarView: View {
     func syncExpanded() {
         // an open menu holds its own display expanded — it must NOT make the
         // other displays claim expandedDisplay, which collapses this one and
-        // kills the menu
+        // kills the menu. An armed Markup Tool holds the bar expanded —
+        // claiming the pointer's display if none is expanded — until Escape
+        // or a non-Markup Tool releases it.
+        let pointerOnScreen = screen.map { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? false
         let h = hoverInside || lensActive || (s.openMenu != nil && s.expandedDisplay == displayIndex)
+            || (MarkupController.shared.armed != nil && (s.expandedDisplay == displayIndex || (s.expandedDisplay == nil && pointerOnScreen)))
         if h != expanded { AppLog.line("hover d\(displayIndex) -> \(h)") }
         if h { s.expandedDisplay = displayIndex }
         else if s.expandedDisplay == displayIndex { s.expandedDisplay = nil }
@@ -2978,13 +3004,18 @@ struct ToolbarView: View {
             }
             .onChange(of: hoverInside) { syncExpanded() }
             .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded() }
-            .onAppear { syncHit(); syncLensBg() }
+            .onAppear { syncHit(); syncLensBg()
+                // a Markup Tool armed by a Shortcut or the menu expands the new
+                // bar; unarmed bars wait for hover so they don't collapse under
+                // a resting pointer
+                if MarkupController.shared.armed != nil { syncExpanded() }
+            }
             .onChange(of: rowSize) { syncHit(); syncLensBg() }
             .onChange(of: expanded) {
                 if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
                 else {
                     var tx = Transaction(); tx.disablesAnimations = true
-                    withTransaction(tx) { openGroup = s.tool?.kind ?? .shot }
+                    withTransaction(tx) { openGroup = restingGroup }
                 }
                 syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
@@ -3008,7 +3039,7 @@ struct ToolbarView: View {
                     snapLens(to: c); pressing = true
                 } else if s.debugHold == nil { pressing = false }
             }
-            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit() }
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit(); syncExpanded() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -3048,6 +3079,8 @@ struct ToolbarView: View {
     // island contents, Dynamic-Island-style: one leading item concentric with
     // the rounded end cap (its centre pillH/2 from the edge). Frozen: the
     // current Tool's icon only. Recording: red dot leading, elapsed trailing.
+    // Annotations on the desktop: the Markup badge leading, their count
+    // trailing — the count island stays on every display until they're cleared.
     // island: items sit concentric with the end caps; notch: centred in the ears
     // Non-notch: the leading round item's centre sits pillH/2 from the end —
     // concentric with the end cap — and the trailing item's edge mirrors the
@@ -3059,7 +3092,9 @@ struct ToolbarView: View {
                 Circle().fill(.red).frame(width: 8, height: 8)
                     .frame(width: islandSlot, height: pillH)
             } else {
-                Image(systemName: (s.tool ?? .capRegion).symbol)
+                // nothing selected (the count island, or the live toolbar
+                // unarmed): the Markup group's badge
+                Image(systemName: s.tool?.symbol ?? Tool.Kind.markup.badge)
                     .resizable().scaledToFit()
                     .frame(width: min(pillH * 0.45, pillH - 14), height: min(pillH * 0.45, pillH - 14))
                     // on the glyph's own frame, so size and position both travel
@@ -3067,15 +3102,22 @@ struct ToolbarView: View {
                     .frame(width: islandSlot, height: pillH)
             }
             Spacer(minLength: 0)
-            if recording {
-                // the time must never touch the cap or the notch: measure it
-                // and inset its edge like the leading dot's, shrinking the
+            if recording || annotationCount != nil {
+                // the time/count must never touch the cap or the notch: measure
+                // it and inset its edge like the leading dot's, shrinking the
                 // inset only as far as the glyph itself needs
-                Text(fmtT(s.recordingElapsed)).font(.system(size: 12)).monospacedDigit()
-                    .fixedSize()
-                    .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { islandTimeW = $0 }
-                    .padding(.trailing, max(4, min((islandSlot - 8) / 2, islandSlot - islandTimeW - 4)))
-                    .frame(height: pillH)
+                Group {
+                    if recording { Text(fmtT(s.recordingElapsed)) }
+                    else {
+                        let n = annotationCount ?? 0
+                        Text("\(n)").accessibilityLabel(n == 1 ? "1 Annotation" : "\(n) Annotations")
+                    }
+                }
+                .font(.system(size: 12)).monospacedDigit()
+                .fixedSize()
+                .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { islandTimeW = $0 }
+                .padding(.trailing, max(4, min((islandSlot - 8) / 2, islandSlot - islandTimeW - 4)))
+                .frame(height: pillH)
             }
         }
         .foregroundStyle(.white)
@@ -3681,7 +3723,7 @@ struct ToolbarView: View {
             else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
             // the selected Tool's group is the default open one; a collapsed
             // group's click opens it
-            if !lensActive { openTheGroup(s.tool?.kind ?? .shot) }
+            if !lensActive { openTheGroup(restingGroup) }
         }
         .padding(.top, contentTop)
 
@@ -3971,6 +4013,7 @@ struct ToolMenuView: View {
                 section("Code") { colourRows([.swiftUI]) }
             case .util where tool == .measure:
                 tileRow(measureTiles)
+            case .markup: clearAfterScreenshotRow()
             default: EmptyView()
             }
         }

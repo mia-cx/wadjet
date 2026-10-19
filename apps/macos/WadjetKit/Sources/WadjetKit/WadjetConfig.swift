@@ -21,6 +21,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     public var retentionDays = 7
     public var recording = Recording()
     public var capture = Capture()
+    public var markup = Markup()
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -90,6 +91,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 7
         recording = try c.decodeIfPresent(Recording.self, forKey: .recording) ?? Recording()
         capture = try c.decodeIfPresent(Capture.self, forKey: .capture) ?? Capture()
+        markup = try c.decodeIfPresent(Markup.self, forKey: .markup) ?? Markup()
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -140,9 +142,10 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(retentionDays, forKey: .retentionDays)
         try c.encode(recording, forKey: .recording)
         try c.encode(capture, forKey: .capture)
+        try c.encode(markup, forKey: .markup)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, markup
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
