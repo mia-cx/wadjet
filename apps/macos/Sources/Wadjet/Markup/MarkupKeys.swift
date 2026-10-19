@@ -35,9 +35,10 @@ final class MarkupKeys {
         if active { register() } else { unregister() }
     }
 
-    /// the key code that types `character` unmodified in the current keyboard
-    /// layout, or nil — Carbon hot keys match key codes, which are physical
-    /// positions (Z sits where US has Y on German QWERTZ)
+    /// the key code that types `character` with Command held in the current
+    /// keyboard layout, or nil — Carbon hot keys match key codes, which are
+    /// physical positions (Z sits where US has Y on German QWERTZ), and layouts
+    /// with a Command-specific map ("Dvorak - QWERTY ⌘") move the shortcut's key
     private static func keyCode(typing character: Character) -> Int? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
@@ -49,7 +50,8 @@ final class MarkupKeys {
                 var dead: UInt32 = 0
                 var chars = [UniChar](repeating: 0, count: 4)
                 var length = 0
-                let err = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown), 0, UInt32(LMGetKbdType()),
+                let err = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown),
+                                         UInt32((cmdKey >> 8) & 0xFF), UInt32(LMGetKbdType()),
                                          OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, chars.count, &length, &chars)
                 if err == noErr, String(utf16CodeUnits: chars, count: length).lowercased() == want { return code }
             }
