@@ -39,7 +39,11 @@ extension CanvasDocument {
         }
         for annotation in layerStack.annotations {
             context.saveGState()
-            // The transform/opacity slice will apply its model fields here; Black out stays opaque.
+            // PathGeometry applies transforms. Composite fill and stroke together
+            // at the panel's whole-Annotation opacity; Black out stays opaque.
+            if case .censor = annotation.kind { context.setAlpha(1) }
+            else { context.setAlpha(annotation.style.opacity) }
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
             let path = PathGeometry.path(for: annotation)
             if let fill = annotation.fillColour {
                 context.setFillColor(fill.cgColor)
@@ -54,6 +58,7 @@ extension CanvasDocument {
                 context.addPath(path)
                 context.strokePath()
             }
+            context.endTransparencyLayer()
             context.restoreGState()
         }
         context.endTransparencyLayer()

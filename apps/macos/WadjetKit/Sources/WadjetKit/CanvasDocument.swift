@@ -46,7 +46,7 @@ public struct CanvasLink: Codable, Equatable, Sendable {
 /// Editable Screenshot contents, independent of screen capture and SwiftUI.
 /// All geometry is in AppKit global points, including Annotations outside the crop.
 /// The app must export this identifier with `com.apple.package` and
-/// `public.composite-content` conformance in its document type declaration.
+/// `public.composite-content` conformance in its exported type declaration.
 public struct CanvasDocument {
     public static let contentType = UTType(exportedAs: "cx.mia.wadjet.canvas", conformingTo: .package)
     public static let version = 1

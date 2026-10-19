@@ -28,5 +28,24 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Wadjet captures a Freeze Frame of the screen.</string>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>cx.mia.wadjet.canvas</string>
+            <key>UTTypeDescription</key>
+            <string>Wadjet Canvas</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.apple.package</string>
+                <string>public.composite-content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>wadjet</string></array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>

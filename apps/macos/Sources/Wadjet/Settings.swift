@@ -397,17 +397,20 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
         return AnyView(VStack(alignment: .leading) {
             Text(st.title)
             switch st {
-            case .saveFile(let folder):
+            case .saveFile(let folder, let format):
+                if cfg.workflows[wf].takes == .screenshot {
+                    SaveFileFormatPicker(workflow: wf, step: step, folder: folder, format: format)
+                }
                 HStack {
                     Text(folder ?? "Default folder").font(.caption).foregroundStyle(.secondary)
                     Button("Choose…") {
                         guard let pick = pickFolder() else { return }
                         edit { guard step < $0.workflows[wf].steps.count else { return }
-                            $0.workflows[wf].steps[step] = .saveFile(folder: pick.path)
+                            $0.workflows[wf].steps[step] = .saveFile(folder: pick.path, format: format)
                             if let mark = pick.bookmark { $0.bookmarks[pick.path] = mark } }
                     }.font(.caption)
                     if folder != nil {
-                        Button("Use Default") { edit { $0.workflows[wf].steps[step] = .saveFile(folder: nil) } }.font(.caption)
+                        Button("Use Default") { edit { $0.workflows[wf].steps[step] = .saveFile(folder: nil, format: format) } }.font(.caption)
                     }
                 }
             case .openIn(let app):
