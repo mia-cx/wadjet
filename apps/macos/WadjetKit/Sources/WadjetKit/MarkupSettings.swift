@@ -7,12 +7,17 @@ extension WadjetConfig {
     /// circle under the pointer while nothing is armed.
     /// `tools` holds per-Tool settings keyed by the Markup Tool's raw name
     /// ("draw"); `recentColours` ranks the colours used in Markup for the
-    /// colour control's swatches (hex "#RRGGBB").
+    /// colour control's swatches (hex "#RRGGBB"); `toolRanking` ranks Markup
+    /// Tools by raw name for the toolbar's shortlist (and the menu bar's last
+    /// Markup Tool).
     public struct Markup: Codable, Equatable, Sendable {
         public var clearAfterScreenshot = false
         public var peerThrough = true
         public var tools: [String: MarkupTool] = [:]
         public var recentColours = FrecencyRanker<String>()
+        public var toolRanking = FrecencyRanker<String>()
+        /// the colour history's bound — enough recents to pick from, no hoarding
+        public static let recentColourLimit = 24
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
@@ -20,6 +25,12 @@ extension WadjetConfig {
             peerThrough = try c.decodeIfPresent(Bool.self, forKey: .peerThrough) ?? true
             tools = try c.decodeIfPresent([String: MarkupTool].self, forKey: .tools) ?? [:]
             recentColours = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .recentColours) ?? FrecencyRanker()
+            toolRanking = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .toolRanking) ?? FrecencyRanker()
+        }
+        /// records a colour use; the history keeps the `recentColourLimit` best-ranked colours
+        public mutating func recordColour(_ hex: String, at date: Date = .now) {
+            recentColours.recordUse(of: hex, at: date)
+            recentColours.prune(keeping: Self.recentColourLimit, at: date)
         }
     }
     /// one Markup Tool's settings; later slices add theirs (Line ends, Text font…) here.

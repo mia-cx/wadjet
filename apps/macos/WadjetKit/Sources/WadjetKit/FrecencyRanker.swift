@@ -69,6 +69,18 @@ public struct FrecencyRanker<Item: Hashable & Codable>: Codable {
         return entry.score * pow(0.5, max(0, date.timeIntervalSince(entry.date)) / halfLife)
     }
 
+    /// Forgets all but the `limit` highest-scoring used items at `date`, so a history
+    /// with no fixed candidate list (recent colours) stays bounded. Ties drop the older
+    /// use first. The published lists change at the next refresh.
+    public mutating func prune(keeping limit: Int, at date: Date = .now) {
+        let keep = Set(usage.keys.sorted { lhs, rhs in
+            let left = score(for: lhs, at: date)
+            let right = score(for: rhs, at: date)
+            return left == right ? usage[lhs]!.date > usage[rhs]!.date : left > right
+        }.prefix(limit))
+        usage = usage.filter { keep.contains($0.key) }
+    }
+
     /// Every item with recorded use, most recent first — lets a caller rank
     /// everything it has recorded (the colour swatches), since recent colours
     /// have no fixed candidate list.

@@ -81,7 +81,7 @@ struct ConfigStoreTests {
         #expect(b.value.tools.measure.mode == .vertical)
     }
 
-    // Proves per-Tool styles and recent colours survive a save and reload
+    // Proves per-Tool styles, recent colours and the Tool ranking survive a save and reload
     @Test func markupSettingsSurviveReload() throws {
         let url = tempFile()
         let a = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
@@ -90,11 +90,14 @@ struct ConfigStoreTests {
                 colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 8, opacity: 0.5))
             $0.markup.recentColours.recordUse(of: "#FF3B30")
             $0.markup.recentColours.refresh(candidates: ["#FF3B30", "#007AFF"])
+            $0.markup.toolRanking.recordUse(of: "censor")
         }
         let b = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
         #expect(b.value.markup.tools["draw"]?.style?.width == 8)
         #expect(b.value.markup.tools["draw"]?.style?.opacity == 0.5)
         #expect(b.value.markup.recentColours.rankedItems.first == "#FF3B30")
+        var ranking = b.value.markup.toolRanking
+        #expect(MarkupShortlist.open(["select", "draw", "text", "censor"], pinned: ["select"], ranking: &ranking).slots.first == "censor")
         let empty = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
         #expect(empty.markup.tools.isEmpty)
     }

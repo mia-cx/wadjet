@@ -45,6 +45,22 @@ struct SettingsTests {
         #expect(back.markup.peerThrough == false)
     }
 
+    // Proves the colour history stays bounded: the best-ranked colours survive
+    // the cap and the oldest single-use colours drop first.
+    @Test func recentColourLimitPrunesOldest() {
+        let t0 = Date(timeIntervalSince1970: 0)
+        var markup = WadjetConfig.Markup()
+        for _ in 0 ..< 5 { markup.recordColour("#000000", at: t0) }
+        for i in 1 ... 30 {
+            markup.recordColour(String(format: "#%06X", i), at: t0.addingTimeInterval(TimeInterval(i) * 3600))
+        }
+        let used = markup.recentColours.usedItems
+        #expect(used.count == WadjetConfig.Markup.recentColourLimit)
+        #expect(used.contains("#000000"))
+        #expect(used.contains(String(format: "#%06X", 30)))
+        for i in 1 ... 7 { #expect(!used.contains(String(format: "#%06X", i))) }
+    }
+
     @Test func stepsAllowedPerKind() {
         let mp4 = Step.allowed(for: .mp4).map(\.title)
         let shot = Step.allowed(for: .screenshot).map(\.title)

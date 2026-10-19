@@ -43,7 +43,7 @@ final class MarkupStyles {
     func useColour(_ c: RGBAColour, for tool: Tool, target: ColourTarget = .stroke) {
         let colour = RGBAColour(red: c.red, green: c.green, blue: c.blue, alpha: 1)
         restyle(tool) { $0.setColour(colour, for: target) }
-        config.update { $0.markup.recentColours.recordUse(of: colour.hex) }
+        config.update { $0.markup.recordColour(colour.hex) }
     }
 
     /// the colour row's swatch cells: recent colours first, presets filling in
@@ -82,7 +82,7 @@ final class MarkupStyles {
         let colour = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
         if let id = e.annotation {
             MarkupController.shared.restyle(id) { $0.setColour(colour, for: e.target) }
-            config.update { $0.markup.recentColours.recordUse(of: colour.hex) }
+            config.update { $0.markup.recordColour(colour.hex) }
         } else {
             useColour(colour, for: e.tool, target: e.target)
         }
