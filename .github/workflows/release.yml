@@ -1,0 +1,132 @@
+name: Release
+
+# pushes to main keep a `chore(release): version app` PR open; merging that
+# PR triggers publish — isReleaseMerge is what authorizes the tag + release
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+# per-commit so a release merge is never replaced by a later push
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read # commits/<sha>/pulls reads PR refs
+    outputs:
+      release: ${{ steps.plan.outputs.release }}
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm test:release
+      - name: Is this push a merged release PR?
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/commits/$GITHUB_SHA/pulls" --paginate --slurp \
+            | node scripts/release-merge.mjs "$GITHUB_SHA" "$GITHUB_REPOSITORY" \
+            | { read r; echo "release=$r" >> "$GITHUB_OUTPUT"; }
+      - name: App version
+        id: version
+        run: node -e "console.log('version=' + require('./apps/macos/package.json').version)" >> "$GITHUB_OUTPUT"
+
+  # the version-PR job: runs one at a time, and only for the commit main
+  # points at — changesets/action versions and force-pushes from github.sha,
+  # so an older run finishing late would otherwise overwrite a newer plan.
+  # queue: max keeps every pending job, so a stale one can't displace main's
+  release-pr:
+    needs: version
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    concurrency:
+      group: release-pr
+      cancel-in-progress: false
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Is this still main's head?
+        id: head
+        run: |
+          main="$(git ls-remote origin refs/heads/main | cut -f1)"
+          if [ "$main" = "$GITHUB_SHA" ]; then echo "current=true" >> "$GITHUB_OUTPUT"
+          else echo "current=false" >> "$GITHUB_OUTPUT"; echo "main moved to $main; its own run updates the version PR"; fi
+      - if: steps.head.outputs.current == 'true'
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - if: steps.head.outputs.current == 'true'
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.20.0
+          cache: pnpm
+      - if: steps.head.outputs.current == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: steps.head.outputs.current == 'true'
+        uses: changesets/action@ae32849d5ba541f9ae29e40e22a623bc13562f51 # v2
+        with:
+          version-script: pnpm release:version
+          commit-message: "chore(release): version app"
+          pr-title: "chore(release): version app"
+          pr-base-branch: main
+          create-github-releases: false
+          push-git-tags: false
+
+  publish:
+    needs: version
+    if: needs.version.outputs.release == 'true'
+    runs-on: macos-26
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+      - name: Build the DMG
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # CI has no signing identity, so run.sh falls back to ad-hoc —
+          # expected for alpha builds; testers install via "Open Anyway".
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $GITHUB_RUN_NUMBER" \
+            apps/macos/Resources/Info.plist
+          apps/macos/tools/dmg.sh
+          mv "apps/macos/build/Wadjet-$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' apps/macos/build/Wadjet.app/Contents/Info.plist).dmg" \
+             "Wadjet-$VERSION.dmg"
+      - name: Tag and publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # gh release create tags $GITHUB_SHA itself
+          if gh release view "v$VERSION" >/dev/null 2>&1; then
+            # idempotent re-run: replace the asset but leave the release alone
+            gh release upload "v$VERSION" "Wadjet-$VERSION.dmg" --clobber
+            exit 0
+          fi
+          notes=$(mktemp)
+          node scripts/release-notes.mjs "$VERSION" > "$notes"
+          args=(--target "$GITHUB_SHA" --title "Wadjet $VERSION" --notes-file "$notes")
+          [[ "$VERSION" == *-* ]] && args+=(--prerelease)
+          gh release create "v$VERSION" "Wadjet-$VERSION.dmg" "${args[@]}"

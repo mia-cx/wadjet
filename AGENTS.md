@@ -4,6 +4,7 @@
 
 - Build through `apps/macos/run.sh`, not Xcode's Run button or a bare `xcodebuild`: macOS ties the Screen Recording grant to the bundle's signing identity, and only run.sh signs with Apple Development (the project defaults to ad-hoc). An ad-hoc build re-prompts every time.
 - `Sources/Wadjet` is a folder-synced group: add Swift files on disk and never edit `project.pbxproj` for them.
+- `apps/macos/tools/dmg.sh` builds `build/Wadjet-<version>.dmg` for GitHub pre-releases: Apple Development-signed locally, ad-hoc in CI, not notarized.
 - `swift test` in `apps/macos/WadjetKit` tests the UI-free code (colour formats, Measure edge finding, config store, workflow runner, shortcut parsing) without the app.
 - Global Shortcuts live in config.json (`shortcuts`, none by default — wadjet ships none). Add one by hand, e.g. `{"keys":"ctrl+opt+cmd+9","tool":"pickColour"}`; the file is watched live. `defaultWorkflows.screenshot`/`.recording` name each kind's default Workflow.
 - Local builds use the Xcode beta (`run.sh` sets `DEVELOPER_DIR`); CI builds with the runner's stable Xcode 26 and warnings as errors. Keep the code compiling on both.
@@ -14,6 +15,10 @@
 
 - The root is a pnpm Turborepo with Biome. `pnpm lint`, `pnpm build`, and `pnpm test` cover `packages/*` and `apps/*` except `apps/macos`.
 - `packages/protocol/PROTOCOL.md` quotes every fixture in `packages/protocol/fixtures/` in full, and a test fails when they disagree. Change both together.
+
+## Releases
+
+- Every user-visible change to the macOS app adds one changeset (`pnpm changeset` → `@wadjet/macos`, one short summary sentence; keep pending changeset files immutable). See `.changeset/README.md`.
 
 ## Code gotchas
 
