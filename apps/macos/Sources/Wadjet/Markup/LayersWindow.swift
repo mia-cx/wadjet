@@ -142,8 +142,19 @@ extension AnnotationKind {
     var title: String {
         switch self {
         case .line: "Line"
-        case .censor: "Black out"
+        case let .censor(_, method): method.title
         case let .shape(kind, _): kind.variant.rawValue.capitalized
+        }
+    }
+}
+
+extension CensorMethod {
+    /// the Layers row's name, as the method tile captions it
+    var title: String {
+        switch self {
+        case .blackOut: "Black out"
+        case .blur: "Blur"
+        case .pixelate: "Pixelate"
         }
     }
 }
