@@ -86,9 +86,10 @@ import WadjetKit
                     if case .window = $0.kind { return !$0.hidden }
                     return false
                 }
-                if !below.isEmpty {
-                    sources = beneath?(below, m.viewport, renderScale)
-                        .map { [(CIImage(cgImage: $0.image), $0.frame)] } ?? []
+                // `beneath` answers nil when no window paints the viewport —
+                // fall back to the display sources, like flatten does
+                if let b = beneath?(below, m.viewport, renderScale) {
+                    sources = [(CIImage(cgImage: b.image), b.frame)]
                 } else {
                     sources = staticSources.filter { $0.rect.intersects(m.viewport) }
                 }

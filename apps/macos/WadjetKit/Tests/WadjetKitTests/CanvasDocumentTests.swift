@@ -466,7 +466,6 @@ struct CanvasDocumentTests {
     // at fractional scales a snapped rect's width*scale can round up one pixel,
     // and an off-by-one frame would mis-scale the Censor's sampling again.
     @Test func censorSamplesFractionalScaleFully() throws {
-        let scale: CGFloat = 256 / 422
         var document = CanvasDocument(
             layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 60, height: 80), scaleFactor: 1)],
             crop: CGRect(x: 0, y: 0, width: 60, height: 80),
@@ -477,26 +476,81 @@ struct CanvasDocumentTests {
         ])
         let red = try #require(document.layerStack.annotations.last)
         document.layerStack.replace(red.moved(by: CGVector(dx: -30, dy: 0))) // window covers it all
-        // output pixels fully inside the Censor: columns 7…11; the strip the
-        // unsnapped frame leaves (y_pt 55.84–60.9) is rows 12–13 or 34–35
-        // depending on row order, so assert both plus a deep-interior row
-        let width = Int(ceil(60 * scale)), height = Int(ceil(80 * scale))
-        for method in [CensorMethod.pixelate(blockSize: 1), .blur(radius: 1)] {
-            var doc = document
-            doc.layerStack.add(Annotation(
-                kind: .censor(rect: CGRect(x: 10.4, y: 20.1, width: 10.2, height: 40.8),
-                              method: method),
-                style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 0)))
-            let flat = try doc.flatten(scale: scale)
-            #expect(flat.width == width && flat.height == height)
-            let px = try linearPixels(flat)
-            func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * width + x)..<4 * (y * width + x) + 4]) }
-            for (x, y) in [(8, 13), (8, 34), (8, 35), (8, 25)] {
-                let p = pixel(x, y)
-                #expect(zip(p, [1, 0, 0, 1] as [Float]).allSatisfy { abs($0 - $1) < 0.01 },
-                        "\(method) pixel (\(x), \(y)) = \(p)")
+        // the beneath source renders at density = max(scale, the display's
+        // scaleFactor) — fractional at both these scales: 256/422 rides the
+        // display's 1x grid, 1.5 is fractional on its own. Fully-inside pixels
+        // differ per scale; assert rows near each edge plus the middle.
+        for scale in [CGFloat(256) / 422, 1.5] {
+            let width = Int(ceil(60 * scale)), height = Int(ceil(80 * scale))
+            for method in [CensorMethod.pixelate(blockSize: 1), .blur(radius: 1)] {
+                var doc = document
+                doc.layerStack.add(Annotation(
+                    kind: .censor(rect: CGRect(x: 10.4, y: 20.1, width: 10.2, height: 40.8),
+                                  method: method),
+                    style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 0)))
+                let flat = try doc.flatten(scale: scale)
+                #expect(flat.width == width && flat.height == height)
+                let px = try linearPixels(flat)
+                func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * width + x)..<4 * (y * width + x) + 4]) }
+                let x = scale < 1 ? 8 : 20, rows = scale < 1 ? [13, 25, 34, 35] : [40, 60, 80]
+                for y in rows {
+                    let p = pixel(x, y)
+                    #expect(zip(p, [1, 0, 0, 1] as [Float]).allSatisfy { abs($0 - $1) < 0.01 },
+                            "\(method) scale \(scale) pixel y=\(y) = \(p)")
+                }
             }
         }
+    }
+
+    // Proves beneathSource renders at the captured display's own density when
+    /// it's higher than the caller's: a 2x display over a 4-pt rect yields an
+    // 8-px image covering exactly that rect, not a downsampled 4-px one.
+    @Test func beneathSourceKeepsNativeDensity() throws {
+        var document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 4, height: 4), scaleFactor: 2)],
+            crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+            displayImages: [1: try solidImage([0, 0, 1, 1], width: 8, height: 8)])
+        document.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 0, y: 0, width: 4, height: 4),
+                           image: try solidImage([1, 0, 0, 1], width: 8, height: 8)),
+        ])
+        let window = try #require(document.layerStack.annotations.last)
+        let source = try #require(try document.beneathSource(
+            windows: [window], rect: CGRect(x: 0, y: 0, width: 4, height: 4), scale: 1))
+        #expect(source.image.width == 8 && source.image.height == 8)
+        #expect(source.frame == CGRect(x: 0, y: 0, width: 4, height: 4))
+    }
+
+    // Proves a window that doesn't paint the sampled rect is invisible to it:
+    // beneathSource declines it, and a Magnify's flattened output is identical
+    // with and without the distant window in the stack.
+    @Test func beneathSourceIgnoresUnrelatedWindows() throws {
+        // alternating red/blue source-pixel columns on a 2x display
+        var columns = [UInt8]()
+        for _ in 0..<16 {
+            for x in 0..<32 { columns += x.isMultiple(of: 2) ? [255, 0, 0, 255] : [0, 0, 255, 255] }
+        }
+        var document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 16, height: 8), scaleFactor: 2)],
+            crop: CGRect(x: 0, y: 0, width: 16, height: 8),
+            displayImages: [1: try image(width: 32, height: 16, pixels: columns)])
+        let magnify = Annotation(
+            kind: .magnify(.init(source: CGRect(x: 0, y: 0, width: 4, height: 4),
+                                 frame: CGRect(x: 8, y: 0, width: 8, height: 8), zoom: 2,
+                                 options: .init(leader: false, glass: false))),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))
+        document.layerStack.add(magnify)
+        // a visible window stacked beneath the Magnify but far off its viewport
+        var withWindow = document
+        withWindow.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 200, y: 200, width: 4, height: 4),
+                           image: try solidImage([0, 1, 0, 1], width: 4, height: 4)),
+        ])
+        let window = try #require(withWindow.layerStack.annotations.first)
+        #expect(try withWindow.beneathSource(windows: [window],
+            rect: CGRect(x: 0, y: 0, width: 4, height: 4), scale: 1) == nil)
+        #expect(try linearPixels(document.flatten(scale: 1))
+                == linearPixels(withWindow.flatten(scale: 1)))
     }
 
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.

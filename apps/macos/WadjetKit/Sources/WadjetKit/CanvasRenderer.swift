@@ -90,11 +90,21 @@ extension CanvasDocument {
     /// The pixels a sampling Annotation reads when windows sit beneath it: the
     /// displays plus `windows` (visible `.window` Annotations, back to front;
     /// backdrop layers stay out) rendered over `rect` snapped outward to the
-    /// pixel grid at `scale`; the frame's size comes from the rendered image.
-    /// Moved windows are sampled where they sit, not where the flat displays
-    /// froze them — the filters only read inside their sampled rect.
+    /// pixel grid at `scale` — at least `scale` pixels per point, and the
+    /// captured displays' own density where higher, so magnifying never starts
+    /// from a downsampled source. The frame's size comes from the rendered
+    /// image. Moved windows are sampled where they sit, not where the flat
+    /// displays froze them — the filters only read inside their sampled rect.
+    /// Returns nil when no window paints on `rect` or the snapped rect isn't
+    /// valid — callers then keep the display sources unchanged.
     public func beneathSource(windows: [Annotation], rect: CGRect,
                             scale: CGFloat) throws -> CensorSource? {
+        let touching = windows.filter {
+            PathGeometry.path(for: $0).boundingBox.intersects(rect)
+        }
+        guard !touching.isEmpty else { return nil }
+        let density = max(scale, layout.filter { $0.frame.intersects(rect) }
+            .map(\.scaleFactor).max() ?? 0)
         // snap outward to the output pixel grid: flatten allocates
         // ceil-sized pixels, and the filters infer one scale from
         // width — an unsnapped box would leave a strip unsampled. The
@@ -103,19 +113,19 @@ extension CanvasDocument {
         // image is the exact record of what was rendered (pixel i
         // covers snapped.min + i/scale; a roundoff pixel sits past
         // the edge).
-        let snapped = CGRect(x: floor(rect.minX * scale) / scale,
-                             y: floor(rect.minY * scale) / scale,
-                             width: ceil(rect.maxX * scale) / scale - floor(rect.minX * scale) / scale,
-                             height: ceil(rect.maxY * scale) / scale - floor(rect.minY * scale) / scale)
+        let snapped = CGRect(x: floor(rect.minX * density) / density,
+                             y: floor(rect.minY * density) / density,
+                             width: ceil(rect.maxX * density) / density - floor(rect.minX * density) / density,
+                             height: ceil(rect.maxY * density) / density - floor(rect.minY * density) / density)
         guard Self.validRect(snapped) else { return nil }
         var beneath = self
-        beneath.layerStack = LayerStack(windows)
+        beneath.layerStack = LayerStack(touching)
         beneath.cornerRadius = 0
         beneath.windowLayers = windowLayers.filter { $0.id != nil }
-        let image = try beneath.flatten(crop: snapped, scale: scale)
+        let image = try beneath.flatten(crop: snapped, scale: density)
         return CensorSource(image: image, frame: CGRect(
             origin: snapped.origin,
-            size: CGSize(width: CGFloat(image.width) / scale,
-                         height: CGFloat(image.height) / scale)))
+            size: CGSize(width: CGFloat(image.width) / density,
+                         height: CGFloat(image.height) / density)))
     }
 }
