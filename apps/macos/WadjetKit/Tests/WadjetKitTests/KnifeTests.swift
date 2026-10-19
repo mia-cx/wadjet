@@ -217,11 +217,21 @@ struct KnifeTests {
         let text = Annotation(kind: .text(TextData(string: "Hello",
                                                  origin: CGPoint(x: 10, y: 80),
                                                  format: .default)), style: red4)
+        let window = Annotation(kind: .window(layerID: UUID(),
+                                             frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                                style: red4)
+        let image = Annotation(kind: .image(asset: UUID(),
+                                            ImagePlacement(
+                                                frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                                crop: CGRect(x: 0, y: 0, width: 100, height: 100))),
+                               style: red4)
         let rows: [(Annotation, CGPoint, CGPoint)] = [
             (censor, CGPoint(x: -10, y: 50), CGPoint(x: 110, y: 50)),
             (counter, CGPoint(x: -10, y: 50), CGPoint(x: 110, y: 50)),
             (magnify, CGPoint(x: -10, y: 50), CGPoint(x: 110, y: 50)),
             (text, CGPoint(x: -10, y: 60), CGPoint(x: 110, y: 60)),
+            (window, CGPoint(x: -10, y: 50), CGPoint(x: 110, y: 50)),
+            (image, CGPoint(x: -10, y: 50), CGPoint(x: 110, y: 50)),
             (locked, CGPoint(x: 50, y: -10), CGPoint(x: 50, y: 10)),
             (hidden, CGPoint(x: 50, y: -10), CGPoint(x: 50, y: 10)),
             // stops short of the line at y = 0

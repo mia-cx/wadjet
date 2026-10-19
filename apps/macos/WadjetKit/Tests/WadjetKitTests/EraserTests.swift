@@ -111,6 +111,14 @@ struct EraserTests {
         Annotation(kind: .text(TextData(string: "Hello", origin: CGPoint(x: 10, y: 80),
                                        format: .default)),
                    style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)),
+        // a window layer paints its frame
+        Annotation(kind: .window(layerID: UUID(), frame: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                   style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)),
+        // an image paints its placement frame
+        Annotation(kind: .image(asset: UUID(),
+                                ImagePlacement(frame: CGRect(x: 0, y: 0, width: 100, height: 100),
+                                               crop: CGRect(x: 0, y: 0, width: 100, height: 100))),
+                   style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)),
     ])
     func everyKindErasesThroughPaintedArea(a: Annotation) {
         let stack = LayerStack([a])
