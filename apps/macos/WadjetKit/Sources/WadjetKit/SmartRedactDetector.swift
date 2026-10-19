@@ -38,10 +38,28 @@ public struct SmartRedactDetector {
             NSTextCheckingResult.CheckingType.link.rawValue |
             NSTextCheckingResult.CheckingType.phoneNumber.rawValue |
             NSTextCheckingResult.CheckingType.address.rawValue)
+        // National lengths bound IBANs before adjacent currency/label fields. Never shorten
+        // a failed checksum until it happens to pass. Lengths from the SWIFT IBAN registry:
+        // https://www.swift.com/standards/data-standards/iban
+        let ibanLengths = [
+            (15, "NO"), (16, "BE"), (18, "DK FI AX FK FO GL NL SD"), (19, "MK SI"),
+            (20, "AT BA EE KZ LT LU MN XK"), (21, "CH HR LI LV"),
+            (22, "BG BH CR DE GB IM JE GG GE IE ME RS VA"), (23, "AE GI IL IQ OM SO TL"),
+            (24, "AD CZ ES MD PK RO SA SE SK TN VG"), (25, "LY PT ST"), (26, "IS TR"),
+            (27, "BI DJ FR GF GP MQ RE PF TF YT NC BL MF PM WF GR IT MC MR SM"),
+            (28, "AL AZ BY CY DO GT HN HU LB NI PL SV"), (29, "BR EG PS QA UA"),
+            (30, "JO KW MU YE"), (31, "MT SC"), (32, "LC"), (33, "RU"),
+        ]
+        let ibanPattern = ibanLengths.map { length, countries in
+            let codes = countries.split(separator: " ").joined(separator: "|")
+            return #"(?:\#(codes))[0-9]{2}(?: ?[A-Z0-9]){\#(length - 4)}"#
+        }.joined(separator: "|")
         patterns = try [
-            (.cardNumber, #"(?<![\w-])(?:[0-9][ -]?){12,18}[0-9](?![\w-])"#),
-            (.iban, #"\b[A-Z]{2}[0-9]{2}(?: ?[A-Z0-9]){11,30}\b"#),
-            (.ipAddress, #"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?![\w.])|(?<![\w:])(?:[0-9A-Fa-f]*:){2,}[0-9A-Fa-f:.]*(?![\w:])"#),
+            // A following MM/YY expiry is its own field, not another card digit group.
+            (.cardNumber, #"(?<![\w-])(?:[0-9](?:[ -](?![0-9]{1,2}/))?){12,18}[0-9](?![\w-])"#),
+            (.iban, #"\b(?:\#(ibanPattern))\b"#),
+            // A final prose period is allowed only before a delimiter/end, never another component.
+            (.ipAddress, #"(?<![\w.])(?:[0-9]{1,3}\.){3}[0-9]{1,3}(?=$|[^\w.]|\.(?=$|[\s,;!?)\]}]))|(?<![\w:])(?:[0-9A-Fa-f]*:){2,}[0-9A-Fa-f:.]*(?<!\.)(?=$|[^\w:.]|\.(?=$|[\s,;!?)\]}]))"#),
             (.apiKey, #"(?<![\w-])(?:sk-(?:proj-)?[A-Za-z0-9_-]{16,}|sk_live_[A-Za-z0-9]{16,}|gh[po]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{20,}|xox[bp]-[A-Za-z0-9-]{16,}|AKIA[A-Z0-9]{16}|AIza[A-Za-z0-9_-]{35})(?![\w-])"#),
             (.apiKey, #"(?<![\w/+\-=])[A-Za-z0-9_+/\-=]{32,}(?![\w/+\-=])"#),
         ].map { category, pattern in (category, try NSRegularExpression(pattern: pattern)) }

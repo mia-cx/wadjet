@@ -56,6 +56,39 @@ struct SmartRedactDetectorTests {
         }
     }
 
+    // Proves adjacent fields do not hide valid values or expand their redaction boxes.
+    @Test(arguments: [
+        ("IBAN: NL91ABNA0417164300 EUR", "NL91ABNA0417164300", SmartRedactCategory.iban),
+        ("IBAN: GB82 WEST 1234 5698 7654 32 PAID", "GB82 WEST 1234 5698 7654 32", .iban),
+        ("Card: 4111 1111 1111 1111 12/28", "4111 1111 1111 1111", .cardNumber),
+    ])
+    func adjacentFields(text: String, value: String, category: SmartRedactCategory) throws {
+        let detector = try SmartRedactDetector()
+        let line = SmartRedactTextLine(text: text, bounds: CGRect(x: 0, y: 0, width: text.count, height: 10))
+        let expectedRange = (text as NSString).range(of: value)
+        for categories in [Set(SmartRedactCategory.allCases), [category]] {
+            let match = try #require(detector.matches(in: [line], categories: categories)
+                .first { $0.category == category })
+            #expect(match.range == expectedRange)
+            #expect(match.bounds == CGRect(x: expectedRange.location, y: 0, width: value.count, height: 10))
+        }
+    }
+
+    // Proves prose punctuation stays outside IP boxes without accepting malformed address prefixes.
+    @Test(arguments: [
+        ("Server: 192.168.1.24.", "192.168.1.24"),
+        ("Server: 2001:db8::1.", "2001:db8::1"),
+        ("Server: ::ffff:192.0.2.128.", "::ffff:192.0.2.128"),
+        ("Server: ::.", "::"),
+        ("192.168.1.24.5", ""), ("192.168.1.24.example", ""),
+        ("2001:db8:::1.", ""), ("2001:db8::1.5", ""),
+    ])
+    func ipPunctuation(text: String, value: String) throws {
+        let detector = try SmartRedactDetector()
+        let matches = detector.matches(in: [.init(text: text, bounds: .zero)], categories: [.ipAddress])
+        #expect(matches.map(\.range) == (value.isEmpty ? [] : [(text as NSString).range(of: value)]))
+    }
+
     // Proves sub-line boxes use grapheme offsets, keep line coordinates, and honor category switches.
     @Test func boxesAndCategorySelection() throws {
         let detector = try SmartRedactDetector()
