@@ -348,7 +348,11 @@ final class EditorCanvasView: NSView {
             doc.markup.deleteSelection()
             return
         }
+        if e.keyCode == 36 || e.keyCode == 76 { // Return, keypad Enter
+            if doc.markup.finishPen() { return }
+        }
         if e.keyCode == 53 { // Escape
+            if doc.markup.finishPen() { return }
             if !doc.markup.deselect(), state.recrop {
                 state.recrop = false
                 rebuild()

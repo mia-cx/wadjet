@@ -16,6 +16,12 @@ final class MarkupStyles {
 
     var config: ConfigStore<WadjetConfig> { AppState.shared.config }
 
+    /// Draw's current variant, persisted at markup.tools.draw.variant
+    var drawVariant: DrawVariant {
+        get { DrawVariant(rawValue: config.value.markup.tools[Tool.draw.rawValue]?.variant ?? "") ?? .line }
+        set { config.update { $0.markup.tools[Tool.draw.rawValue, default: WadjetConfig.MarkupTool()].variant = newValue.rawValue } }
+    }
+
     /// the selected Annotation's style if there is one, else the Tool's
     /// configured default — the #107 selection seam
     func style(for tool: Tool) -> AnnotationStyle {
@@ -158,12 +164,20 @@ extension AnnotationStyle {
 }
 
 extension Tool {
-    /// the `markup.tools` key a Tool's style lives under — Shapes keeps one per variant
-    @MainActor var styleKey: String { self == .shapes ? MarkupShapes.variant.rawValue : rawValue }
+    /// the `markup.tools` key a Tool's style lives under — Shapes and Draw keep
+    /// one per variant
+    @MainActor var styleKey: String {
+        switch self {
+        case .shapes: MarkupShapes.variant.rawValue
+        case .draw: MarkupStyles.shared.drawVariant.rawValue
+        default: rawValue
+        }
+    }
 
     /// the built-in style a Markup Tool uses until the user restyles it
-    var defaultStyle: AnnotationStyle {
-        // every Markup Tool so far (Line): opaque red, 4 pt
-        AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+    @MainActor var defaultStyle: AnnotationStyle {
+        if self == .draw { return MarkupStyles.shared.drawVariant.defaultStyle }
+        // every other Markup Tool so far: opaque red, 4 pt
+        return AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
     }
 }

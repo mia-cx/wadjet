@@ -1450,6 +1450,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
         if MarkupStyles.shared.cancelEyedropper() { AppLog.line("esc: cancelled eyedropper"); updateEscHotkey(); return }
+        if MarkupController.shared.finishPen() { AppLog.line("esc: finished pen path"); return }
         if MarkupController.shared.deselect() { AppLog.line("esc: deselected"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
@@ -4037,7 +4038,10 @@ struct ToolMenuView: View {
             case .markup:
                 if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                 if tool == .counter { CounterControls(ctrl: ctrl) }
-                if tool == .censor { CensorControls(ctrl: ctrl) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
+                if tool == .censor { CensorControls(ctrl: ctrl) } else {
+                    if tool == .draw { tileRow(drawTiles) }
+                    MarkupStyleControls(tool: tool, ctrl: ctrl)
+                }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 selectionRows()
                 if tool == .select, !editor { markupGroupRows() }

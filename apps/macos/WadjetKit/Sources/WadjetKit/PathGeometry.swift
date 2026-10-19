@@ -27,15 +27,47 @@ extension AnnotationKind {
                             c2: CGPoint(x: end.x + (c.x - end.x) * 2 / 3,
                                         y: end.y + (c.y - end.y) * 2 / 3),
                             p3: end, straight: false)]
+        case let .path(data):
+            // consecutive node pairs, plus last→first when closed; a pair is
+            // straight when both inner handles are nil — else a cubic whose
+            // missing handle collapses to its anchor. One node → a dot
+            guard let first = data.nodes.first else { return [] }
+            if data.nodes.count == 1 {
+                let a = first.anchor
+                return [Segment(p0: a, c1: a, c2: a, p3: a, straight: true)]
+            }
+            let pairs = zip(data.nodes, data.nodes.dropFirst())
+            var segs = pairs.map { a, b in
+                Segment(p0: a.anchor,
+                        c1: a.handleOut ?? a.anchor,
+                        c2: b.handleIn ?? b.anchor,
+                        p3: b.anchor,
+                        straight: a.handleOut == nil && b.handleIn == nil)
+            }
+            if data.closed, let last = data.nodes.last {
+                segs.append(Segment(p0: last.anchor,
+                                    c1: last.handleOut ?? last.anchor,
+                                    c2: first.handleIn ?? first.anchor,
+                                    p3: first.anchor,
+                                    straight: last.handleOut == nil && first.handleIn == nil))
+            }
+            return segs
         case .censor, .shape, .counter:
             return []
         }
+    }
+    /// closed paths fill; everything else is an open stroke
+    public var isClosed: Bool {
+        if case let .path(d) = self { return d.closed }
+        return false
     }
 }
 
 /// a stroke and its ends, ready to draw: stroke the first (round caps/joins,
 /// `style.dash` pattern), fill the second with the same colour
 public struct AnnotationDrawing {
+    /// the closed path's geometry when the style fills it, else nil
+    public let fill: CGPath?
     public let stroke: CGPath
     public let ends: CGPath
 }
@@ -44,14 +76,15 @@ public struct AnnotationDrawing {
 /// outline and a Line's ends, or the filled area when filled. Strokes have
 /// round caps and joins, as the Markup panels draw them.
 public enum PathGeometry {
-    /// the segments' path, before any transform
-    static func path(segments: [Segment]) -> CGPath {
+    /// the segments' path, before any transform; `closed` joins it back to its start
+    static func path(segments: [Segment], closed: Bool = false) -> CGPath {
         let p = CGMutablePath()
         guard let first = segments.first else { return p }
         p.move(to: first.p0)
         for s in segments {
             if s.straight { p.addLine(to: s.p3) } else { p.addCurve(to: s.p3, control1: s.c1, control2: s.c2) }
         }
+        if closed { p.closeSubpath() }
         return p
     }
 
@@ -60,8 +93,8 @@ public enum PathGeometry {
     public static func path(for a: Annotation) -> CGPath {
         let p = CGMutablePath()
         switch a.kind {
-        case .line:
-            p.addPath(path(segments: a.kind.segments))
+        case .line, .path:
+            p.addPath(path(segments: a.kind.segments, closed: a.kind.isClosed))
         case let .censor(rect, _):
             p.addRect(rect)
         case let .shape(kind, rect):
@@ -110,13 +143,15 @@ public enum PathGeometry {
         return glyphs.copy(using: &t) ?? glyphs
     }
 
-    /// the stroke (trimmed so a filled arrow's tip stays sharp) and the filled
-    /// ends, both in screen coordinates; filled kinds draw nothing here
+    /// the stroke (trimmed so a filled arrow's tip stays sharp), the filled
+    /// ends, and a closed path's fill — all in screen coordinates. Closed
+    /// paths get no ends and no trim; filled kinds draw nothing here
     public static func drawing(for a: Annotation) -> AnnotationDrawing {
         let segments = a.kind.segments, w = a.style.width
+        let closed = a.kind.isClosed
         let ends = CGMutablePath()
         var strokeSegments = segments
-        if let last = segments.last {
+        if !closed, let last = segments.last {
             let u = last.endOutward, n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.head, at: last.p3, u: u, n: n, width: w))
             if a.style.head == .filledArrow {
@@ -125,7 +160,7 @@ public enum PathGeometry {
         }
         // tangents come from the untrimmed geometry, and the tail's mark sits
         // at the untrimmed start even if the head's trim reached it
-        if let first = segments.first {
+        if !closed, let first = segments.first {
             let u = first.startOutward, n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.tail, at: first.p0, u: u, n: n, width: w))
             if a.style.tail == .filledArrow {
@@ -133,8 +168,11 @@ public enum PathGeometry {
             }
         }
         var t = a.affineTransform
+        let body = path(segments: strokeSegments, closed: closed)
+        let stroke = body.copy(using: &t) ?? body
         return AnnotationDrawing(
-            stroke: path(segments: strokeSegments).copy(using: &t) ?? path(segments: strokeSegments),
+            fill: closed && a.style.fill != nil ? stroke : nil,
+            stroke: stroke,
             ends: ends.copy(using: &t) ?? ends)
     }
 

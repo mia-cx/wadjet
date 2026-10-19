@@ -182,6 +182,39 @@ struct LayerStackTests {
         #expect(bend == nil)
     }
 
+    // Pen paths round-trip — nil and non-nil handles, closed and open — and
+    // the style's fill with them; an old style without fill decodes nil
+    @Test func pathJSONRoundTrip() throws {
+        var stack = LayerStack()
+        stack.add(Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 80, y: -20)),
+            PathNode(anchor: CGPoint(x: 200, y: 0), handleOut: CGPoint(x: 220, y: 20)),
+        ], closed: true)), style: red4))
+        stack.add(Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: CGPoint(x: 0, y: 100)),
+            PathNode(anchor: CGPoint(x: 100, y: 100)),
+        ])), style: red4))
+        #expect(try LayerStack(json: stack.json()) == stack)
+        // a closed path in the wire form
+        let fixture = Data(#"{"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"path":{"nodes":[{"anchor":[0,0]},{"anchor":[100,0],"in":[80,-20],"out":[120,20]}],"closed":true}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}"#.utf8)
+        let s = try LayerStack(json: fixture)
+        guard case let .path(d) = s.annotations[0].kind else { Issue.record(); return }
+        #expect(d.closed && d.nodes[0].handleIn == nil && d.nodes[0].handleOut == nil)
+        #expect(d.nodes[1].handleIn == CGPoint(x: 80, y: -20)
+                && d.nodes[1].handleOut == CGPoint(x: 120, y: 20))
+    }
+
+    @Test func styleFillRoundTrip() throws {
+        let red = RGBAColour(red: 1, green: 0, blue: 0, alpha: 1)
+        let filled = AnnotationStyle(colour: red, width: 4, fill: red)
+        #expect(try JSONDecoder().decode(AnnotationStyle.self,
+                                       from: JSONEncoder().encode(filled)) == filled)
+        // styles saved before fills existed decode fill nil
+        let old = Data(#"{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4,"head":"dot"}"#.utf8)
+        #expect(try JSONDecoder().decode(AnnotationStyle.self, from: old).fill == nil)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }

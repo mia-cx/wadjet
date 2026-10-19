@@ -10,13 +10,13 @@ import WadjetKit
     /// the selected shape's variant, else the configured one, else .rectangle
     static var variant: ShapeVariant {
         if case let .shape(k, _) = MarkupController.active.selected?.kind { return k.variant }
-        return config.value.markup.tools["shapes"]?.variant ?? .rectangle
+        return config.value.markup.tools["shapes"]?.variant.flatMap(ShapeVariant.init) ?? .rectangle
     }
 
     /// picks the variant new shapes draw; a selected shape turns into it
     /// (keeping its rect and style)
     static func pick(_ v: ShapeVariant) {
-        config.update { $0.markup.tools["shapes", default: .init()].variant = v }
+        config.update { $0.markup.tools["shapes", default: .init()].variant = v.rawValue }
         guard var a = MarkupController.active.selected,
               case let .shape(_, rect) = a.kind else { return }
         a.kind = .shape(shape(for: v), rect: rect)

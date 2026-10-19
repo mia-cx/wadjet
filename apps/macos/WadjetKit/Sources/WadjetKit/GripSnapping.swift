@@ -3,14 +3,16 @@ import CoreGraphics
 extension Annotation {
     /// a grip drag that snaps: a resize or vertex grip follows the pointer's delta
     /// from `from` (an off-centre press doesn't jump) and snaps only along the
-    /// screen axes it can move; `.rotate` and `.bend` are unsnapped. Returns the
-    /// result and the guides it reached.
+    /// screen axes it can move; `.rotate`, `.bend`, and `.tangent` are unsnapped.
+    /// Returns the result and the guides it reached.
     public func dragging(_ handle: SelectionHandle, from: CGPoint, to: CGPoint,
                          minExtent: CGFloat, rotateOffset: CGFloat,
                          targets: [SnapTarget], range: CGFloat, skip: Bool)
         -> (annotation: Annotation, guides: [SnapGuide]) {
-        guard handle != .rotate, handle != .bend else {
+        switch handle {
+        case .rotate, .bend, .tangent:
             return (dragging(handle, from: from, to: to), [])
+        default: break
         }
         guard let grip = handles(minExtent: minExtent, rotateOffset: rotateOffset)
             .filter({ $0.handle == handle })

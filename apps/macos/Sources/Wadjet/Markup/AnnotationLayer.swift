@@ -1,11 +1,13 @@
 import AppKit
 import WadjetKit
 
-/// one Annotation on screen: `stroke` below (the dash-patterned body) and
-/// `ends` above (arrowheads, dots, bars, filled with the stroke colour).
-/// Shapes and Censors draw on `stroke` alone, like upstream's shape layer;
-/// a counter adds `label` — its white glyph outlines on top.
+/// one Annotation on screen: `fill` at the bottom (a closed path's interior),
+/// `stroke` above (the dash-patterned body), `ends` on top (arrowheads, dots,
+/// bars — all filled with the stroke colour). Shapes and Censors draw on
+/// `stroke` alone, like upstream's shape layer; a counter adds `label` — its
+/// white glyph outlines on top.
 final class AnnotationLayer: CALayer {
+    let fill = CAShapeLayer()
     let stroke = CAShapeLayer()
     let ends = CAShapeLayer()
     let label = CAShapeLayer()
@@ -16,6 +18,7 @@ final class AnnotationLayer: CALayer {
         stroke.fillColor = nil
         stroke.lineCap = .round
         stroke.lineJoin = .round
+        addSublayer(fill)
         addSublayer(stroke)
         addSublayer(ends)
         addSublayer(label)
@@ -29,6 +32,7 @@ final class AnnotationLayer: CALayer {
     func update(_ a: Annotation, scale: CGFloat) {
         switch a.kind {
         case .censor:
+            fill.path = nil
             stroke.path = PathGeometry.path(for: a)
             stroke.lineDashPattern = nil
             stroke.fillColor = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
@@ -38,6 +42,7 @@ final class AnnotationLayer: CALayer {
         case .shape, .counter:
             // upstream's look: one path, filled and stroked by the style's
             // colours; a counter's glyph outline sits on top in white
+            fill.path = nil
             ends.path = nil
             stroke.path = PathGeometry.path(for: a)
             stroke.lineDashPattern = nil
@@ -54,16 +59,21 @@ final class AnnotationLayer: CALayer {
         label.path = PathGeometry.labelPath(for: a)
         label.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
         label.strokeColor = nil
-        for l in [self, stroke, ends, label] as [CALayer] { l.contentsScale = scale }
+        for l in [self, fill, stroke, ends, label] as [CALayer] { l.contentsScale = scale }
     }
 
     private func updateStroke(_ a: Annotation) {
         let d = PathGeometry.drawing(for: a)
-        stroke.path = d.stroke
+        fill.path = d.fill
+        fill.fillColor = a.style.fill.map {
+            CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha)
+        }
+        // a closed path with `stroked` off leaves only its fill, like a shape
+        let c = a.strokeColour
+        stroke.path = c == nil ? nil : d.stroke
         stroke.fillColor = nil
-        ends.path = d.ends
-        let c = a.style.colour
-        let colour = CGColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+        ends.path = c == nil ? nil : d.ends
+        let colour = c.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
         stroke.strokeColor = colour
         ends.fillColor = colour
         stroke.lineWidth = a.style.width
