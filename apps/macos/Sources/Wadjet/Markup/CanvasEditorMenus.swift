@@ -34,47 +34,27 @@ extension AppDelegate {
 
         if let window = main.items.last {
             window.submenu?.addItem(.separator())
-            let colours = NSMenuItem(title: "Colours", action: #selector(ColoursPanel.toggleColours(_:)),
-                                     keyEquivalent: "")
-            colours.target = ColoursPanel.shared
-            window.submenu?.addItem(colours)
+            window.submenu?.addItem(EditorPanel.layers.menuItem("l", modifiers: [.command, .option]))
+            window.submenu?.addItem(EditorPanel.colours.menuItem())
         }
     }
 }
 
-/// The app-wide floating Colours panel: the main Editor's armed Tool's style
-/// controls. Shown while the Window menu's Colours item is checked and an
-/// Editor is main; its close button unchecks the item.
+/// One app-wide floating Editor panel: shown while its Window-menu item is
+/// checked and an Editor is main; the close button unchecks it. Colours and
+/// Layers share the machinery — only the panel's contents and framing differ.
 @MainActor
-final class ColoursPanel: NSObject, NSWindowDelegate {
-    static let shared = ColoursPanel()
+final class EditorPanel: NSObject, NSWindowDelegate {
     /// the Window menu item's checkmark; the panel's close button clears it
     private(set) var wanted = false
     private var panel: NSPanel?
+    private let makePanel: () -> NSPanel
 
-    @objc func toggleColours(_ sender: Any?) {
-        wanted.toggle()
-        sync()
+    private init(_ makePanel: @escaping () -> NSPanel) {
+        self.makePanel = makePanel
     }
 
-    /// the checkmark shows the want; the item's only useful with an Editor up
-    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        item.state = wanted ? .on : .off
-        return EditorFocus.shared.markup != nil
-    }
-
-    /// called on every Editor focus change — the panel follows both the want
-    /// and whether an Editor is main
-    func sync() {
-        if wanted, EditorFocus.shared.markup != nil {
-            if panel == nil { makePanel() }
-            panel?.orderFront(nil)
-        } else {
-            panel?.orderOut(nil)
-        }
-    }
-
-    private func makePanel() {
+    static let colours = EditorPanel {
         let hosting = NSHostingController(rootView: ColoursPanelContent())
         hosting.sizingOptions = .preferredContentSize
         let p = NSPanel(contentViewController: hosting)
@@ -86,9 +66,58 @@ final class ColoursPanel: NSObject, NSWindowDelegate {
         p.hidesOnDeactivate = true
         p.appearance = NSAppearance(named: .darkAqua)
         p.isReleasedWhenClosed = false
-        p.delegate = self
         p.setFrameAutosaveName("EditorColours")
-        panel = p
+        return p
+    }
+    /// the screen's LayersPanel, tamed for document windows: normal level and
+    /// space behaviour, hides with the app like the other Editor panels
+    static let layers = EditorPanel {
+        let p = LayersPanel(content: EditorLayersList())
+        p.level = .floating
+        p.collectionBehavior = []
+        p.hidesOnDeactivate = true
+        p.setFrameAutosaveName("EditorLayers")
+        return p
+    }
+
+    @objc func toggle(_ sender: Any?) {
+        wanted.toggle()
+        sync()
+    }
+
+    /// every Editor focus change syncs both panels
+    static func syncAll() {
+        colours.sync()
+        layers.sync()
+    }
+
+    func menuItem(_ key: String = "", modifiers: NSEvent.ModifierFlags = .command) -> NSMenuItem {
+        let item = NSMenuItem(title: panelTitle, action: #selector(toggle(_:)), keyEquivalent: key)
+        item.keyEquivalentModifierMask = modifiers
+        item.target = self
+        return item
+    }
+    private var panelTitle: String { self === EditorPanel.layers ? "Layers" : "Colours" }
+
+    /// the checkmark shows the want; the item's only useful with an Editor up
+    @objc func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.state = wanted ? .on : .off
+        return EditorFocus.shared.markup != nil
+    }
+
+    /// called on every Editor focus change — the panel follows both the want
+    /// and whether an Editor is main
+    func sync() {
+        if wanted, EditorFocus.shared.markup != nil {
+            if panel == nil {
+                let p = makePanel()
+                p.delegate = self
+                panel = p
+            }
+            panel?.orderFront(nil)
+        } else {
+            panel?.orderOut(nil)
+        }
     }
 
     nonisolated func windowWillClose(_ n: Notification) {
@@ -107,5 +136,18 @@ private struct ColoursPanelContent: View {
         MarkupStyleControls(tool: tool, ctrl: AppDelegate.shared!.overlayCtrl)
             .padding(6)
             .frame(width: 280)
+    }
+}
+
+/// the focused Editor's Annotations, bound to its controller like the screen's
+/// MarkupLayersList is to the shared one
+private struct EditorLayersList: View {
+    var body: some View {
+        if let c = EditorFocus.shared.markup {
+            LayersView(annotations: c.stack.annotations,
+                       selection: Binding(get: { c.selection }, set: { c.select($0) }),
+                       move: c.moveLayer,
+                       update: c.update)
+        }
     }
 }

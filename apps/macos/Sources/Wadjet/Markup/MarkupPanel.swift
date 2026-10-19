@@ -68,7 +68,9 @@ final class MarkupView: NSView {
         canvas.bounds = region
         layer?.addSublayer(canvas)
         content.anchorPoint = .zero
-        content.position = .zero
+        // inside canvas's shifted bounds space, position zero would re-apply
+        // the origin — sit at the region's origin so Canvas coords land once
+        content.position = region.origin
         content.bounds = region
         canvas.addSublayer(content)
         guidesLayer.anchorPoint = .zero

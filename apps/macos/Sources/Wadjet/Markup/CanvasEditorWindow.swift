@@ -144,18 +144,18 @@ final class CanvasEditorWindowController: NSWindowController, NSWindowDelegate {
     func windowDidBecomeMain(_ n: Notification) {
         guard let doc else { return }
         EditorFocus.shared.markup = doc.markup
-        ColoursPanel.shared.sync()
+        EditorPanel.syncAll()
     }
     func windowDidResignMain(_ n: Notification) {
         guard let doc, EditorFocus.shared.markup === doc.markup else { return }
         EditorFocus.shared.markup = nil
-        ColoursPanel.shared.sync()
+        EditorPanel.syncAll()
     }
     func windowWillClose(_ n: Notification) {
         if let doc, EditorFocus.shared.markup === doc.markup { EditorFocus.shared.markup = nil }
         canvasView?.markupView.censors?.stop()
         AppDelegate.shared?.syncActivationPolicy(closing: window)
-        ColoursPanel.shared.sync()
+        EditorPanel.syncAll()
     }
 }
 
@@ -219,6 +219,7 @@ final class EditorCanvasView: NSView {
             markupView.frame = NSRect(origin: .zero, size: region.size)
             markupView.canvas.bounds = region
             markupView.content.bounds = region
+            markupView.content.position = region.origin
             markupView.guidesLayer.bounds = region
         }
         // the crop masks the backdrop and the Annotations — never the
@@ -265,7 +266,8 @@ final class EditorCanvasView: NSView {
         let canvas = doc.canvas
         let displays = CALayer()
         displays.anchorPoint = .zero
-        displays.position = .zero
+        // inside container's shifted bounds space, sit at the region's origin
+        displays.position = region.origin
         displays.bounds = region
         displays.sublayers = canvas.layout.map { display in
             let l = CALayer()
@@ -325,6 +327,20 @@ final class EditorCanvasView: NSView {
     }
 
     // MARK: keys — the view is the window's first responder
+
+    /// ⌘-modified keys travel the responder chain via performKeyEquivalent —
+    /// menus take theirs first, the rest land here (keyDown never sees ⌘)
+    override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        if e.modifierFlags.contains(.command) {
+            let shift = e.modifierFlags.contains(.shift)
+            switch e.charactersIgnoringModifiers ?? "" {
+            case "]": doc.markup.restackSelection(shift ? .front : .up); return true
+            case "[": doc.markup.restackSelection(shift ? .back : .down); return true
+            default: break
+            }
+        }
+        return super.performKeyEquivalent(with: e)
+    }
 
     override func keyDown(with e: NSEvent) {
         if e.keyCode == 51 || e.keyCode == 117 { // Delete, Fn+Delete
