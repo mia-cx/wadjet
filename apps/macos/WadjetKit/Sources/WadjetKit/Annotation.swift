@@ -69,23 +69,45 @@ private extension KeyedEncodingContainer {
     }
 }
 
-/// How an Annotation draws: stroke colour and width.
+/// How an Annotation draws: stroke colour, width, and opacity.
 public struct AnnotationStyle: Codable, Equatable, Sendable {
     public var colour: RGBAColour
     public var width: CGFloat // stroke width, points
-    public init(colour: RGBAColour, width: CGFloat) {
+    /// whole-Annotation opacity, separate from colour alpha
+    public var opacity: Double
+    public init(colour: RGBAColour, width: CGFloat, opacity: Double = 1) {
         self.colour = colour
         self.width = width
+        self.opacity = opacity
+    }
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        colour = try c.decode(RGBAColour.self, forKey: .colour)
+        width = try c.decode(CGFloat.self, forKey: .width)
+        opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1 // saved before opacity existed
     }
 }
 
 /// sRGB, components 0…1
-public struct RGBAColour: Codable, Equatable, Sendable {
+public struct RGBAColour: Codable, Hashable, Sendable {
     public var red, green, blue, alpha: Double
     public init(red: Double, green: Double, blue: Double, alpha: Double) {
         self.red = red
         self.green = green
         self.blue = blue
         self.alpha = alpha
+    }
+    /// "#RRGGBB" (alpha ignored): components clamped to 0…1 and rounded to 8-bit
+    public var hex: String {
+        func byte(_ v: Double) -> Int { Int((min(1, max(0, v)) * 255).rounded()) }
+        return String(format: "#%02X%02X%02X", byte(red), byte(green), byte(blue))
+    }
+    /// "#RRGGBB" or "RRGGBB", case-insensitive, alpha 1; nil for anything else
+    public init?(hex: String) {
+        var s = hex[hex.startIndex...]
+        if s.first == "#" { s = s.dropFirst() }
+        guard s.count == 6, s.allSatisfy(\.isHexDigit), let v = UInt32(s, radix: 16) else { return nil }
+        self.init(red: Double((v >> 16) & 0xFF) / 255, green: Double((v >> 8) & 0xFF) / 255,
+                  blue: Double(v & 0xFF) / 255, alpha: 1)
     }
 }

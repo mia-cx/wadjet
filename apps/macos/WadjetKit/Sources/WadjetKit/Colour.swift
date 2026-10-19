@@ -24,16 +24,8 @@ public enum ColourFormat: String, CaseIterable, Codable, Sendable {
     // CSS Color 4 breakdowns of one sRGB pixel
     private static func fmtRGB(_ c: RGB8) -> String { "rgb(\(c.r) \(c.g) \(c.b))" }
     private static func fmtHSL(_ c: RGB8) -> String {
-        let r = Double(c.r) / 255, g = Double(c.g) / 255, b = Double(c.b) / 255
-        let mx = max(r, g, b), mn = min(r, g, b); var h = 0.0, s = 0.0
-        let l = (mx + mn) / 2
-        if mx != mn {
-            let d = mx - mn
-            s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
-            h = mx == r ? (g - b) / d + (g < b ? 6 : 0) : mx == g ? (b - r) / d + 2 : (r - g) / d + 4
-            h *= 60
-        }
-        return String(format: "hsl(%.0f %.0f%% %.0f%%)", h, s * 100, l * 100)
+        let hsl = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1).hsl
+        return String(format: "hsl(%.0f %.0f%% %.0f%%)", hsl.hue, hsl.saturation * 100, hsl.lightness * 100)
     }
     // OKLab (Ottosson) from linear sRGB
     private static func fmtOKLCH(_ c: RGB8) -> String {
@@ -69,5 +61,52 @@ public enum ColourFormat: String, CaseIterable, Codable, Sendable {
     }
     private static func fmtSwiftUI(_ c: RGB8) -> String {
         String(format: "Color(red: %.3f, green: %.3f, blue: %.3f)", Double(c.r) / 255, Double(c.g) / 255, Double(c.b) / 255)
+    }
+}
+
+/// CSS HSL: hue in degrees 0..<360, saturation and lightness 0…1. Greys have
+/// hue 0 and saturation 0.
+public struct HSL: Equatable, Sendable {
+    public var hue: Double
+    public var saturation: Double
+    public var lightness: Double
+    public init(hue: Double, saturation: Double, lightness: Double) {
+        self.hue = hue
+        self.saturation = saturation
+        self.lightness = lightness
+    }
+}
+
+extension RGBAColour {
+    public init(hsl: HSL, alpha: Double = 1) {
+        var h = hsl.hue.truncatingRemainder(dividingBy: 360)
+        if h < 0 { h += 360 }
+        let c = (1 - abs(2 * hsl.lightness - 1)) * hsl.saturation
+        let x = c * (1 - abs((h / 60).truncatingRemainder(dividingBy: 2) - 1))
+        let (r, g, b): (Double, Double, Double)
+        switch Int(h / 60) % 6 {
+        case 0: (r, g, b) = (c, x, 0)
+        case 1: (r, g, b) = (x, c, 0)
+        case 2: (r, g, b) = (0, c, x)
+        case 3: (r, g, b) = (0, x, c)
+        case 4: (r, g, b) = (x, 0, c)
+        default: (r, g, b) = (c, 0, x)
+        }
+        let m = hsl.lightness - c / 2
+        self.init(red: r + m, green: g + m, blue: b + m, alpha: alpha)
+    }
+    /// the colour as CSS HSL; greys report hue 0, saturation 0
+    public var hsl: HSL {
+        let mx = max(red, green, blue), mn = min(red, green, blue)
+        var h = 0.0, s = 0.0
+        let l = (mx + mn) / 2
+        if mx != mn {
+            let d = mx - mn
+            s = l > 0.5 ? d / (2 - mx - mn) : d / (mx + mn)
+            h = mx == red ? (green - blue) / d + (green < blue ? 6 : 0)
+                : mx == green ? (blue - red) / d + 2 : (red - green) / d + 4
+            h *= 60
+        }
+        return HSL(hue: h, saturation: s, lightness: l)
     }
 }
