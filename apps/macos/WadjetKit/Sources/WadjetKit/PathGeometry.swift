@@ -52,7 +52,7 @@ extension AnnotationKind {
                                     straight: last.handleOut == nil && first.handleIn == nil))
             }
             return segs
-        case .censor, .shape, .counter, .magnify, .text:
+        case .censor, .shape, .counter, .magnify, .text, .window:
             return []
         }
     }
@@ -111,6 +111,8 @@ public enum PathGeometry {
             }
         case let .text(d):
             p.addRect(TextLayout(d).box)
+        case let .window(_, frame):
+            p.addRect(frame)
         }
         var t = a.affineTransform
         return p.copy(using: &t) ?? p
@@ -220,7 +222,7 @@ public enum PathGeometry {
         if case let .magnify(m) = a.kind,
            m.options.shape.path(in: m.frame).contains(point) { return true }
         let p = path(for: a)
-        if a.fillColour != nil && p.contains(point) { return true }
+        if a.fillsArea && p.contains(point) { return true }
         if p.copy(strokingWithWidth: (a.strokeColour == nil ? 0 : a.style.width) + 2 * tolerance,
                   lineCap: .round, lineJoin: .round, miterLimit: 10)
             .contains(point) { return true }

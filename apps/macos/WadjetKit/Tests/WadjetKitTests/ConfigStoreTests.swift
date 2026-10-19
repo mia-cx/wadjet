@@ -55,6 +55,21 @@ struct ConfigStoreTests {
         #expect(errors.count == 1)
     }
 
+    // Proves each Capture Tool's Keep Windows as Layers decodes independently
+    // and a missing or partial section keeps the defaults.
+    @Test func screenshotToolWindowLayers() throws {
+        let c = try JSONDecoder().decode(WadjetConfig.self,
+            from: Data(#"{"tools":{"captureWindow":{"windowLayers":true}}}"#.utf8))
+        #expect(c.tools.captureWindow.windowLayers)
+        #expect(!c.tools.captureRegion.windowLayers)
+        #expect(!c.tools.captureScreen.windowLayers)
+        #expect(c.tools.pickColour.format == .hex)
+        #expect(c.tools.measure.mode == .spacing)
+        #expect(c.tools.region.confirm == .release)
+        let empty = try JSONDecoder().decode(WadjetConfig.self, from: Data(#"{"tools":{"captureWindow":{}}}"#.utf8))
+        #expect(!empty.tools.captureWindow.windowLayers)
+    }
+
     @Test func recordingDefaultsAndValidation() throws {
         let minimal = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
         #expect(minimal.recording.resolution == 1920)

@@ -12,6 +12,20 @@ public struct CapturedCanvasDisplay {
     }
 }
 
+/// One window captured whole, independent of what covers it, from the capture boundary.
+public struct CapturedWindow: Sendable {
+    public var frame: CGRect   // AppKit global points
+    public var image: CGImage
+    public var app: String?
+    public var title: String?
+    public init(frame: CGRect, image: CGImage, app: String? = nil, title: String? = nil) {
+        self.frame = frame
+        self.image = image
+        self.app = app
+        self.title = title
+    }
+}
+
 extension CanvasDocument {
     /// Keeps every captured display for recropping. Region/screen captures retain
     /// off-crop Annotations; a window capture retains fills/strokes touching its frame.
@@ -27,6 +41,22 @@ extension CanvasDocument {
         self.init(layout: capturedDisplays.map(\.display), crop: crop, cornerRadius: cornerRadius,
             layerStack: LayerStack(kept),
             displayImages: Dictionary(uniqueKeysWithValues: capturedDisplays.map { ($0.display.id, $0.image) }))
+    }
+
+    /// Keeps each window as its own layer. `windows` is front first (window-list
+    /// order); each becomes a CanvasWindowLayer and a `.window` Annotation, all
+    /// below every existing Annotation, the frontmost window highest among them.
+    public mutating func addWindowLayers(_ windows: [CapturedWindow]) {
+        var added: [Annotation] = []
+        for (index, w) in windows.enumerated() {
+            let layerID = UUID()
+            windowLayers.append(CanvasWindowLayer(frame: w.frame, zOrder: windows.count - 1 - index,
+                imageFileName: "window-\(layerID.uuidString).heic", image: w.image,
+                id: layerID, app: w.app, title: w.title))
+            added.append(Annotation(kind: .window(layerID: layerID, frame: w.frame),
+                style: AnnotationStyle(colour: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1), width: 0)))
+        }
+        layerStack.annotations = added.reversed() + layerStack.annotations
     }
 
     /// Completes a standalone window capture at the crop. Only a measured corner

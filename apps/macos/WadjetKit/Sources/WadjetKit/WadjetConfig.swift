@@ -50,13 +50,16 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         }
     }
     /// one Capture Tool's settings at `tools.<toolID>`; `smartRedact` blacks
-    /// out Smart Redact matches in each Screenshot before its Workflow runs
+    /// out Smart Redact matches in each Screenshot before its Workflow runs,
+    /// `windowLayers` keeps each window as its own layer in the Canvas
     public struct CaptureTool: Codable, Equatable, Sendable {
         public var smartRedact = false
+        public var windowLayers = false
         public init() {}
         public init(from decoder: Decoder) throws {
-            smartRedact = try decoder.container(keyedBy: CodingKeys.self)
-                .decodeIfPresent(Bool.self, forKey: .smartRedact) ?? false
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            smartRedact = try c.decodeIfPresent(Bool.self, forKey: .smartRedact) ?? false
+            windowLayers = try c.decodeIfPresent(Bool.self, forKey: .windowLayers) ?? false
         }
     }
     public struct PickColour: Codable, Equatable, Sendable { public var format = ColourFormat.hex; public init() {} }
