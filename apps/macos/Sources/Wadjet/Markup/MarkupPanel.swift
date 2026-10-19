@@ -117,11 +117,26 @@ final class MarkupView: NSView {
             frameLayer.lineWidth = 1 / controller.zoom
             frameLayer.contentsScale = scale
             let grips = CGMutablePath()
-            let r = MarkupController.handleSize / 2 / controller.zoom
-            for h in selection.handles(minExtent: MarkupController.handleMinExtent / controller.zoom,
-                                     rotateOffset: MarkupController.rotateOffset / controller.zoom) {
+            let hs = selection.handles(minExtent: MarkupController.handleMinExtent / controller.zoom,
+                                       rotateOffset: MarkupController.rotateOffset / controller.zoom)
+            // tangent stems ride the frame layer's accent stroke, under the
+            // grips: a line from each node's anchor grip to its handle grip
+            for h in hs {
+                if case let .tangent(i, _) = h.handle,
+                   let anchor = hs.first(where: { $0.handle == .vertex(i) }) {
+                    frame.move(to: anchor.at); frame.addLine(to: h.at)
+                }
+            }
+            for h in hs {
+                // tangent grips read as satellites of their node: smaller
+                let base: CGFloat = switch h.handle {
+                case .tangent: 2.5
+                default: MarkupController.handleSize / 2
+                }
+                let r = base / controller.zoom
                 grips.addEllipse(in: CGRect(x: h.at.x - r, y: h.at.y - r, width: 2 * r, height: 2 * r))
             }
+            frameLayer.path = frame
             handlesLayer.path = grips
             handlesLayer.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
             handlesLayer.strokeColor = accent
@@ -152,7 +167,8 @@ final class MarkupView: NSView {
     }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
     override func mouseDown(with e: NSEvent) {
-        controller.begin(at: canvasPoint(e), command: e.modifierFlags.contains(.command))
+        controller.begin(at: canvasPoint(e), command: e.modifierFlags.contains(.command),
+                         constrained: e.modifierFlags.contains(.shift))
     }
     // drags keep coming to this view across displays
     override func mouseDragged(with e: NSEvent) {
@@ -169,7 +185,10 @@ final class MarkupView: NSView {
     }
     // the armed Tool's cursor while its panel owns the pointer
     override func cursorUpdate(with e: NSEvent) { setToolCursor() }
-    override func mouseMoved(with e: NSEvent) { setToolCursor() }
+    override func mouseMoved(with e: NSEvent) {
+        setToolCursor()
+        controller.hover(at: canvasPoint(e))
+    }
     func setToolCursor() {
         let c = controller
         if c.selecting { NSCursor.arrow.set() }

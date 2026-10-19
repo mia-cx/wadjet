@@ -83,6 +83,7 @@ struct MarkupStyleControls: View {
                 }
                 .frame(minHeight: 40)
             }
+            if penFillControls { ShapePaintControls(tool: tool, ctrl: ctrl) }
         }
         .onAppear {
             styles.refreshSwatches()
@@ -105,10 +106,23 @@ struct MarkupStyleControls: View {
 
     // MARK: line ends and dashes — drawn by WadjetKit so glyphs match the canvas
 
-    /// the Line-only rows show while the Line Tool is armed or a Line is selected
+    /// the end/dash rows show while Draw is armed (both variants) or a
+    /// stroked open shape — a Line or an open Pen path — is selected
     var lineControls: Bool {
         if tool == .draw { return true }
-        guard let k = MarkupController.shared.selected?.kind, case .line = k else { return false }
+        guard let k = MarkupController.active.selected?.kind else { return false }
+        switch k {
+        case .line: return true
+        case .path: return !k.isClosed
+        default: return false
+        }
+    }
+
+    /// the Fill toggle shows while the Pen variant is armed or a closed path
+    /// is selected — only closed paths can fill
+    var penFillControls: Bool {
+        if tool == .draw && styles.drawVariant == .pen { return true }
+        guard let k = MarkupController.active.selected?.kind, k.isClosed else { return false }
         return true
     }
 

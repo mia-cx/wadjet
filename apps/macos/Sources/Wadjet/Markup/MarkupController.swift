@@ -37,11 +37,25 @@ final class MarkupController {
     @ObservationIgnored private var gestureStart: LayerStack?
     enum Gesture {
         case drawing(Annotation, from: CGPoint)
+        case pen
         case moving(Annotation, from: CGPoint)
         case handle(SelectionHandle, Annotation, from: CGPoint)
     }
-    /// the in-progress stroke, for syncPanels/render
-    var draft: Annotation? { if case let .drawing(a, _) = gesture { a } else { nil } }
+    /// an in-progress Pen path and the pointer's latest position for its preview
+    @ObservationIgnored private var pen: (builder: PenBuilder, id: Annotation.ID, style: AnnotationStyle)?
+    @ObservationIgnored private var penHover: CGPoint?
+    /// the in-progress stroke or Pen path, for syncPanels/render
+    var draft: Annotation? {
+        if case let .drawing(a, _) = gesture { return a }
+        guard let pen else { return nil }
+        // mid-press the handles are being pulled — a stale hover node would
+        // draw a phantom segment; the hover preview only matters between presses
+        if case .pen = gesture {
+            return Annotation(id: pen.id, kind: .path(pen.builder.path), style: pen.style)
+        }
+        let hover = penHover ?? pen.builder.path.nodes.last?.anchor ?? .zero
+        return Annotation(id: pen.id, kind: .path(pen.builder.preview(to: hover)), style: pen.style)
+    }
     /// set by Option-click on a counter: the value the next click places
     @ObservationIgnored private var counterNext: Int?
     private(set) var selection: Annotation.ID? {
@@ -147,6 +161,7 @@ final class MarkupController {
     /// arms a Tool on an Editor; the screen follows AppState through syncArmed
     func arm(_ tool: Tool?) {
         commitGesture(); gesture = nil
+        if tool != armed { finishPen() } // a Tool switch commits any Pen path in progress
         if tool == nil { selection = nil; cmdHeld = false }
         armed = tool
         render()
@@ -165,6 +180,7 @@ final class MarkupController {
             render()
             return
         }
+        finishPen() // a Tool switch commits any Pen path in progress
         let was = armed
         armed = want
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
@@ -187,7 +203,10 @@ final class MarkupController {
                 return e
             }
             keyMon = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
-                guard let self, e.keyCode == 51 || e.keyCode == 117, self.selection != nil else { return e }
+                guard let self else { return e }
+                // Return finishes a Pen path in progress (and only then eats the key)
+                if e.keyCode == 36 || e.keyCode == 76, self.finishPen() { return nil }
+                guard e.keyCode == 51 || e.keyCode == 117, self.selection != nil else { return e }
                 self.deleteSelection()
                 return nil
             }
@@ -249,8 +268,12 @@ final class MarkupController {
 
     func clear() {
         commitGesture()
+        gesture = nil; snapper = nil; selection = nil; counterNext = nil
+        // the Pen preview dies with the stack it wasn't part of — clear it
+        // before the edit renders
+        pen = nil; penHover = nil
         edit { $0.clear() }
-        gesture = nil; snapper = nil; selection = nil; counterNext = nil; syncPanels()
+        syncPanels()
     }
 
     /// the selected Annotation's style; setting restyles it alone — the seam the
@@ -323,8 +346,9 @@ final class MarkupController {
         AppLog.line("markup: deleted selection")
     }
 
-    // strokes arrive as global screen points from MarkupView; `command` = temporary Select
-    func begin(at p: CGPoint, command: Bool) {
+    // strokes arrive as global screen points from MarkupView; `command` =
+    // temporary Select, `constrained` = Shift (45° snaps)
+    func begin(at p: CGPoint, command: Bool, constrained: Bool = false) {
         gestureStart = stack
         if armed == .select || command {
             if let sel = selected {
@@ -349,6 +373,18 @@ final class MarkupController {
             } else {
                 selection = nil
             }
+            return
+        }
+        if armed == .draw, MarkupStyles.shared.drawVariant == .pen {
+            // Pen: a press adds a node (or closes on the first), a press-drag
+            // pulls its handles — the path lives in `pen` until finishPen
+            if pen == nil {
+                pen = (PenBuilder(), Annotation.ID(), MarkupStyles.shared.style(for: .draw))
+            }
+            _ = pen?.builder.press(at: p, closeRadius: Self.handleHitRadius, constrained: constrained)
+            selection = nil
+            gesture = .pen
+            render()
             return
         }
         selection = nil // a new Annotation takes the Tool's style and options, not the selection's
@@ -409,6 +445,8 @@ final class MarkupController {
                 a.kind = .line(start: from,
                                end: constrained ? PathGeometry.snapAngle(p, from: from) : p,
                                bend: bend)
+            case .path: // Pen paths drag through the .pen gesture
+                break
             case let .shape(kind, _):
                 // ⇧ constrains to a square, ⌥ draws from the centre
                 let f = NSEvent.modifierFlags
@@ -420,13 +458,18 @@ final class MarkupController {
             case .counter: break // counters place on the click — never a draft
             }
             gesture = .drawing(a, from: from)
+        case .pen:
+            pen?.builder.drag(to: p, constrained: constrained)
+            penHover = p // the next hover preview starts from the pointer
         case let .moving(start, from):
             let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
             let snapped = snapper?.offset(rect: PathGeometry.path(for: moved).boundingBoxOfPath) ?? .zero
             stack.replace(moved.moved(by: snapped))
         case let .handle(h, start, from):
-            if constrained, case .vertex = h {
-                // Shift's 45° constraint wins: a point snap would leave the ray
+            // Shift's 45° constraint wins on point handles: a point snap
+            // would leave the ray — vertex ends and Pen tangents both
+            let shiftConstrained = switch h { case .vertex, .tangent: true; default: false }
+            if constrained, shiftConstrained {
                 stack.replace(start.dragging(h, from: from, to: p, constrained: true))
             } else {
                 // the grip follows the pointer's delta whether or not it snaps
@@ -440,11 +483,19 @@ final class MarkupController {
         }
         render()
     }
+    /// commits a Pen path that just closed; other paths wait for Return/Escape
     func end() {
+        if case .pen = gesture {
+            gesture = nil
+            if pen?.builder.path.closed == true { finishPen() } else { render() }
+            return
+        }
         if case let .drawing(d, _) = gesture {
             let drawn: Bool = switch d.kind {
             case let .line(start, end, _):
                 hypot(end.x - start.x, end.y - start.y) >= Self.minDraftSize
+            case .path: // Pen paths commit through finishPen, not this gesture
+                false
             case let .shape(_, rect), let .censor(rect, _):
                 rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
             case .counter:
@@ -455,6 +506,40 @@ final class MarkupController {
         commitGesture()
         gesture = nil
         snapper = nil
+        render()
+    }
+
+    /// ends an in-progress Pen path, keeping it when it has ≥ 2 nodes;
+    /// true when one was in progress
+    @discardableResult
+    func finishPen() -> Bool {
+        guard let pen else { return false }
+        self.pen = nil; penHover = nil
+        // a temporary-Select drag may still be in flight — commit it first so
+        // it stays its own undo step and the path inserts above it
+        switch gesture {
+        case nil, .pen: break
+        case .drawing, .moving, .handle: commitGesture()
+        }
+        if let data = pen.builder.finished {
+            let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
+            // the insertion is its own undo step — temporary Select presses
+            // mid-path are separate gestures, so the gesture snapshot can't
+            // carry this one
+            edit { $0.add(a) }
+            AppLog.line("markup: finished pen path (\(data.nodes.count) nodes)")
+        }
+        gestureStart = nil // the path's presses left no drag to commit
+        gesture = nil
+        syncPanels()
+        render()
+        return true
+    }
+
+    /// the pointer moved: only the Pen rubber-band preview cares
+    func hover(at p: CGPoint) {
+        guard pen != nil else { return }
+        penHover = p
         render()
     }
 
