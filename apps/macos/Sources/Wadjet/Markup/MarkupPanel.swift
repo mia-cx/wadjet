@@ -65,19 +65,11 @@ final class MarkupView: NSView {
             let l = shapeLayers[a.id] ?? CAShapeLayer()
             shapeLayers[a.id] = l
             l.path = PathGeometry.path(for: a)
-            if case .censor = a.kind {
-                // Black out: opaque black fill, no stroke
-                l.fillColor = CGColor(srgbRed: 0, green: 0, blue: 0, alpha: 1)
-                l.strokeColor = nil
-                l.opacity = 1
-                l.lineWidth = 0
-            } else {
-                l.fillColor = nil
-                let c = a.style.colour
-                l.strokeColor = CGColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
-                l.opacity = Float(a.style.opacity)
-                l.lineWidth = a.style.width
-            }
+            l.fillColor = a.fillColour.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
+            l.strokeColor = a.strokeColour.map { CGColor(srgbRed: $0.red, green: $0.green, blue: $0.blue, alpha: $0.alpha) }
+            // Black out stays opaque whatever the style
+            if case .censor = a.kind { l.opacity = 1 } else { l.opacity = Float(a.style.opacity) }
+            l.lineWidth = a.style.width
             l.lineCap = .round; l.lineJoin = .round
             l.contentsScale = scale
         }

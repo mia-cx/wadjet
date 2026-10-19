@@ -7,16 +7,28 @@ extension OverlayController {
     /// that strip as outside the menu body
     static let menuHeadroom: CGFloat = 40
 
+    /// the menu panel's height for `t` with its body capped at `maxBody`
+    /// points; sets AppState.menuScrollHeight when the content is taller, so
+    /// the body scrolls instead of running off the display
+    func cappedMenuHeight(_ t: Tool, maxBody: CGFloat) -> CGFloat {
+        AppState.shared.menuScrollHeight = nil
+        let natural = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
+            .padding(.top, Self.menuHeadroom)
+            .frame(maxHeight: .infinity, alignment: .top)).fittingSize.height
+        let body = natural - Self.menuHeadroom
+        AppState.shared.menuScrollHeight = body > maxBody ? maxBody : nil
+        return min(body, maxBody) + Self.menuHeadroom
+    }
+
     /// resizes the open menu's panel to its content, keeping its top edge —
     /// for a menu whose content grows (the colour wheel)
     func fitMenu() {
         guard let t = AppState.shared.openMenu, let p = menuPanel else { return }
-        let size = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
-            .padding(.top, Self.menuHeadroom)
-            .frame(maxHeight: .infinity, alignment: .top)).fittingSize
+        let maxBody = (p.frame.maxY - Self.menuHeadroom) - ((p.screen ?? NSScreen.main!).frame.minY + 8)
+        let h = cappedMenuHeight(t, maxBody: maxBody)
         var f = p.frame
-        f.origin.y = f.maxY - size.height // keep the top edge: the menu grows downward
-        f.size.height = size.height
+        f.origin.y = f.maxY - h // keep the top edge: the menu grows downward
+        f.size.height = h
         p.setFrame(f, display: true)
     }
 }
@@ -27,7 +39,6 @@ extension OverlayController {
 struct MarkupStyleControls: View {
     let tool: Tool
     let ctrl: OverlayController
-    @ObservedObject var s = AppState.shared
     var styles: MarkupStyles { .shared }
     @State var width: Double = 0
     @State var opacity: Double = 0
@@ -35,25 +46,18 @@ struct MarkupStyleControls: View {
     @State var editing = false
 
     var style: AnnotationStyle { styles.style(for: tool) }
-    var colour: Color { Color(red: style.colour.red, green: style.colour.green, blue: style.colour.blue) }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            colourRow
-            if styles.wheelOpen {
-                ColourWheelView(tool: tool)
-                    .frame(width: 200, height: 200)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .transition(.opacity.combined(with: .scale(0.95, anchor: .top)))
-            }
+            MarkupColourRow(tool: tool, target: .stroke, ctrl: ctrl)
             divider()
-            sliderRow(icon: "lineweight", value: $width, range: 1...24, step: 1,
-                      label: "Stroke weight", text: "\(Int(width)) pt") {
+            MenuSliderRow(icon: "lineweight", label: "Stroke weight", text: "\(Int(width)) pt",
+                          value: $width, range: 1...24, step: 1, editing: $editing) {
                 styles.restyle(tool) { $0.width = CGFloat(width) }
             }
-            sliderRow(icon: "circle.lefthalf.filled", value: $opacity, range: 0.1...1, step: 0.05,
-                      label: "Opacity", text: "\(Int((opacity * 100).rounded()))%") {
+            MenuSliderRow(icon: "circle.lefthalf.filled", label: "Opacity",
+                          text: "\(Int((opacity * 100).rounded()))%",
+                          value: $opacity, range: 0.1...1, step: 0.05, editing: $editing) {
                 styles.restyle(tool) { $0.opacity = opacity }
             }
         }
@@ -71,78 +75,121 @@ struct MarkupStyleControls: View {
         }
     }
 
+    func divider() -> some View {
+        Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
+            .padding(.horizontal, 20).padding(.vertical, 3)
+    }
+}
+
+/// a colour row (well, six swatches, eyedropper) with its expandable hue
+/// wheel, editing `target` — Draw's stroke or a shape's fill
+struct MarkupColourRow: View {
+    let tool: Tool
+    let target: ColourTarget
+    let ctrl: OverlayController
+    @ObservedObject var s = AppState.shared
+    var styles: MarkupStyles { .shared }
+
+    var style: AnnotationStyle { styles.style(for: tool) }
+    var colour: RGBAColour { style.colour(for: target) }
+    var open: Bool { styles.wheel == target }
+    /// VoiceOver names the fill row's controls "Fill …"
+    var voiceOver: String { target == .fill ? "Fill " : "" }
+
+    var body: some View {
+        colourRow
+        if open {
+            ColourWheelView(tool: tool, target: target)
+                .frame(width: 200, height: 200)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 8)
+                .transition(.opacity.combined(with: .scale(0.95, anchor: .top)))
+        }
+    }
+
     // MARK: colour row — 8 cells: well, six swatches, eyedropper
 
     var colourRow: some View {
         HStack(spacing: 0) {
-            MenuCell(pinned: styles.wheelOpen, action: toggleWheel) {
+            MenuCell(pinned: open, action: toggleWheel) {
                 // the colour well: current colour inside a rainbow ring
                 Circle()
                     .stroke(AngularGradient(colors: [.red, .orange, .yellow, .green, .blue, .purple, .red],
                                             center: .center), lineWidth: 2.5)
                     .frame(width: 30.5, height: 30.5)
-                    .overlay { Circle().fill(colour).frame(width: 24, height: 24) }
+                    .overlay {
+                        Circle().fill(Color(red: colour.red, green: colour.green, blue: colour.blue))
+                            .frame(width: 24, height: 24)
+                    }
             }
-            .accessibilityLabel("Colour wheel")
+            .accessibilityLabel("\(voiceOver)Colour wheel")
             .accessibilityAddTraits(.isToggle)
-            .accessibilityValue(styles.wheelOpen ? "On" : "Off")
+            .accessibilityValue(open ? "On" : "Off")
 
             ForEach(0..<MarkupStyles.swatchCount, id: \.self) { i in
                 if i < styles.swatches.count {
                     let c = styles.swatches[i]
                     MenuCell {
-                        styles.useColour(c, for: tool)
+                        styles.useColour(c, for: tool, target: target)
                         s.openMenu = nil; ctrl.syncMenu()
                     } content: {
                         Circle().fill(Color(red: c.red, green: c.green, blue: c.blue))
                             .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 0.5)) // black must read on dark glass
                             .overlay { // the current colour wears a ring
-                                if c.hex == style.colour.hex {
+                                if c.hex == colour.hex {
                                     Circle().stroke(.white, lineWidth: 2).padding(-2)
                                 }
                             }
                             .frame(width: 22, height: 22)
                     }
-                    .accessibilityLabel("Colour \(c.hex)")
-                    .accessibilityAddTraits(c.hex == style.colour.hex ? .isSelected : [])
+                    .accessibilityLabel("\(voiceOver)Colour \(c.hex)")
+                    .accessibilityAddTraits(c.hex == colour.hex ? .isSelected : [])
                 } else {
                     Color.clear.frame(maxWidth: .infinity, minHeight: 40)
                 }
             }
 
-            MenuCell { styles.beginEyedropper(for: tool) } content: {
+            MenuCell { styles.beginEyedropper(for: tool, target: target) } content: {
                 Image(systemName: "eyedropper").font(.system(size: 15)).foregroundStyle(.white)
             }
-            .accessibilityLabel("Pick colour from screen")
+            .accessibilityLabel("Pick \(target == .fill ? "fill " : "")colour from screen")
         }
         .frame(minHeight: 40)
     }
 
     func toggleWheel() {
-        if styles.wheelOpen {
+        if open {
             withAnimation(.spring(duration: 0.3, bounce: 0.15)) {
-                styles.wheelOpen = false
+                styles.wheel = nil
             } completion: {
                 ctrl.fitMenu() // the panel shrinks once the wheel has animated out
             }
         } else {
             withAnimation(.spring(duration: 0.3, bounce: 0.15)) {
-                styles.wheelOpen = true
+                styles.wheel = target
             }
             ctrl.fitMenu() // grow at once: the content springs in inside
         }
     }
+}
 
-    // MARK: sliders
-
-    /// MenuRow metrics — leading 22 pt icon, trailing value — but the row
-    /// slides instead of picking, and only commits on release
-    func sliderRow(icon: String, value: Binding<Double>, range: ClosedRange<Double>, step: Double,
-                   label: String, text: String, commit: @escaping () -> Void) -> some View {
+/// MenuRow metrics — leading 22 pt icon, trailing value — but the row
+/// slides instead of picking, and only commits on release. `editing` holds
+/// the drag state so callers don't re-seed `value` mid-drag.
+struct MenuSliderRow: View {
+    let icon: String
+    let label: String
+    let text: String
+    @Binding var value: Double
+    let range: ClosedRange<Double>
+    let step: Double
+    @Binding var editing: Bool
+    let commit: () -> Void
+    var body: some View {
         HStack(spacing: 12) {
             Image(systemName: icon).font(.system(size: 15))
                 .foregroundStyle(.white).frame(width: 22)
-            Slider(value: value, in: range, step: step) { e in
+            Slider(value: $value, in: range, step: step) { e in
                 editing = e
                 if !e { commit() }
             }
@@ -154,11 +201,6 @@ struct MarkupStyleControls: View {
         }
         .frame(maxWidth: .infinity, minHeight: 40, alignment: .leading)
         .padding(.horizontal, 14)
-    }
-
-    func divider() -> some View {
-        Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
-            .padding(.horizontal, 20).padding(.vertical, 3)
     }
 }
 
@@ -186,6 +228,8 @@ struct MenuCell<Content: View>: View {
 /// y-down points in. Local HSL while dragging; commits once on drag end.
 struct ColourWheelView: View {
     let tool: Tool
+    /// which colour of the style it edits — Draw's stroke or a shape's fill
+    let target: ColourTarget
     var styles: MarkupStyles { .shared }
     @State var hsl = HSL(hue: 0, saturation: 1, lightness: 0.5)
     /// which control the current drag owns — set at drag start, held to its end
@@ -238,8 +282,8 @@ struct ColourWheelView: View {
                 dragMode = nil
                 commit()
             })
-        .onAppear { seed(from: styles.style(for: tool).colour) }
-        .onChange(of: styles.style(for: tool).colour) { _, c in seed(from: c) }
+        .onAppear { seed(from: styles.style(for: tool).colour(for: target)) }
+        .onChange(of: styles.style(for: tool).colour(for: target)) { _, c in seed(from: c) }
     }
 
     /// the S/L triangle in fixed orientation (H at unit angle 0, W 120°, K
@@ -313,7 +357,7 @@ struct ColourWheelView: View {
     }
 
     func commit() {
-        styles.useColour(RGBAColour(hsl: hsl), for: tool)
+        styles.useColour(RGBAColour(hsl: hsl), for: tool, target: target)
     }
     func adjustHue(_ delta: Double) {
         hsl.hue = (hsl.hue + delta).truncatingRemainder(dividingBy: 360)

@@ -61,6 +61,33 @@ struct LayerStackTests {
         #expect(try LayerStack(json: stack.json()) == stack)
     }
 
+    // Proves styles saved before Shapes decode unfilled and stroked, and a
+    // filled, unstroked style survives a save/load round trip.
+    @Test func styleJSONRoundTrip() throws {
+        let old = try JSONDecoder().decode(AnnotationStyle.self, from: Data(
+            #"{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}"#.utf8))
+        #expect(old.fill == nil && old.stroked)
+        let filled = AnnotationStyle(colour: old.colour, width: 4,
+            fill: RGBAColour(red: 0, green: 0, blue: 1, alpha: 1), stroked: false)
+        #expect(try JSONDecoder().decode(AnnotationStyle.self, from: JSONEncoder().encode(filled)) == filled)
+    }
+
+    // Proves a shape on the wire — {"shape":{"kind":{…},"rect":[x,y,w,h]}} —
+    // decodes to the expected Annotation and round-trips.
+    @Test func shapeAnnotationsJSONRoundTrip() throws {
+        let fixture = """
+            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"shape":{"kind":{"star":{"innerRatio":0.4,"points":5}},"rect":[0,0,100,50]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}
+            """
+        var expected = LayerStack()
+        expected.add(Annotation(id: UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!,
+                                kind: .shape(.star(points: 5, innerRatio: 0.4),
+                                             rect: CGRect(x: 0, y: 0, width: 100, height: 50)),
+                                style: red4))
+        let stack = try LayerStack(json: Data(fixture.utf8))
+        #expect(stack == expected)
+        #expect(try LayerStack(json: stack.json()) == stack)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }

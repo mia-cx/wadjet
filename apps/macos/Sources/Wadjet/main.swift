@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", draw = "draw", censor = "censor", clearAnnotations = "clearAnnotations"
+    case select = "select", draw = "draw", shapes = "shapes", censor = "censor", clearAnnotations = "clearAnnotations"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .censor: "Censor"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .censor: "Censor"; case .clearAnnotations: "Clear Annotations"
         }
     }
     // the permanent label under the cell icon — as short as it can be
@@ -33,10 +33,10 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .censor: "Censor"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .censor: "Censor"; case .clearAnnotations: "Clear"
         }
     }
-    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; case .select, .draw, .censor, .clearAnnotations: .markup; default: .util } }
+    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; case .select, .draw, .shapes, .censor, .clearAnnotations: .markup; default: .util } }
     /// Tools that can skip the pick: one obvious target (the pointer's display
     /// or the focused window) — a Shortcut can capture them without confirming
     var confirmOptional: Bool { [.capWindow, .capScreen, .recWindow, .recScreen].contains(self) }
@@ -45,7 +45,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .censor: "eye.slash"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .shapes: "square.on.circle"; case .censor: "eye.slash"; case .clearAnnotations: "trash"
         }
     }
     enum Kind: CaseIterable { case shot, rec, util, markup
@@ -124,6 +124,9 @@ final class AppState: ObservableObject {
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
+    /// the open menu body's height while it scrolls: set when its content
+    /// outgrows the space below its top edge
+    @Published var menuScrollHeight: CGFloat? = nil
     @Published var recordingElapsed: TimeInterval = 0
     @Published var recordingPaused = false
     @Published var lastClipboard = ""
@@ -1691,13 +1694,15 @@ final class OverlayController {
         hideMenu()
         // headroom above the menu so its scale-in never clips; top-aligned so
         // a growing menu grows downward
-        var f = NSRect(origin: .zero, size: NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
-            .padding(.top, Self.menuHeadroom).frame(maxHeight: .infinity, alignment: .top)).fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
         let bar = toolbarShapeScreenRect(on: di)
         let anchor = buttonScreenRect(t, on: di) ?? bar ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
         // centred under the Tool, its top 8 pt below the bar's bottom edge
         let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
+        var f = NSRect(origin: .zero, size: NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
+            .padding(.top, Self.menuHeadroom).frame(maxHeight: .infinity, alignment: .top)).fittingSize)
+        // a body taller than the space below its top edge scrolls instead
+        f.size.height = cappedMenuHeight(t, maxBody: top - (scr.minY + 8))
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
                            y: max(scr.minY + 8, top - (f.height - Self.menuHeadroom)))
         // the menu's own frost: the Freeze Frame column from its body's top to
@@ -2266,7 +2271,7 @@ enum WadjetCursors {
     }
     static func make(_ t: Tool) -> NSCursor {
         switch t {
-        case .capRegion, .recRegion, .copyText, .measure, .draw, .censor: return .crosshair
+        case .capRegion, .recRegion, .copyText, .measure, .draw, .shapes, .censor: return .crosshair
         case .select: return .arrow
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
@@ -2680,7 +2685,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText, .select, .draw, .censor, .clearAnnotations: break
+        case .copyText, .select, .draw, .shapes, .censor, .clearAnnotations: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -4002,7 +4007,8 @@ struct ToolMenuView: View {
     var backdrop: CGImage? = nil // Freeze Frame crop under the menu body
     @ObservedObject var s = AppState.shared
     @State var shown = false // spring in from the cell it hangs under
-    var body: some View {
+    /// the menu's rows — scrolled when they outgrow the space under the top edge
+    @ViewBuilder var rows: some View {
         VStack(alignment: .leading, spacing: 0) {
             switch tool.kind {
             // what goes in → how it starts → what happens after
@@ -4023,13 +4029,25 @@ struct ToolMenuView: View {
             case .util where tool == .measure:
                 tileRow(measureTiles)
             case .markup:
+                if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                 if tool == .censor { tileRow(censorTiles) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
+                if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 selectionRows()
                 if tool == .select { markupGroupRows() }
             default: EmptyView()
             }
         }
-        .padding(Self.inset)
+    }
+
+    var body: some View {
+        Group {
+            if let h = s.menuScrollHeight {
+                ScrollView(.vertical) { rows.padding(Self.inset) }
+                    .frame(height: h)
+            } else {
+                rows.padding(Self.inset)
+            }
+        }
         .frame(width: 280)
         // row and tile highlights take ConcentricRectangle from this, so
         // their corners nest inside the menu's

@@ -22,10 +22,19 @@ extension WadjetConfig {
             recentColours = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .recentColours) ?? FrecencyRanker()
         }
     }
-    /// one Markup Tool's settings; later slices add theirs (Line ends, Text font…) here
+    /// one Markup Tool's settings; later slices add theirs (Line ends, Text font…) here.
+    /// Shapes also reads `shapes.variant` and each variant's `shape`.
     public struct MarkupTool: Codable, Equatable, Sendable {
         /// nil until the user restyles the Tool; the app then uses the Tool's built-in default
         public var style: AnnotationStyle?
-        public init(style: AnnotationStyle? = nil) { self.style = style }
+        /// Shapes: the variant it draws, at `markup.tools.shapes.variant`
+        public var variant: ShapeVariant?
+        /// a Shapes variant's option, at `markup.tools.<variant>.shape`
+        public var shape: ShapeKind?
+        public init(style: AnnotationStyle? = nil, variant: ShapeVariant? = nil, shape: ShapeKind? = nil) {
+            self.style = style
+            self.variant = variant
+            self.shape = shape
+        }
     }
 }

@@ -119,6 +119,21 @@ struct CanvasDocumentTests {
         }
     }
 
+    // Proves a flattened canvas paints a shape's fill inside and its stroke on
+    // the edge — pure colours so linear values equal sRGB.
+    @Test func flattenedPaintsShapeFillAndStroke() throws {
+        let shape = Annotation(
+            kind: .shape(.rectangle(cornerRadius: 0), rect: CGRect(x: 1, y: 1, width: 8, height: 8)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2,
+                         fill: .init(red: 0, green: 0, blue: 1, alpha: 1)))
+        let document = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 10, height: 10),
+            layerStack: LayerStack([shape]), displayImages: [:])
+        let px = try linearPixels(document.flatten())
+        func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[(4 * (y * 10 + x))..<(4 * (y * 10 + x) + 4)]) }
+        #expect(pixel(5, 5) == [0, 0, 1, 1]) // the fill
+        #expect(pixel(5, 1) == [1, 0, 0, 1]) // the stroke on the shape's edge
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])

@@ -39,29 +39,32 @@ extension CanvasDocument {
         }
         for annotation in layerStack.annotations {
             context.saveGState()
-            if case .censor = annotation.kind {
-                // Black out: opaque sRGB black, whatever the style
-                context.setFillColor(CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-                                             components: [0, 0, 0, 1])!)
-                context.addPath(PathGeometry.path(for: annotation))
+            // The transform/opacity slice will apply its model fields here; Black out stays opaque.
+            let path = PathGeometry.path(for: annotation)
+            if let fill = annotation.fillColour {
+                context.setFillColor(fill.cgColor)
+                context.addPath(path)
                 context.fillPath()
-                context.restoreGState()
-                continue
             }
-            // The transform/opacity slice will apply its model fields here.
-            let colour = annotation.style.colour
-            let srgb = CGColorSpace(name: CGColorSpace.sRGB)!
-            context.setStrokeColor(CGColor(colorSpace: srgb,
-                components: [colour.red, colour.green, colour.blue, colour.alpha])!)
-            context.setLineWidth(annotation.style.width)
-            context.setLineCap(.round)
-            context.setLineJoin(.round)
-            context.addPath(PathGeometry.path(for: annotation))
-            context.strokePath()
+            if let stroke = annotation.strokeColour {
+                context.setStrokeColor(stroke.cgColor)
+                context.setLineWidth(annotation.style.width)
+                context.setLineCap(.round)
+                context.setLineJoin(.round)
+                context.addPath(path)
+                context.strokePath()
+            }
             context.restoreGState()
         }
         context.endTransparencyLayer()
         guard let image = context.makeImage() else { throw CanvasDocumentError.renderFailed }
         return image
+    }
+}
+
+private extension RGBAColour {
+    var cgColor: CGColor {
+        CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                components: [red, green, blue, alpha])!
     }
 }

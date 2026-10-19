@@ -10,15 +10,16 @@ final class MarkupStyles {
     /// offered before there's colour history — Apple's system colours
     static let presetSwatches = ["#FF3B30", "#FF9500", "#FFCC00", "#34C759", "#007AFF", "#AF52DE", "#000000", "#FFFFFF"]
     static let swatchCount = 6
-    /// session state: the hue wheel stays open across menu opens
-    var wheelOpen = false
+    /// session state: which colour row's hue wheel is open — it stays open
+    /// across menu opens
+    var wheel: ColourTarget?
 
     private var config: ConfigStore<WadjetConfig> { AppState.shared.config }
 
     /// the selected Annotation's style if there is one, else the Tool's
     /// configured default — the #107 selection seam
     func style(for tool: Tool) -> AnnotationStyle {
-        MarkupController.shared.selectedStyle ?? config.value.markup.tools[tool.rawValue]?.style ?? tool.defaultStyle
+        MarkupController.shared.selectedStyle ?? config.value.markup.tools[tool.styleKey]?.style ?? tool.defaultStyle
     }
 
     /// While an Annotation is selected this restyles that Annotation alone
@@ -31,17 +32,17 @@ final class MarkupStyles {
             return
         }
         config.update {
-            var style = $0.markup.tools[tool.rawValue]?.style ?? tool.defaultStyle
+            var style = $0.markup.tools[tool.styleKey]?.style ?? tool.defaultStyle
             change(&style)
-            $0.markup.tools[tool.rawValue, default: WadjetConfig.MarkupTool()].style = style
+            $0.markup.tools[tool.styleKey, default: WadjetConfig.MarkupTool()].style = style
         }
     }
 
-    /// restyles the colour (opaque: transparency is the opacity slider's) on
+    /// restyles a colour (opaque: transparency is the opacity slider's) on
     /// the selection or Tool default, and always records it in the ranking
-    func useColour(_ c: RGBAColour, for tool: Tool) {
+    func useColour(_ c: RGBAColour, for tool: Tool, target: ColourTarget = .stroke) {
         let colour = RGBAColour(red: c.red, green: c.green, blue: c.blue, alpha: 1)
-        restyle(tool) { $0.colour = colour }
+        restyle(tool) { $0.setColour(colour, for: target) }
         config.update { $0.markup.recentColours.recordUse(of: colour.hex) }
     }
 
@@ -60,16 +61,17 @@ final class MarkupStyles {
 
     // MARK: eyedropper — reuses Pick Colour itself, its loupe included
 
-    /// a pending eyedropper pick: which Markup Tool takes the colour, which
-    /// Annotation it restyles (the selection Pick Colour's disarm clears), and
-    /// whether it started on the live toolbar (a Freeze Frame it must drop)
-    private(set) var eyedropper: (tool: Tool, annotation: Annotation.ID?, live: Bool)?
+    /// a pending eyedropper pick: which Markup Tool and colour target take the
+    /// colour, which Annotation it restyles (the selection Pick Colour's disarm
+    /// clears), and whether it started on the live toolbar (a Freeze Frame it
+    /// must drop)
+    private(set) var eyedropper: (tool: Tool, target: ColourTarget, annotation: Annotation.ID?, live: Bool)?
 
     /// hands the pointer to Pick Colour: from .frozen it switches Tool on the
     /// same Freeze Frame, from .toolbar it takes one and opens Pick Colour
-    func beginEyedropper(for tool: Tool) {
+    func beginEyedropper(for tool: Tool, target: ColourTarget = .stroke) {
         let s = AppState.shared
-        eyedropper = (tool, annotation: MarkupController.shared.selection, live: s.phase == .toolbar)
+        eyedropper = (tool, target, annotation: MarkupController.shared.selection, live: s.phase == .toolbar)
         s.openMenu = nil; AppDelegate.shared?.overlayCtrl.syncMenu()
         AppDelegate.shared?.trigger(.pickColour)
     }
@@ -79,10 +81,10 @@ final class MarkupStyles {
         guard let e = eyedropper else { return false }
         let colour = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
         if let id = e.annotation {
-            MarkupController.shared.restyle(id) { $0.colour = colour }
+            MarkupController.shared.restyle(id) { $0.setColour(colour, for: e.target) }
             config.update { $0.markup.recentColours.recordUse(of: colour.hex) }
         } else {
-            useColour(colour, for: e.tool)
+            useColour(colour, for: e.tool, target: e.target)
         }
         restore()
         return true
@@ -125,7 +127,27 @@ final class MarkupStyles {
     }
 }
 
+/// which colour a Markup colour control edits: `stroke` is `style.colour`,
+/// the main colour every Tool has; `fill` is a shape's `style.fill`
+enum ColourTarget {
+    case stroke, fill
+}
+
+extension AnnotationStyle {
+    /// the colour `target` edits — an unfilled shape's fill reads as the
+    /// stroke colour, so the wheel opens somewhere sensible
+    func colour(for target: ColourTarget) -> RGBAColour {
+        switch target { case .stroke: colour; case .fill: fill ?? colour }
+    }
+    mutating func setColour(_ c: RGBAColour, for target: ColourTarget) {
+        switch target { case .stroke: colour = c; case .fill: fill = c }
+    }
+}
+
 extension Tool {
+    /// the `markup.tools` key a Tool's style lives under — Shapes keeps one per variant
+    @MainActor var styleKey: String { self == .shapes ? MarkupShapes.variant.rawValue : rawValue }
+
     /// the built-in style a Markup Tool uses until the user restyles it
     var defaultStyle: AnnotationStyle {
         // every Markup Tool so far (Line): opaque red, 4 pt

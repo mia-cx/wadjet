@@ -75,6 +75,8 @@ final class MarkupController {
                 if AppDelegate.shared?.overlayCtrl.pointerOverUI != true {
                     self.panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.view.setToolCursor()
                 }
+                // ⇧/⌥ mid-drag reshape a Shapes draft without the pointer moving
+                if case .drawing = self.gesture { self.drag(to: NSEvent.mouseLocation) }
                 return e
             }
             keyMon = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] e in
@@ -206,17 +208,20 @@ final class MarkupController {
             }
             return
         }
+        selection = nil // a new Annotation takes the Tool's style and options, not the selection's
         let a: Annotation
         switch armed {
         case .draw:
             a = Annotation(kind: .line(start: p, end: p), style: MarkupStyles.shared.style(for: .draw))
+        case .shapes:
+            a = Annotation(kind: .shape(MarkupShapes.shape(for: MarkupShapes.variant), rect: CGRect(origin: p, size: .zero)),
+                           style: MarkupStyles.shared.style(for: .shapes))
         case .censor:
             a = Annotation(kind: .censor(rect: CGRect(origin: p, size: .zero), method: .blackOut),
                            style: MarkupStyles.shared.style(for: .censor))
         default:
             return
         }
-        selection = nil
         gesture = .drawing(a, from: p)
         render()
     }
@@ -227,6 +232,11 @@ final class MarkupController {
             switch d.kind {
             case .line:
                 a.kind = .line(start: from, end: p)
+            case let .shape(kind, _):
+                // ⇧ constrains to a square, ⌥ draws from the centre
+                let f = NSEvent.modifierFlags
+                a.kind = .shape(kind, rect: CGRect(dragFrom: from, to: p,
+                                                   square: f.contains(.shift), fromCentre: f.contains(.option)))
             case let .censor(_, method):
                 a.kind = .censor(rect: CGRect(x: from.x, y: from.y, width: p.x - from.x,
                                               height: p.y - from.y).standardized, method: method)
@@ -246,7 +256,7 @@ final class MarkupController {
             let drawn: Bool = switch d.kind {
             case let .line(start, end):
                 hypot(end.x - start.x, end.y - start.y) >= Self.minDraftSize
-            case let .censor(rect, _):
+            case let .shape(_, rect), let .censor(rect, _):
                 rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
             }
             if drawn { stack.add(d) }
