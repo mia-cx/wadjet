@@ -57,6 +57,12 @@ final class CanvasEditorDocument: NSDocument {
         let m = MarkupController(editing: canvas.layerStack)
         m.undoManager = undoManager
         m.document = self
+        m.snapPixelSources = { [weak self] in
+            guard let self else { return [] }
+            return canvas.layout.compactMap { display in
+                canvas.displayImages[display.id].map { MarkupPixelEdges(image: $0, bounds: display.frame) }
+            }
+        }
         m.arm(.select)
         markupCached = m
         return m
