@@ -4,9 +4,9 @@ import ImageIO
 import UniformTypeIdentifiers
 
 enum CanvasImageCodec {
-    static func heic(_ image: CGImage) throws -> Data {
+    static func heic(_ image: CGImage, quality: Double = 1) throws -> Data {
         let headroom = max(image.contentHeadroom, image.calculatedContentHeadroom)
-        var options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: 1.0]
+        var options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
         var source = image
         if headroom > 1 {
             options[kCGImageDestinationEncodeRequest] = kCGImageDestinationEncodeToISOGainmap
@@ -32,14 +32,19 @@ enum CanvasImageCodec {
 
     static func png(_ image: CGImage) throws -> Data {
         // The package thumbnail is SDR; only display/window HEICs carry HDR.
+        try encode(sdr(image), type: .png, options: [:])
+    }
+
+    static func sdr(_ image: CGImage) throws -> CGImage {
         guard let space = CGColorSpace(name: CGColorSpace.sRGB),
               let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
                 bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw CanvasDocumentError.renderFailed
         }
+        context.setEDRTargetHeadroom(1)
         context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
         guard let sdr = context.makeImage() else { throw CanvasDocumentError.renderFailed }
-        return try encode(sdr, type: .png, options: [:])
+        return sdr
     }
 
     private static func encode(_ image: CGImage, type: UTType, options: [CFString: Any]) throws -> Data {
