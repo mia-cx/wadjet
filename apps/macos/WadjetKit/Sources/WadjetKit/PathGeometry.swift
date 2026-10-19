@@ -182,6 +182,34 @@ public enum PathGeometry {
             ends: ends.copy(using: &t) ?? ends)
     }
 
+    /// the area an Annotation paints, as one path: its fill when `fillColour`
+    /// is set, ∪ its stroked outline when `strokeColour` is (∪ a Line's filled
+    /// end marks), ∪ for a Magnify the magnifier's silhouette (∪ that
+    /// silhouette stroked at style.width when it carries a border). Use it
+    /// where "does it paint here" matters — retention, coverage masks — where
+    /// hitTest's looser tolerance wouldn't.
+    public static func coverage(for a: Annotation) -> CGPath {
+        let p = path(for: a)
+        var covered = CGMutablePath() as CGPath
+        if a.fillColour != nil {
+            covered = covered.union(p, using: .winding)
+        }
+        if a.strokeColour != nil {
+            covered = covered.union(p.copy(strokingWithWidth: a.style.width,
+                lineCap: .round, lineJoin: .round, miterLimit: 10), using: .winding)
+            // a filled arrow's head and tail paint past the stroke's path
+            covered = covered.union(drawing(for: a).ends, using: .winding)
+        }
+        if case let .magnify(m) = a.kind {
+            let silhouette = m.options.shape.path(in: m.frame)
+            covered = covered.union(silhouette, using: .winding)
+            if m.options.border != nil {
+                covered = covered.union(silhouette.copy(strokingWithWidth: a.style.width,
+                    lineCap: .round, lineJoin: .round, miterLimit: 10), using: .winding)
+            }
+        }
+        return covered
+    }
     /// whether `point` lands on the filled area, on the stroked outline — the
     /// stroke geometry is untrimmed and undashed, so a click between two
     /// dashes still selects — or on a Line's ends, each widened by `tolerance`;

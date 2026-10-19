@@ -41,6 +41,28 @@ struct ScreenshotCanvasTests {
         #expect(canvas.layout.count == 2)
     }
 
+    // Proves a window capture keeps a Magnify by its magnifier's coverage —
+    // the silhouette paints the crop even when the source outline lies off it.
+    @Test func windowCaptureKeepsAMagnifyByItsMagnifier() throws {
+        let crop = CGRect(x: 0, y: 0, width: 10, height: 10)
+        let style = AnnotationStyle(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2)
+        // source off the crop, magnifier on it — kept by the silhouette
+        let kept = Annotation(kind: .magnify(.init(
+                source: CGRect(x: -20, y: -20, width: 4, height: 4),
+                frame: CGRect(x: 2, y: 2, width: 6, height: 6),
+                zoom: nil, options: .init(leader: false, glass: false))),
+            style: style)
+        // both off the crop — nothing paints on it, dropped
+        let dropped = Annotation(kind: .magnify(.init(
+                source: CGRect(x: -20, y: -20, width: 4, height: 4),
+                frame: CGRect(x: -30, y: -30, width: 6, height: 6),
+                zoom: nil, options: .init(leader: false, glass: false))),
+            style: style)
+        let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(), crop: crop,
+            annotations: LayerStack([kept, dropped]), windowCapture: true)
+        #expect(canvas.layerStack.annotations == [kept])
+    }
+
     // Proves exported pixels use panel geometry (rotation and flips) and multiply style opacity by colour alpha.
     @Test func transformedOpacityMatchesFixture() throws {
         struct Fixture: Decodable { var rotation: Double; var flip: Bool; var samples: [[Float]] }
