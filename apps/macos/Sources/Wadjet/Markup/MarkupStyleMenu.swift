@@ -118,11 +118,10 @@ struct MarkupStyleControls: View {
 
     // MARK: line ends and dashes — drawn by WadjetKit so glyphs match the canvas
 
-    /// the end/dash rows show while Draw is armed (both variants) or a
-    /// stroked open shape — a Line or an open Pen path — is selected
+    /// the end/dash rows show for a selected Line or open path — or, with
+    /// nothing selected, while Draw is armed (both variants)
     var lineControls: Bool {
-        if tool == .draw { return true }
-        guard let k = MarkupController.active.selected?.kind else { return false }
+        guard let k = MarkupController.active.selected?.kind else { return tool == .draw }
         switch k {
         case .line: return true
         case .path: return !k.isClosed
@@ -130,19 +129,20 @@ struct MarkupStyleControls: View {
         }
     }
 
-    /// the Smoothing slider shows while a brush variant is armed or a Brush
-    /// stroke (a fitted path that kept its samples) is selected
+    /// the Smoothing slider shows for a selected Brush stroke (a fitted path
+    /// that kept its samples) — or, with nothing selected, while a brush
+    /// variant is armed
     var brushControls: Bool {
-        if let a = MarkupController.active.selected, case let .path(d) = a.kind, d.rawPoints != nil { return true }
-        return tool == .draw && styles.drawVariant.isBrush
+        guard let a = MarkupController.active.selected else { return tool == .draw && styles.drawVariant.isBrush }
+        if case let .path(d) = a.kind { return d.rawPoints != nil }
+        return false
     }
 
-    /// the Fill toggle shows while the Pen variant is armed or a closed path
-    /// is selected — only closed paths can fill
+    /// the Fill toggle shows for a selected closed path — or, with nothing
+    /// selected, while the Pen variant is armed; only closed paths can fill
     var penFillControls: Bool {
-        if tool == .draw && styles.drawVariant == .pen { return true }
-        guard let k = MarkupController.active.selected?.kind, k.isClosed else { return false }
-        return true
+        guard let k = MarkupController.active.selected?.kind else { return tool == .draw && styles.drawVariant == .pen }
+        return k.isClosed
     }
 
     /// a row of the five LineEnds; `atStart` decorates the sample line's left tip

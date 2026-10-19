@@ -3995,26 +3995,31 @@ struct ToolMenuView: View {
             case .markup where tool == .freezeRegion:
                 freezeRegionRows()
             case .markup:
-                if tool == .eraser {
+                let subject = MarkupMenuSubject(armed: tool.toolID, selected: MarkupController.active.selected?.kind)
+                let t = subject.tool.flatMap { Tool(rawValue: $0.rawValue) } ?? .select
+                if t == .eraser {
                     eraserRows()
                 } else if MarkupController.active.selected?.placement != nil {
                     // an image kind's menu: opacity, radius, border
                     ImageStyleControls(tool: tool, ctrl: ctrl)
                 } else {
-                    if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
-                    if tool == .counter { CounterControls(ctrl: ctrl) }
-                    if tool == .magnify { MagnifyShapeControls() }
-                    if tool == .censor {
-                        CensorControls(ctrl: ctrl); smartRedactRows()
+                    if t == .shapes { ShapeVariantControls(ctrl: ctrl) }
+                    if t == .counter { CounterControls(ctrl: ctrl) }
+                    if t == .magnify { MagnifyShapeControls() }
+                    if t == .censor {
+                        CensorControls(ctrl: ctrl)
+                        // Smart Redact belongs to the Censor Tool, not to a selected Censor
+                        if tool == .censor { smartRedactRows() }
                     } else {
-                        if tool == .draw { tileRow(drawTiles) }
-                        MarkupStyleControls(tool: tool, ctrl: ctrl)
+                        // the variant tiles set new strokes' type — never a selected path's
+                        if subject == .armed(.draw) { tileRow(drawTiles) }
+                        MarkupStyleControls(tool: t, ctrl: ctrl)
                     }
                 }
-                if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
-                if tool == .magnify { magnifyRows() }
-                if MarkupStyles.shared.editsText(tool) {
-                    TextFormatControls(tool: tool, ctrl: ctrl)
+                if t == .shapes { ShapePaintControls(tool: t, ctrl: ctrl) }
+                if t == .magnify { magnifyRows() }
+                if MarkupStyles.shared.editsText(t) {
+                    TextFormatControls(tool: t, ctrl: ctrl)
                 }
                 // the Transform rows are hidden while a text is being edited
                 if MarkupController.active.editing == nil {
