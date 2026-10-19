@@ -88,8 +88,7 @@ extension MarkupController {
             guard let doc = NSDocumentController.shared.documents
                     .compactMap({ $0 as? CanvasEditorDocument }).first(where: { $0.markup === self })
             else { return }
-            var canvas = doc.canvas
-            canvas.layerStack = stack
+            let canvas = doc.current // the live stack with its image assets
             let scale = canvas.layout.map(\.scaleFactor).max() ?? 2
             do {
                 sources = [.init(image: try canvas.flatten(scale: scale), frame: canvas.crop)]

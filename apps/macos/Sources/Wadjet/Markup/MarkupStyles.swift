@@ -29,12 +29,12 @@ final class MarkupStyles {
     }
 
     /// While an Annotation is selected this restyles that Annotation alone
-    /// (via MarkupController.selectedStyle); with nothing selected the change
-    /// becomes the Tool's default for new Annotations.
-    func restyle(_ tool: Tool, _ change: (inout AnnotationStyle) -> Void) {
-        if var selected = MarkupController.active.selectedStyle {
-            change(&selected)
-            MarkupController.active.selectedStyle = selected
+    /// (via MarkupController.restyle; `colourPicked` turns an image kind's
+    /// coloured border on); with nothing selected the change becomes the
+    /// Tool's default for new Annotations.
+    func restyle(_ tool: Tool, colourPicked: Bool = false, _ change: (inout AnnotationStyle) -> Void) {
+        if let id = MarkupController.active.selection {
+            MarkupController.active.restyle(id, colourPicked: colourPicked, change)
             return
         }
         config.update {
@@ -75,10 +75,10 @@ final class MarkupStyles {
     /// the selection or Tool default, and always records it in the ranking
     func useColour(_ c: RGBAColour, for tool: Tool, target: ColourTarget = .stroke) {
         let colour = RGBAColour(red: c.red, green: c.green, blue: c.blue, alpha: 1)
-        if target == .border {
+        if target == .border { // a Magnify's border is kind data, not style
             MarkupMagnify.setOptions { $0.border = colour }
         } else {
-            restyle(tool) { $0.setColour(colour, for: target) }
+            restyle(tool, colourPicked: true) { $0.setColour(colour, for: target) }
         }
         config.update { $0.markup.recordColour(colour.hex) }
     }
@@ -134,7 +134,7 @@ final class MarkupStyles {
             if e.target == .border {
                 MarkupMagnify.setOptions(of: id) { $0.border = colour }
             } else {
-                MarkupController.active.restyle(id) { $0.setColour(colour, for: e.target) }
+                MarkupController.active.restyle(id, colourPicked: true) { $0.setColour(colour, for: e.target) }
             }
             config.update { $0.markup.recordColour(colour.hex) }
         } else {

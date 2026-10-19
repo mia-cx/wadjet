@@ -21,7 +21,9 @@ public final class WindowFrameCompositor {
 
     /// the frame to write: the clean base itself when `annotations` is empty or the window can't be
     /// placed, else a copy of it from a reused pool with the Annotations drawn on; nil before any capture
-    public func compose(window: CGRect, primaryHeight: CGFloat, annotations: [Annotation]) -> CVPixelBuffer? {
+    public func compose(window: CGRect, primaryHeight: CGFloat, annotations: [Annotation],
+                        images: [UUID: CGImage] = [:],
+                        canvasPixels: [URL: CanvasPixels] = [:]) -> CVPixelBuffer? {
         guard let base else { return nil }
         let frame = CGSize(width: CVPixelBufferGetWidth(base), height: CVPixelBufferGetHeight(base))
         let annotator = WindowFrameAnnotator(window: window, primaryHeight: primaryHeight,
@@ -29,7 +31,8 @@ public final class WindowFrameCompositor {
                                              frame: frame)
         guard !annotations.isEmpty, let annotator, let out = outputBuffer(size: frame) else { return base }
         copy(base: base, to: out)
-        annotator.draw(annotations, on: out, source: base)
+        annotator.draw(annotations, on: out, source: base,
+                       images: images, canvasPixels: canvasPixels)
         return out
     }
 

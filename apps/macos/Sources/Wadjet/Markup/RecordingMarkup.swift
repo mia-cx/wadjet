@@ -111,7 +111,9 @@ final class WindowAnnotationOverlay: @unchecked Sendable {
                 }
             }
         }
-        return compositor.compose(window: window, primaryHeight: primaryHeight, annotations: annotations)
+        return compositor.compose(window: window, primaryHeight: primaryHeight, annotations: annotations,
+                                  images: MarkupController.onScreen.images,
+                                  canvasPixels: MarkupController.onScreen.canvasPixels)
     }
     private var primaryHeight: CGFloat { CGDisplayBounds(CGMainDisplayID()).height }
 }

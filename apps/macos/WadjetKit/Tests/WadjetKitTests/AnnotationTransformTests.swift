@@ -113,6 +113,108 @@ struct AnnotationTransformTests {
         #expect(a.handle(at: CGPoint(x: 50, y: 50), radius: 6, minExtent: 12, rotateOffset: 20) == nil)
     }
 
+    // Proves an image resize keeps its aspect ratio: a corner's larger axis wins,
+    // an edge grows the passive axis symmetrically, and stretch opts out.
+    @Test(arguments: [
+        (SelectionHandle.resize(x: 1, y: 1), CGPoint(x: 120, y: 50), false, CGRect(x: 0, y: 0, width: 120, height: 60)),
+        (.resize(x: 1, y: 1), CGPoint(x: 120, y: 50), true, CGRect(x: 0, y: 0, width: 120, height: 50)),
+        (.resize(x: 1, y: 0), CGPoint(x: 120, y: 25), false, CGRect(x: 0, y: -5, width: 120, height: 60)),
+    ])
+    func imageResizeLocksAspect(handle: SelectionHandle, to: CGPoint, stretch: Bool, frame: CGRect) {
+        let a = Annotation(kind: .image(asset: UUID(), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 100, height: 50),
+            crop: CGRect(x: 0, y: 0, width: 200, height: 100))), style: style)
+        #expect(near(a.dragging(handle, from: .zero, to: to, stretch: stretch).placement!.frame, frame))
+    }
+
+    // Proves recrop moves the frame and crop edges together in source units and
+    // clamps at the source bounds, so the kept pixels never move or mirror.
+    @Test func imageRecrop() {
+        let source = CGRect(x: 0, y: 0, width: 200, height: 100)
+        let a = Annotation(kind: .image(asset: UUID(), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 100, height: 50), crop: source)), style: style)
+        let trimmed = a.recropping(.resize(x: 1, y: 0), from: CGPoint(x: 100, y: 25),
+                                   to: CGPoint(x: 90, y: 25), source: source)
+        let p = trimmed.placement!
+        #expect(near(p.frame, CGRect(x: 0, y: 0, width: 90, height: 50)))
+        #expect(near(p.crop, CGRect(x: 0, y: 0, width: 180, height: 100)))
+        #expect(near(p.sourceFrame(for: source), a.placement!.sourceFrame(for: source)))
+        // crop (50,0,100,100) can only grow 50 source units before hitting maxX
+        var inset = a
+        inset.placement!.crop = CGRect(x: 50, y: 0, width: 100, height: 100)
+        let clamped = inset.recropping(.resize(x: 1, y: 0), from: CGPoint(x: 100, y: 25),
+                                       to: CGPoint(x: 180, y: 25), source: source)
+        #expect(near(clamped.placement!.frame, CGRect(x: 0, y: 0, width: 150, height: 50)))
+        #expect(near(clamped.placement!.crop, CGRect(x: 50, y: 0, width: 150, height: 100)))
+    }
+
+    // Proves a recrop on a rotated image re-pins through the moved pivot: the
+    // untouched edge stays where it was on screen.
+    @Test func rotatedImageRecropKeepsOppositeEdge() {
+        let source = CGRect(x: 0, y: 0, width: 200, height: 100)
+        let a = Annotation(kind: .image(asset: UUID(), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 100, height: 50), crop: source)), style: style,
+            transform: AnnotationTransform(rotation: .pi / 2))
+        // the right edge's grip sits on screen at (50,75); a drag to (50,55)
+        // trims 20 geometry units. The untouched left edge's midpoint must
+        // stay on screen at (50,-25), which re-pins the frame
+        let r = a.recropping(.resize(x: 1, y: 0), from: CGPoint(x: 50, y: 75),
+                             to: CGPoint(x: 50, y: 55), source: source)
+        let frame = r.placement!.frame
+        #expect(near(frame, CGRect(x: 10, y: -10, width: 80, height: 50)))
+        #expect(near(CGPoint(x: frame.minX, y: frame.midY).applying(r.affineTransform),
+                     CGPoint(x: 50, y: -25)))
+    }
+
+    // Proves a recrop moves by the pointer's delta from the press: a grip
+    // pressed inside the edge and dragged only along the passive axis leaves
+    // frame and crop untouched — rotated or not.
+    @Test(arguments: [0.0, .pi / 2])
+    func recropOffGripPressDoesNotJump(rotation: Double) {
+        let source = CGRect(x: 0, y: 0, width: 200, height: 100)
+        var a = Annotation(kind: .image(asset: UUID(), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 100, height: 50), crop: source)), style: style,
+            transform: AnnotationTransform(rotation: rotation))
+        // the right edge's grip is at geometry (100,25); the press sits 3pt
+        // inside it, at (97,25) — on screen the passive axis is perpendicular
+        let press = CGPoint(x: 97, y: 25).applying(a.affineTransform)
+        // drag only along the passive axis: screen y unrotated, screen x rotated
+        let to = rotation == 0 ? CGPoint(x: press.x, y: press.y + 35)
+                               : CGPoint(x: press.x + 35, y: press.y)
+        a = a.recropping(.resize(x: 1, y: 0), from: press, to: to, source: source)
+        #expect(near(a.placement!.frame, CGRect(x: 0, y: 0, width: 100, height: 50)))
+        #expect(near(a.placement!.crop, source))
+    }
+
+    // Proves a colour pick turns an image's border on even when the stored
+    // colour is unchanged, while restyles without the flag leave it alone.
+    @Test(arguments: [
+        (true, ImageBorder.colour),   // picking the same colour still enables it
+        (false, ImageBorder.hidden),  // an opacity-only restyle keeps .hidden
+    ])
+    func colourPickedTurnsBorderOn(colourPicked: Bool, border: ImageBorder) {
+        let a = Annotation(kind: .image(asset: UUID(), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 100, height: 50),
+            crop: CGRect(x: 0, y: 0, width: 200, height: 100), border: .hidden)), style: style)
+        var sameColour = style
+        sameColour.opacity = 0.5 // the colour itself doesn't change
+        #expect(a.restyled(sameColour, colourPicked: colourPicked).placement!.border == border)
+    }
+
+    // Proves panning slides the crop against the pointer and clamps at the
+    // source bounds while the frame stays put.
+    @Test func imagePan() {
+        let a = Annotation(kind: .image(asset: UUID(), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 100, height: 50),
+            crop: CGRect(x: 50, y: 0, width: 100, height: 100))), style: style)
+        let source = CGRect(x: 0, y: 0, width: 200, height: 100)
+        let r = a.panning(from: .zero, to: CGPoint(x: 10, y: 5), source: source)
+        #expect(near(r.placement!.frame, a.placement!.frame))
+        #expect(near(r.placement!.crop, CGRect(x: 40, y: 0, width: 100, height: 100)))
+        let clamped = r.panning(from: .zero, to: CGPoint(x: -100, y: 0), source: source)
+        #expect(near(clamped.placement!.crop, CGRect(x: 100, y: 0, width: 100, height: 100)))
+    }
+
     // Proves dragging a censor's grip past its anchor re-standardizes the rect —
     // a negative scale can't leave a mirrored CGRect with negative extents
     @Test func censorResizePastAnchorStaysStandardized() {

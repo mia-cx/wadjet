@@ -553,6 +553,107 @@ struct CanvasDocumentTests {
                 == linearPixels(withWindow.flatten(scale: 1)))
     }
 
+    // Proves an .image draws the part of its asset the crop names at its frame,
+    // and a difference hairline inverts to the image's complement.
+    @Test func flattenedImageShowsItsCrop() throws {
+        let split = try image(width: 4, height: 4, pixels: (0..<16).flatMap {
+            $0 % 4 < 2 ? [UInt8(255), 0, 0, 255] : [UInt8(0), 255, 0, 255]
+        })
+        let asset = UUID()
+        let style = AnnotationStyle(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1)
+        let document = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+            layerStack: LayerStack([Annotation(kind: .image(asset: asset, ImagePlacement(
+                frame: CGRect(x: 0, y: 0, width: 2, height: 4),
+                crop: CGRect(x: 0, y: 0, width: 2, height: 4), border: .hidden)), style: style)]),
+            displayImages: [:], images: [asset: split])
+        let px = try linearPixels(document.flatten())
+        func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * 4 + x)..<4 * (y * 4 + x) + 4]) }
+        #expect(pixel(0, 2) == [1, 0, 0, 1] && pixel(1, 2) == [1, 0, 0, 1]) // the crop's red half
+        #expect(pixel(2, 2) == [0, 0, 0, 0] && pixel(3, 2) == [0, 0, 0, 0]) // the green half is cropped away
+        let bordered = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 6, height: 6),
+            layerStack: LayerStack([Annotation(kind: .image(asset: asset, ImagePlacement(
+                frame: CGRect(x: 0, y: 0, width: 6, height: 6),
+                crop: CGRect(x: 0, y: 0, width: 6, height: 6))), style: style)]),
+            displayImages: [:], images: [asset: try solidImage([1, 0, 0, 1], width: 6, height: 6)])
+        let ring = try linearPixels(bordered.flatten())
+        func edge(_ x: Int, _ y: Int) -> [Float] { Array(ring[4 * (y * 6 + x)..<4 * (y * 6 + x) + 4]) }
+        #expect(edge(3, 3) == [1, 0, 0, 1]) // interior stays red
+        #expect(edge(0, 3) == [0, 1, 1, 1]) // white difference over red reads cyan
+    }
+
+    // Proves a .canvas draws the linked Canvas's crop at its frame and a
+    // dangling link draws nothing.
+    @Test func flattenedCanvasDrawsLinkedDocument() throws {
+        let url = URL(fileURLWithPath: "/tmp/linked.wadjet")
+        let child = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 8, height: 8),
+            displayImages: [1: try solidImage([0, 1, 0, 1], width: 8, height: 8)])
+        let annotation = Annotation(kind: .canvas(CanvasLink(url: url), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 4, height: 4), crop: CGRect(x: 2, y: 2, width: 4, height: 4),
+            border: .hidden)), style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
+        var document = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+            layerStack: LayerStack([annotation]), displayImages: [:])
+        #expect(try linearPixels(document.flatten()).allSatisfy { $0 == 0 }) // the link dangles
+        document.linkedDocuments[url] = child
+        let px = try linearPixels(document.flatten())
+        #expect(Array(px[4 * (2 * 4 + 2)..<4 * (2 * 4 + 2) + 4]) == [0, 1, 0, 1])
+    }
+
+    // Proves a .canvas draws through canvasPixels alone — the per-frame path a
+    // Record Window video composites — showing the crop's part of the cached
+    // flatten, no linked document needed.
+    @Test func canvasPixelsDrawTheLinkCrop() throws {
+        let url = URL(fileURLWithPath: "/tmp/linked.wadjet")
+        // an 8×8 source: green left half, red right
+        let source = try image(width: 8, height: 8, pixels: (0..<64).flatMap {
+            $0 % 8 < 4 ? [UInt8(0), 255, 0, 255] : [UInt8(255), 0, 0, 255]
+        })
+        let annotation = Annotation(kind: .canvas(CanvasLink(url: url), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 4, height: 4), crop: CGRect(x: 2, y: 2, width: 4, height: 4),
+            border: .hidden)), style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
+        let context = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 16,
+            bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!,
+            bitmapInfo: CGBitmapInfo.floatComponents.rawValue | CGBitmapInfo.byteOrder16Little.rawValue
+                | CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(annotation,
+                     canvasPixels: [url: CanvasPixels(image: source, bounds: CGRect(x: 0, y: 0, width: 8, height: 8))])
+        let px = try linearPixels(try #require(context.makeImage()))
+        func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * 4 + x)..<4 * (y * 4 + x) + 4]) }
+        // the crop (x 2..6) shows the source's middle: left half green, right red
+        #expect(pixel(0, 2)[1] > 0.9 && pixel(0, 2)[0] < 0.1)
+        #expect(pixel(3, 2)[0] > 0.9 && pixel(3, 2)[1] < 0.1)
+    }
+
+    // Proves image assets persist under images/, keep their pixels, and that a
+    // package written before assets existed (no images/ directory) still reads.
+    @Test func packageRoundTripsImageAssets() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let asset = UUID()
+        let document = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+            layerStack: LayerStack([Annotation(
+                kind: .image(asset: asset, ImagePlacement(frame: CGRect(x: 0, y: 0, width: 4, height: 4),
+                    crop: CGRect(x: 0, y: 0, width: 4, height: 4), border: .hidden)),
+                style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))]),
+            displayImages: [:], images: [asset: try solidImage([0, 1, 0, 1], width: 4, height: 4)])
+        let url = directory.appendingPathComponent("capture.wadjet")
+        try document.write(to: url)
+        // an SDR asset is PNG; its filename is the asset id
+        #expect(FileManager.default.fileExists(
+            atPath: url.appendingPathComponent("images/\(asset.uuidString).png").path))
+        let reopened = try CanvasDocument.read(from: url)
+        #expect(reopened.layerStack == document.layerStack)
+        let px = try linearPixels(reopened.images[asset]!)
+        let green: [Float] = (0..<16).flatMap { _ in [0, 1, 0, 1] }
+        #expect(zip(px, green).allSatisfy { abs($0 - $1) < 0.01 })
+        // dropping the images/ directory leaves a readable package without assets
+        var children = try #require(document.fileWrapper().fileWrappers)
+        children["images"] = nil
+        #expect(try CanvasDocument(fileWrapper: FileWrapper(directoryWithFileWrappers: children)).images.isEmpty)
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])
@@ -579,6 +680,62 @@ struct CanvasDocumentTests {
             try CanvasDocument(fileWrapper: FileWrapper(directoryWithFileWrappers: corruptFiles))
         }
         #expect(throws: CanvasDocumentError.invalidGeometry) { try valid.flatten(scale: .infinity) }
+    }
+
+    // Proves a .canvas still renders once its host package is reopened:
+    // fileWrapper persists a snapshot of the linked Canvas under the
+    // Annotation's own id, and the renderer draws it when linkedDocuments
+    // doesn't resolve the link.
+    @Test func reopenedCanvasDrawsItsPersistedSnapshot() throws {
+        let url = URL(fileURLWithPath: "/tmp/linked.wadjet")
+        let child = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 8, height: 8),
+            displayImages: [1: try solidImage([0, 1, 0, 1], width: 8, height: 8)])
+        let annotation = Annotation(kind: .canvas(CanvasLink(url: url), ImagePlacement(
+            frame: CGRect(x: 0, y: 0, width: 4, height: 4),
+            crop: CGRect(x: 2, y: 2, width: 4, height: 4), border: .hidden)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
+        var host = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 4, height: 4),
+            layerStack: LayerStack([annotation]), displayImages: [:])
+        host.linkedDocuments[url] = child
+        let reopened = try CanvasDocument(fileWrapper: try host.fileWrapper())
+        #expect(reopened.linkedDocuments.isEmpty)
+        #expect(reopened.images[annotation.id] != nil) // the snapshot is stored under the Annotation's id
+        let px = try linearPixels(reopened.flatten())
+        let p = Array(px[4 * (2 * 4 + 2)..<4 * (2 * 4 + 2) + 4])
+        #expect(zip(p, [0, 1, 0, 1] as [Float]).allSatisfy { abs($0 - $1) < 0.01 })
+    }
+
+    // Proves an imported image honours its EXIF orientation: the pixels come
+    // back upright and the point size follows the oriented pixels at the
+    // image's DPI (72 here, so pixels are points).
+    @Test(arguments: [
+        // .right (6): the stored left half lands on top once rotated 90° CW
+        (6, 2, 4, Float(1), Float(0)),
+        // .upMirrored (2): the stored right half lands on the left
+        (2, 4, 2, Float(0), Float(1)),
+    ])
+    func importedImageHonoursOrientation(orientation: Int, width: Int, height: Int,
+                                         red: Float, blue: Float) throws {
+        // stored 4×2: left half red, right half blue
+        let stored = try image(width: 4, height: 2, pixels: (0..<8).flatMap {
+            $0 % 4 < 2 ? [UInt8(255), 0, 0, 255] : [UInt8(0), 0, 255, 255]
+        })
+        let data = NSMutableData()
+        let dest = try #require(CGImageDestinationCreateWithData(data, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, stored, [
+            kCGImagePropertyOrientation: orientation,
+            kCGImagePropertyDPIWidth: 72, kCGImagePropertyDPIHeight: 72,
+        ] as CFDictionary)
+        try #require(CGImageDestinationFinalize(dest))
+        let source = try #require(CGImageSourceCreateWithData(data, nil))
+        let (decoded, size) = try #require(ImportedImage.decode(source))
+        #expect(decoded.width == width && decoded.height == height)
+        #expect(size == CGSize(width: width, height: height))
+        let px = try linearPixels(decoded)
+        let top = Array(px[0..<4]) // the top row's first pixel
+        #expect(abs(top[0] - red) < 0.05 && abs(top[2] - blue) < 0.05)
     }
 }
 

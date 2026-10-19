@@ -48,6 +48,8 @@ extension AnnotationKind {
             [CGPoint(x: m.frame.minX, y: m.frame.minY), CGPoint(x: m.frame.maxX, y: m.frame.maxY)]
         case let .text(d):
             [d.origin, CGPoint(x: d.origin.x + TextLayout(d).size.width, y: d.origin.y)]
+        case let .image(_, p), let .canvas(_, p):
+            [CGPoint(x: p.frame.minX, y: p.frame.minY), CGPoint(x: p.frame.maxX, y: p.frame.maxY)]
         }
     }
     /// the same kind with every defining point mapped — a counter rebuilds
@@ -84,12 +86,19 @@ extension AnnotationKind {
             // the mapped box's width less padding, at least one em
             new.width = max(abs(tr.x - tl.x) - 2 * l.padding.width, d.format.size)
             return .text(new)
+        case let .image(asset, p):
+            var p = p; p.frame = p.frame.mapCorners(f)
+            return .image(asset: asset, p)
+        case let .canvas(link, p):
+            var p = p; p.frame = p.frame.mapCorners(f)
+            return .canvas(link, p)
         }
     }
-    /// resizes with one scale on both axes so it keeps its shape
+    /// resizes with one scale on both axes so it keeps its shape — counters
+    /// always; image kinds unless the drag passes `stretch`
     var keepsAspect: Bool {
         switch self {
-        case .counter, .window: true
+        case .counter, .window, .image, .canvas: true
         case .line, .path, .censor, .shape, .magnify, .text: false
         }
     }
@@ -98,7 +107,7 @@ extension AnnotationKind {
     var isBox: Bool {
         switch self {
         case .line, .path, .text: false
-        case .censor, .shape, .counter, .magnify, .window: true
+        case .censor, .shape, .counter, .magnify, .window, .image, .canvas: true
         }
     }
     /// whether rotation and flips apply — a Magnify's frame only moves and
@@ -181,9 +190,11 @@ extension Annotation {
     }
 
     /// a handle drag, computed from the state at drag start (`self`) so it can't
-    /// drift; `constrained` (Shift) snaps a vertex drag to 45° of the other end
+    /// drift; `constrained` (Shift) snaps a vertex drag to 45° of the other end.
+    /// Image kinds keep their aspect ratio unless `stretch` (also Shift); other
+    /// kinds ignore it.
     public func dragging(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint,
-                         constrained: Bool = false) -> Annotation {
+                         constrained: Bool = false, stretch: Bool = false) -> Annotation {
         switch handle {
         case let .vertex(i):
             // the grip's position at drag start plus the drag — the press needn't land dead-on
@@ -271,9 +282,10 @@ extension Annotation {
             // a 0 component leaves that axis alone; dragging past the anchor mirrors (negative scale)
             var sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
             var sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
-            if kind.keepsAspect {
-                // a counter stays a circle: one scale from the grip's moving
-                // axis, the larger on a corner, so the mapped box stays square
+            if kind.keepsAspect && !(stretch && placement != nil) {
+                // one scale for both axes: the grip's moving axis on an edge
+                // drag (the anchor is the middle, so it grows symmetrically),
+                // the larger on a corner — signs kept, so it can still mirror
                 let u = x == 0 ? abs(sy) : y == 0 ? abs(sx) : max(abs(sx), abs(sy))
                 sx = x == 0 ? u : (sx < 0 ? -u : u)
                 sy = y == 0 ? u : (sy < 0 ? -u : u)
@@ -300,6 +312,68 @@ extension Annotation {
             let c = CGPoint(x: kind.bounds.midX, y: kind.bounds.midY)
             return rotated(by: atan2(point.y - c.y, point.x - c.x) - atan2(start.y - c.y, start.x - c.x))
         }
+    }
+
+    /// a resize-handle drag that moves the crop edges with the frame edges: the
+    /// frame reveals more or less of `source` while the kept content stays put.
+    /// `.rotate` and non-image kinds return self.
+    public func recropping(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint,
+                           source: CGRect) -> Annotation {
+        guard case let .resize(x, y) = handle, var p = placement else { return self }
+        let b = p.frame, m = affineTransform
+        // the edge moves by the pointer's delta from the press, so an off-grip
+        // press doesn't jump the edge to the pointer
+        let s = start.applying(m.inverted()), q = point.applying(m.inverted())
+        // the matching crop edge moves the same distance in source units,
+        // staying inside source and ≥ 1 unit wide (so it can never mirror)
+        func delta(_ edge: Int, _ d: CGFloat, _ k: CGFloat,
+                   _ cropMin: CGFloat, _ cropMax: CGFloat,
+                   _ sourceMin: CGFloat, _ sourceMax: CGFloat) -> CGFloat {
+            var d = d
+            if edge > 0 { d = min(d, (sourceMax - cropMax) * k); d = max(d, (cropMin + 1 - cropMax) * k) }
+            else { d = max(d, (sourceMin - cropMin) * k); d = min(d, (cropMax - 1 - cropMin) * k) }
+            return d
+        }
+        if x != 0 {
+            let k = b.width / p.crop.width
+            let d = delta(x, q.x - s.x, k,
+                          p.crop.minX, p.crop.maxX, source.minX, source.maxX)
+            if x > 0 { p.frame.size.width += d; p.crop.size.width += d / k }
+            else { p.frame.origin.x += d; p.frame.size.width -= d
+                   p.crop.origin.x += d / k; p.crop.size.width -= d / k }
+        }
+        if y != 0 {
+            let k = b.height / p.crop.height
+            let d = delta(y, q.y - s.y, k,
+                          p.crop.minY, p.crop.maxY, source.minY, source.maxY)
+            if y > 0 { p.frame.size.height += d; p.crop.size.height += d / k }
+            else { p.frame.origin.y += d; p.frame.size.height -= d
+                   p.crop.origin.y += d / k; p.crop.size.height -= d / k }
+        }
+        var new = self
+        new.placement = p
+        // the new frame centre moves the transform's pivot — re-pin the opposite
+        // edge so the untouched side (and the image) stays where it was on screen
+        let anchor = CGPoint(x: b.midX - CGFloat(x) * b.width / 2,
+                             y: b.midY - CGFloat(y) * b.height / 2)
+        let was = anchor.applying(m), now = anchor.applying(new.affineTransform)
+        return new.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y))
+    }
+
+    /// the frame stays while the content follows the pointer: the crop slides
+    /// inside `source`, clamped at its edges
+    public func panning(from start: CGPoint, to point: CGPoint, source: CGRect) -> Annotation {
+        guard var p = placement else { return self }
+        let mi = affineTransform.inverted()
+        let a = start.applying(mi), q = point.applying(mi)
+        let kx = p.frame.width / p.crop.width, ky = p.frame.height / p.crop.height
+        p.crop.origin.x = min(max(p.crop.origin.x - (q.x - a.x) / kx, source.minX),
+                              source.maxX - p.crop.width)
+        p.crop.origin.y = min(max(p.crop.origin.y - (q.y - a.y) / ky, source.minY),
+                              source.maxY - p.crop.height)
+        var new = self
+        new.placement = p
+        return new
     }
 
     /// positive = counterclockwise

@@ -55,13 +55,19 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     /// a captured window shown from the Canvas's window layer `layerID`, at
     /// `frame` (untransformed, global points)
     case window(layerID: UUID, frame: CGRect)
+    /// the asset id names image bytes held outside annotations.json, in the package's images/
+    case image(asset: UUID, ImagePlacement)
+    /// a nested, linked Canvas shown through a crop
+    case canvas(CanvasLink, ImagePlacement)
 
-    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify, text, window }
+    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify, text, window, image, canvas }
     enum LineKeys: String, CodingKey { case start, end, bend }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
     enum CounterKeys: String, CodingKey { case center, radius, value, format }
     enum WindowKeys: String, CodingKey { case layer, frame }
+    /// image and canvas share their placement keys; each adds one of `asset`/`link`
+    enum ImageKeys: String, CodingKey { case asset, link, frame, crop, cornerRadius, border }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if c.contains(.line) {
@@ -93,10 +99,18 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             let n = try c.nestedContainer(keyedBy: WindowKeys.self, forKey: .window)
             self = .window(layerID: try n.decode(UUID.self, forKey: .layer),
                            frame: try n.decodeRect(forKey: .frame))
+        } else if c.contains(.image) {
+            let i = try c.nestedContainer(keyedBy: ImageKeys.self, forKey: .image)
+            self = .image(asset: try i.decode(UUID.self, forKey: .asset),
+                          try ImagePlacement(decoding: i))
+        } else if c.contains(.canvas) {
+            let n = try c.nestedContainer(keyedBy: ImageKeys.self, forKey: .canvas)
+            self = .canvas(try n.decode(CanvasLink.self, forKey: .link),
+                           try ImagePlacement(decoding: n))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, a magnify, a text, or a window"))
+                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, a magnify, a text, a window, an image, or a canvas"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -131,8 +145,57 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             var n = c.nestedContainer(keyedBy: WindowKeys.self, forKey: .window)
             try n.encode(layerID, forKey: .layer)
             try n.encodeRect(frame, forKey: .frame)
+        case let .image(asset, placement):
+            var i = c.nestedContainer(keyedBy: ImageKeys.self, forKey: .image)
+            try i.encode(asset, forKey: .asset)
+            try placement.encode(into: &i)
+        case let .canvas(link, placement):
+            var n = c.nestedContainer(keyedBy: ImageKeys.self, forKey: .canvas)
+            try n.encode(link, forKey: .link)
+            try placement.encode(into: &n)
         }
     }
+}
+
+/// where an image or nested Canvas sits on screen and which part of its source shows
+public struct ImagePlacement: Equatable, Sendable {
+    /// the border's width, points
+    public static let borderWidth: CGFloat = 1
+    public var frame: CGRect        // untransformed, global points
+    /// the shown part of the source: image pixels with a bottom-left origin, or the linked Canvas's global points
+    public var crop: CGRect
+    public var cornerRadius: CGFloat
+    public var border: ImageBorder
+    public init(frame: CGRect, crop: CGRect, cornerRadius: CGFloat = 0, border: ImageBorder = .difference) {
+        self.frame = frame
+        self.crop = crop
+        self.cornerRadius = cornerRadius
+        self.border = border
+    }
+    /// where the whole `source` would sit in geometry space so `crop` lands exactly on `frame`
+    public func sourceFrame(for source: CGRect) -> CGRect {
+        CGRect(x: frame.minX - (crop.minX - source.minX) * frame.width / crop.width,
+               y: frame.minY - (crop.minY - source.minY) * frame.height / crop.height,
+               width: source.width * frame.width / crop.width,
+               height: source.height * frame.height / crop.height)
+    }
+
+    init(decoding c: KeyedDecodingContainer<AnnotationKind.ImageKeys>) throws {
+        self.init(frame: try c.decodeRect(forKey: .frame), crop: try c.decodeRect(forKey: .crop),
+                  cornerRadius: try c.decodeIfPresent(CGFloat.self, forKey: .cornerRadius) ?? 0,
+                  border: try c.decodeIfPresent(ImageBorder.self, forKey: .border) ?? .difference)
+    }
+    func encode(into c: inout KeyedEncodingContainer<AnnotationKind.ImageKeys>) throws {
+        try c.encodeRect(frame, forKey: .frame)
+        try c.encodeRect(crop, forKey: .crop)
+        try c.encode(cornerRadius, forKey: .cornerRadius)
+        try c.encode(border, forKey: .border)
+    }
+}
+
+/// `difference`: a hairline in difference blend mode that reads on any content; `colour`: `style.colour`, normal blending
+public enum ImageBorder: String, Codable, Sendable {
+    case difference, colour, hidden
 }
 
 /// How a Censor obscures its rect. Strengths are global points; renderers scale them to pixels.
@@ -299,7 +362,7 @@ extension Annotation {
         case .line, .magnify: style.colour
         case let .path(d): !d.closed || style.stroked ? style.colour : nil
         case .shape: style.stroked ? style.colour : nil
-        case .censor, .counter, .text, .window: nil
+        case .censor, .counter, .text, .window, .image, .canvas: nil
         }
     }
     /// what the inside fills with: a shape's or closed path's `style.fill`, a
@@ -308,13 +371,13 @@ extension Annotation {
     /// the glyphs in the text colour
     public var fillColour: RGBAColour? {
         switch kind {
-        case .line, .magnify, .window: nil
-        case let .path(d): d.closed ? style.fill : nil
         case .shape: style.fill
         case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
         case .counter: style.colour
+        case let .path(d): d.closed ? style.fill : nil
         case let .text(d): d.format.pill ? TextLayout.pillColour(text: style.colour, fill: style.fill)
                                         : style.colour
+        case .line, .magnify, .window, .image, .canvas: nil
         }
     }
     /// the global rect whose pixels it draws from: a sampling Censor's area, a
@@ -327,10 +390,39 @@ extension Annotation {
         default: nil
         }
     }
-    /// hit-tested by its area: filled kinds and windows
+    /// hit-tested and kept by its area: filled kinds, windows, and images
     public var fillsArea: Bool {
         if case .window = kind { return true }
-        return fillColour != nil
+        return fillColour != nil || placement != nil
+    }
+    /// the image kinds' payload; setting replaces it on image kinds, does nothing on others
+    public var placement: ImagePlacement? {
+        get {
+            switch kind {
+            case let .image(_, p), let .canvas(_, p): p
+            case .line, .path, .censor, .shape, .counter, .magnify, .text, .window: nil
+            }
+        }
+        set {
+            guard let p = newValue else { return }
+            switch kind {
+            case let .image(asset, _): kind = .image(asset: asset, p)
+            case let .canvas(link, _): kind = .canvas(link, p)
+            case .line, .path, .censor, .shape, .counter, .magnify, .text, .window: break
+            }
+        }
+    }
+    /// a copy in `style`; on image kinds `colourPicked` switches `border` to
+    /// `.colour` — picking a border colour turns the border on even when the
+    /// picked colour is the one already stored
+    public func restyled(_ style: AnnotationStyle, colourPicked: Bool = false) -> Annotation {
+        var a = self
+        a.style = style
+        if colourPicked, var p = a.placement {
+            p.border = .colour
+            a.placement = p
+        }
+        return a
     }
 }
 

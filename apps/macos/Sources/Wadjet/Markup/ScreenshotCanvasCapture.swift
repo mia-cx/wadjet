@@ -14,6 +14,8 @@ extension AppDelegate {
         let radius = windowID.flatMap { overlayCtrl.cornerRadii[$0] }
         let scale = screen.backingScaleFactor
         let annotations = MarkupController.shared.stack
+        // pasted/dropped assets leave with the Annotations — snapshot them before closeAll or Clear can drop them
+        let images = MarkupController.shared.assets.images, canvases = MarkupController.shared.assets.canvases
         let workflow = takeShotWorkflow()
         let cursor = state.shotCursor, wadjet = state.shotWadjet
         let keepWindows = tool.captureSettings.map { state.config.value.tools[keyPath: $0].windowLayers } ?? false
@@ -42,7 +44,8 @@ extension AppDelegate {
                     ? try await overlayCtrl.captureCanvasDisplays(screens, excluding: excluded, cursor: cursor, wadjet: wadjet)
                     : displays
                 var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius ?? 0,
-                    annotations: annotations, windowCapture: windowID != nil)
+                    annotations: annotations, windowCapture: windowID != nil,
+                    images: images, canvases: canvases)
                 if keepWindows {
                     // a capture failure keeps the window's flat pixels, so it
                     // still occludes what the flat displays show behind it

@@ -15,6 +15,9 @@ final class MarkupController {
     static let rotateOffset: CGFloat = 20   // rotate grip's distance above the frame
     static let handleMinExtent: CGFloat = 12
     static let hitTolerance: CGFloat = 4
+    /// pasted/dropped images: white (the Auto border is difference anyway), one point
+    static let imageStyle = AnnotationStyle(colour: RGBAColour(red: 1, green: 1, blue: 1, alpha: 1),
+                                            width: ImagePlacement.borderWidth)
 
     /// true for the screen's shared Markup; an Editor's draws on its own surface
     let isScreen: Bool
@@ -22,6 +25,8 @@ final class MarkupController {
     private(set) var armed: Tool?
     /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
     @ObservationIgnored private var gesture: Gesture?
+    /// the pixels and Canvases this Markup's image kinds draw from
+    let assets = MarkupAssets()
     /// every committed change is one undo step
     @ObservationIgnored private var history = LayerHistory()
     /// an Editor's canvas view; the screen draws on its per-display panels instead
@@ -60,6 +65,10 @@ final class MarkupController {
         /// magnifier stays put
         case movingSource(Annotation, from: CGPoint)
         case handle(SelectionHandle, Annotation, from: CGPoint)
+        /// a recrop grip drag: frame and crop edges move together
+        case recrop(SelectionHandle, Annotation, from: CGPoint)
+        /// a drag inside while recropping: the crop slides within the source
+        case pan(Annotation, from: CGPoint)
     }
     /// an in-progress Pen path and the pointer's latest position for its preview
     @ObservationIgnored private var pen: (builder: PenBuilder, id: Annotation.ID, style: AnnotationStyle)?
@@ -79,8 +88,12 @@ final class MarkupController {
     }
     /// set by Option-click on a counter: the value the next click places
     @ObservationIgnored private var counterNext: Int?
+    /// the image-kind Annotation in recrop mode — a double-click enters, Escape
+    /// or a click outside ends; `nil` unless it is also the selection
+    private(set) var cropping: Annotation.ID?
     private(set) var selection: Annotation.ID? {
         didSet {
+            if selection != oldValue { cropping = nil }
             if isScreen, selection == nil, AppState.shared.openMenu?.kind == .markup {
                 AppState.shared.openMenu = nil
                 AppDelegate.shared?.overlayCtrl.syncMenu()
@@ -146,6 +159,13 @@ final class MarkupController {
         history.record(from: before, to: stack)
         endHistoryIfClosed()
     }
+    /// the Editor's undo manager groups by event, so two actions recorded in one
+    /// event undo together — close the open group so the next step stands alone
+    private func separateUndoGroup() {
+        guard !isScreen, let undoManager, undoManager.groupingLevel > 0 else { return }
+        undoManager.endUndoGrouping()
+        undoManager.beginUndoGrouping()
+    }
     private func registerUndo(restoring before: LayerStack) {
         guard before != stack, let undoManager else { return }
         undoManager.registerUndo(withTarget: self) { c in
@@ -159,7 +179,10 @@ final class MarkupController {
     /// history ends once the stack is empty and the session is closed — Clear
     /// can run after the toolbar closes (Clear after Screenshot), so edits check too
     private func endHistoryIfClosed() {
-        if !AppState.shared.toolbarOpen { history.end(ifCleared: stack) }
+        if isScreen, !AppState.shared.toolbarOpen {
+            history.end(ifCleared: stack)
+            if stack.isEmpty { assets.removeAll() }
+        }
     }
     /// true while typing lives on a Markup surface — the in-place editor or a
     /// Tool-menu text field — suspending Markup's command keys so ⌘Z/⌘V/⌘]
@@ -193,6 +216,7 @@ final class MarkupController {
         stack = s
         // gone, hidden, or locked: none of those can stay the selection
         if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
+        if let id = cropping, !s.annotations.contains(where: { $0.id == id }) { cropping = nil }
         syncPanels(); render()
     }
     /// replaces the whole stack — a reverted document
@@ -229,7 +253,8 @@ final class MarkupController {
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
             closeScroll() // an open phased scroll is its own step too
-            gesture = nil; selection = nil; cmdHeld = false; snapper = nil; counterNext = nil
+            gesture = nil; selection = nil; cmdHeld = false; snapper = nil
+            counterNext = nil; cropping = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
         } else if flagsMon == nil {
@@ -338,7 +363,7 @@ final class MarkupController {
         get { selected?.style }
         set {
             guard var a = selected, let newValue else { return }
-            a.style = newValue
+            a = a.restyled(newValue)
             // a mid-edit restyle folds into the text session's one undo step
             if editing != nil { mutateUnrecorded { $0.replace(a) } }
             else { edit { $0.replace(a) } }
@@ -346,9 +371,15 @@ final class MarkupController {
         }
     }
 
-    /// restyles one Annotation by id — the eyedropper's target, whose selection Pick Colour's disarm cleared
-    func restyle(_ id: Annotation.ID, _ change: (inout AnnotationStyle) -> Void) {
-        update(id) { change(&$0.style) }
+    /// restyles one Annotation by id — the eyedropper's target, whose selection
+    /// Pick Colour's disarm cleared; `colourPicked` turns an image kind's border on
+    func restyle(_ id: Annotation.ID, colourPicked: Bool = false, _ change: (inout AnnotationStyle) -> Void) {
+        update(id) {
+            var style = $0.style
+            change(&style)
+            $0 = $0.restyled(style, colourPicked: colourPicked)
+        }
+        AppLog.line("markup: restyled selection")
     }
 
     /// edits one Annotation by id as a single undo step — for changes that
@@ -360,6 +391,14 @@ final class MarkupController {
         if id == editing { mutateUnrecorded { $0.replace(a) } }
         else { edit { $0.replace(a) } }
         AppLog.line("markup: restyled selection")
+    }
+
+    /// edits the selection's ImagePlacement (corner radius, border) — one undo step
+    func updateSelectedPlacement(_ change: (inout ImagePlacement) -> Void) {
+        guard var a = selected, var p = a.placement else { return }
+        change(&p)
+        a.placement = p
+        edit { $0.replace(a) }
     }
 
     /// apply a value transform (rotate/flip) to the selection
@@ -394,6 +433,60 @@ final class MarkupController {
         guard let a = stack.annotations.first(where: { $0.id == id }), !a.hidden, !a.locked else { return }
         if armed == nil { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
         if armed != nil { selection = id }
+    }
+
+    /// the clipboard's image or Canvas centred on `p`, selected, Select armed —
+    /// ⌘V routes here while the toolbar is open; the panels forward drops too
+    @discardableResult
+    func paste(from pb: NSPasteboard, at p: CGPoint) -> Bool {
+        guard (isScreen ? AppState.shared.toolbarOpen : true),
+              let content = MarkupPasteboard.read(pb) else {
+            AppLog.line("markup: nothing readable on the clipboard")
+            return false
+        }
+        // natural size scaled down (never up) to fit the surface under `p`
+        let limit = isScreen ? (NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) }
+            ?? NSScreen.main)?.frame.size
+            : snapBounds?.size
+        func fit(_ size: CGSize) -> CGSize {
+            guard let limit, size.width > 0, size.height > 0 else { return size }
+            let k = min(1, limit.width / size.width, limit.height / size.height)
+            return CGSize(width: size.width * k, height: size.height * k)
+        }
+        func frame(_ size: CGSize) -> CGRect {
+            let s = fit(size)
+            return CGRect(x: p.x - s.width / 2, y: p.y - s.height / 2, width: s.width, height: s.height)
+        }
+        // a Text or Pen session in flight is its own undo step, before the paste's
+        let penDone = finishPen(), textDone = commitEditing()
+        if penDone || textDone { separateUndoGroup() }
+        let a: Annotation
+        switch content {
+        case let .canvas(doc, link):
+            assets.canvases[link.url] = doc
+            a = Annotation(kind: .canvas(link, ImagePlacement(frame: frame(doc.crop.size),
+                crop: doc.crop, cornerRadius: doc.cornerRadius)), style: Self.imageStyle)
+        case let .image(image, size):
+            let asset = UUID()
+            assets.images[asset] = image
+            a = Annotation(kind: .image(asset: asset, ImagePlacement(frame: frame(size),
+                crop: CGRect(x: 0, y: 0, width: image.width, height: image.height))), style: Self.imageStyle)
+        }
+        edit { $0.add(a) }
+        syncPanels()
+        selection = a.id
+        if armed != .select { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
+        AppLog.line("markup: pasted \(content.label)")
+        return true
+    }
+
+    /// ends recrop mode; true when one was in flight — Escape consumes it first
+    @discardableResult
+    func endRecrop() -> Bool {
+        guard cropping != nil else { return false }
+        cropping = nil
+        render()
+        return true
     }
 
     /// true when there was a selection to drop
@@ -468,7 +561,7 @@ final class MarkupController {
 
     // strokes arrive as Canvas (global screen) points from MarkupView;
     // `command` = temporary Select, `constrained` = Shift (45° snaps),
-    // `clickCount` for a double-click's re-edit
+    // `clickCount` for a double-click's re-edit (Text) or recrop (image kinds)
     func begin(at p: CGPoint, command: Bool, constrained: Bool = false, clickCount: Int = 1) {
         closeScroll() // an open phased scroll is its own undo step
         // a click anywhere commits the open text editor and places nothing
@@ -477,6 +570,20 @@ final class MarkupController {
             return
         }
         gestureStart = stack
+        if cropping != nil {
+            // recrop in flight: grips resize the crop, inside pans, outside ends it
+            if let sel = selected, let h = sel.handle(at: p, radius: Self.handleHitRadius,
+                    minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset), case .resize = h {
+                gesture = .recrop(h, sel, from: p)
+                return
+            }
+            if let sel = selected, PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
+                gesture = .pan(sel, from: p)
+                return
+            }
+            endRecrop()
+            // then the click is handled normally
+        }
         if armed == .select || command {
             if clickCount == 2, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
                case .text = hit.kind {
@@ -485,6 +592,14 @@ final class MarkupController {
                 return
             }
             if let sel = selected {
+                // a double-click inside an image kind enters recrop — unless
+                // its source is gone and only the persisted snapshot shows
+                if clickCount == 2, sel.placement != nil, assets.canRecrop(sel),
+                   PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
+                    cropping = sel.id
+                    render()
+                    return
+                }
                 if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                                       minExtent: Self.handleMinExtent / zoom,
                                       rotateOffset: Self.rotateOffset / zoom) {
@@ -623,6 +738,8 @@ final class MarkupController {
                 a.kind = .magnify(.placed(source: source, options: m.options,
                                           on: placementBounds(around: centre)))
             case .text: break // Text edits in place, never a draft
+            case .image, .canvas: // images are never drafts
+                break
             }
             gesture = .drawing(a, from: from)
         case .pen:
@@ -651,17 +768,26 @@ final class MarkupController {
             stack.replace(a)
         case let .handle(h, start, from):
             // Shift's 45° constraint wins on point handles: a point snap
-            // would leave the ray — vertex ends and Pen tangents both
+            // would leave the ray — vertex ends and Pen tangents both;
+            // on an image kind's resize grip ⇧ stretches the aspect instead
             let shiftConstrained = switch h { case .vertex, .tangent: true; default: false }
             if constrained, shiftConstrained {
                 stack.replace(start.dragging(h, from: from, to: p, constrained: true))
             } else {
                 // the grip follows the pointer's delta whether or not it snaps
-                stack.replace(snapper?.dragging(start, h, from: from, to: p)
-                    ?? start.dragging(h, from: from, to: p,
+                stack.replace(snapper?.dragging(start, h, from: from, to: p, stretch: constrained)
+                    ?? start.dragging(h, from: from, to: p, stretch: constrained,
                                       minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset,
                                       targets: [], range: 0, skip: true).annotation)
             }
+        case let .recrop(h, start, from):
+            guard assets.canRecrop(start),
+                  let source = assets.source(for: start)?.bounds else { return }
+            stack.replace(start.recropping(h, from: from, to: p, source: source))
+        case let .pan(start, from):
+            guard assets.canRecrop(start),
+                  let source = assets.source(for: start)?.bounds else { return }
+            stack.replace(start.panning(from: from, to: p, source: source))
         case nil:
             return
         }
@@ -700,6 +826,8 @@ final class MarkupController {
                 m.source.width >= Self.minDraftSize && m.source.height >= Self.minDraftSize
             case .text:
                 false
+            case .image, .canvas: // images are never drafts
+                false
             }
             if drawn { stack.add(d) }
         }
@@ -719,7 +847,7 @@ final class MarkupController {
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen, .brush: break
-        case .drawing, .moving, .movingSource, .handle: commitGesture()
+        case .drawing, .moving, .movingSource, .handle, .recrop, .pan: commitGesture()
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
@@ -822,15 +950,24 @@ final class MarkupController {
     func render() {
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         guard isScreen else {
-            surface?.show(shown, selection: selected, editing: editing)
+            surface?.show(shown, selection: selected, editing: editing, cropping: cropping)
             surface?.showGuides(guides)
             syncEditor()
             return
         }
         Self.onScreen.annotations = shown
+        Self.onScreen.images = assets.images
+        // the recorded window composites these per frame: cached flattens, not live documents
+        var pixels: [URL: CanvasPixels] = [:]
+        for a in shown where a.placement != nil {
+            if case let .canvas(link, _) = a.kind, let px = assets.source(for: a) {
+                pixels[link.url] = px // two .canvas Annotations can share one URL
+            }
+        }
+        Self.onScreen.canvasPixels = pixels
         AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
         ScreenSamples.shared.watch(shown.compactMap(\.sampledRect))
-        for p in panels { p.view.show(shown, selection: selected, editing: editing); p.view.showGuides(guides) }
+        for p in panels { p.view.show(shown, selection: selected, editing: editing, cropping: cropping); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
         syncEditor()
     }

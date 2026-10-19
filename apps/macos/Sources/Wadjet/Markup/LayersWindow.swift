@@ -177,6 +177,8 @@ extension AnnotationKind {
                 .trimmingCharacters(in: .whitespaces).isEmpty ? "Text"
                 : String(d.string.split(separator: "\n").first!)
         case .window: "Window"
+        case .image: "Image"
+        case .canvas: "Screenshot"
         }
     }
 }

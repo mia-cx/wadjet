@@ -72,17 +72,47 @@ final class CanvasEditorDocument: NSDocument {
                 }
             }
         }
+        seedAssets(into: m)
         m.arm(.select)
         markupCached = m
         return m
     }
 
-    /// the Canvas plus the live Markup stack — what Save, Copy, Export, and
-    /// Share all act on
+    /// the Canvas plus the live Markup stack and its image assets — what Save,
+    /// Copy, Export, and Share all act on. `.image` payloads and `.canvas`
+    /// snapshots persist only while the stack references them; nested Canvases
+    /// go into `linkedDocuments` so `fileWrapper` writes their snapshots, and
+    /// `linkedCanvases` keeps the package's own links plus every Annotation's.
     var current: CanvasDocument {
         var canvas = canvas
-        if let markupCached { canvas.layerStack = markupCached.stack }
+        guard let markupCached else { return canvas }
+        canvas.layerStack = markupCached.stack
+        var used = Set<UUID>()
+        var links = canvas.linkedCanvases
+        for a in canvas.layerStack.annotations {
+            switch a.kind {
+            case let .image(asset, _): used.insert(asset)
+            case let .canvas(link, _):
+                used.insert(a.id)
+                if !links.contains(link) { links.append(link) }
+            default: break
+            }
+        }
+        canvas.images = markupCached.assets.images.filter { used.contains($0.key) }
+        canvas.linkedDocuments = markupCached.assets.canvases
+        canvas.linkedCanvases = links
         return canvas
+    }
+
+    /// the package's image payloads and the linked Canvases its `linkedCanvases`
+    /// lists (only those, only when the files exist) so the document's image
+    /// kinds draw and recrop
+    private func seedAssets(into m: MarkupController) {
+        m.assets.removeAll() // the reload's payload replaces everything, cached flattens too
+        m.assets.images = canvas.images
+        for link in canvas.linkedCanvases where FileManager.default.fileExists(atPath: link.url.path) {
+            m.assets.canvases[link.url] = try? CanvasDocument.read(from: link.url)
+        }
     }
 
     // read/write run off the main actor in the macOS 26 SDK; AppKit still calls
@@ -96,6 +126,7 @@ final class CanvasEditorDocument: NSDocument {
                     canvas.windowLayers.compactMap { l in l.id.map { ($0, l) } },
                     uniquingKeysWith: { a, _ in a })
                 markupCached.load(canvas.layerStack)
+                seedAssets(into: markupCached)
                 onReload?()
             }
         }

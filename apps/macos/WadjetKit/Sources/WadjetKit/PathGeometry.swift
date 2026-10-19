@@ -52,7 +52,7 @@ extension AnnotationKind {
                                     straight: last.handleOut == nil && first.handleIn == nil))
             }
             return segs
-        case .censor, .shape, .counter, .magnify, .text, .window:
+        case .censor, .shape, .counter, .magnify, .text, .window, .image, .canvas:
             return []
         }
     }
@@ -113,6 +113,10 @@ public enum PathGeometry {
             p.addRect(TextLayout(d).box)
         case let .window(_, frame):
             p.addRect(frame)
+        case let .image(_, placement), let .canvas(_, placement):
+            let r = min(placement.cornerRadius,
+                        min(placement.frame.width, placement.frame.height) / 2)
+            p.addPath(CGPath(roundedRect: placement.frame, cornerWidth: r, cornerHeight: r, transform: nil))
         }
         var t = a.affineTransform
         return p.copy(using: &t) ?? p

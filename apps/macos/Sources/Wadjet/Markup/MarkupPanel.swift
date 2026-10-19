@@ -30,6 +30,8 @@ final class MarkupView: NSView {
     let content = CALayer()
     /// AnnotationLayer for stroked kinds, TextAnnotationLayer for texts
     var shapeLayers: [Annotation.ID: CALayer] = [:]
+    /// MarkupImageLayer for the image kinds
+    var imageLayers: [Annotation.ID: MarkupImageLayer] = [:]
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
@@ -88,6 +90,9 @@ final class MarkupView: NSView {
             container.autoresizingMask = [.width, .height]
             addSubview(container)
         }
+        registerForDraggedTypes([.fileURL, .png, .tiff,
+            NSPasteboard.PasteboardType("public.jpeg"), NSPasteboard.PasteboardType("public.heic"),
+            NSPasteboard.PasteboardType(CanvasDocument.contentType.identifier)])
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isOpaque: Bool { false }
@@ -98,18 +103,20 @@ final class MarkupView: NSView {
         let s = (window?.backingScaleFactor ?? 2) * controller.zoom
         guard s != scale else { return }
         scale = s
-        for l in Array(shapeLayers.values) + [frameLayer, handlesLayer, guidesLayer] {
+        for l in Array(shapeLayers.values) + Array(imageLayers.values) + [frameLayer, handlesLayer, guidesLayer] {
             l.contentsScale = s
             l.sublayers?.forEach { $0.contentsScale = s }
         }
         for l in shapeLayers.values { (l as? TextAnnotationLayer)?.setNeedsDisplay() }
     }
 
-    /// one layer per Annotation, keyed by id so strokes can persist
-    /// and vanish without touching the rest; array order = back to front.
-    /// `selection` draws its frame and grips on top — except while the
-    /// selection is the text being edited.
-    func show(_ annotations: [Annotation], selection: Annotation?, editing: Annotation.ID? = nil) {
+    /// one layer per Annotation, keyed by id so strokes can persist and vanish
+    /// without touching the rest; array order = back to front. Image kinds get
+    /// a MarkupImageLayer, the rest a CAShapeLayer. `selection` draws its frame
+    /// and grips on top — except while the selection is the text being edited —
+    /// and while `cropping` names it, only resize grips show.
+    func show(_ annotations: [Annotation], selection: Annotation?,
+              editing: Annotation.ID? = nil, cropping: Annotation.ID? = nil) {
         shown = annotations
         CATransaction.begin()
         CATransaction.setDisableActions(true)
@@ -121,12 +128,20 @@ final class MarkupView: NSView {
                 continue
             }
             let l = (shapeLayers[a.id] as? AnnotationLayer) ?? AnnotationLayer()
+            if a.placement != nil { // image kinds never get a shape layer
+                let l = imageLayers[a.id] ?? MarkupImageLayer()
+                imageLayers[a.id] = l
+                l.update(a, source: controller.assets.source(for: a),
+                         cropping: a.id == cropping, scale: scale)
+                continue
+            }
             shapeLayers[a.id] = l
             l.update(a, scale: scale,
                      windowImage: a.windowLayerID.flatMap { controller.windowLayers[$0]?.image })
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }
+        for id in imageLayers.keys where !seen.contains(id) { imageLayers[id] = nil }
         if let selection, selection.id != editing {
             let frame = CGMutablePath()
             frame.addLines(between: selection.frameCorners)
@@ -139,6 +154,8 @@ final class MarkupView: NSView {
             let grips = CGMutablePath()
             let hs = selection.handles(minExtent: MarkupController.handleMinExtent / controller.zoom,
                                        rotateOffset: MarkupController.rotateOffset / controller.zoom)
+                // recrop mode has no rotate grip
+                .filter { cropping == nil || $0.handle != .rotate }
             // tangent stems ride the frame layer's accent stroke, under the
             // grips: a line from each node's anchor grip to its handle grip
             for h in hs {
@@ -168,7 +185,7 @@ final class MarkupView: NSView {
             handlesLayer.shadowOffset = CGSize(width: 0, height: -0.5 / controller.zoom)
         }
         let chrome = selection != nil && selection?.id != editing ? [frameLayer, handlesLayer] : []
-        content.sublayers = annotations.compactMap { shapeLayers[$0.id] }
+        content.sublayers = annotations.compactMap { shapeLayers[$0.id] ?? imageLayers[$0.id] }
         canvas.sublayers = [content] + chrome
         // text entries are TextAnnotationLayers; the samplers only write back
         // into their own AnnotationLayers
@@ -216,6 +233,21 @@ final class MarkupView: NSView {
     override func scrollWheel(with e: NSEvent) {
         if !controller.scroll(e, at: canvasPoint(e)) { super.scrollWheel(with: e) }
     }
+
+    // drops land only while a Markup Tool is armed — the panels ignore the
+    // mouse otherwise, so nothing ever steals a drop from another app
+    override func draggingEntered(_ sender: NSDraggingInfo) -> NSDragOperation {
+        draggingUpdated(sender)
+    }
+    override func draggingUpdated(_ sender: NSDraggingInfo) -> NSDragOperation {
+        controller.armed != nil && MarkupPasteboard.canRead(sender.draggingPasteboard)
+            ? .copy : []
+    }
+    override func performDragOperation(_ sender: NSDraggingInfo) -> Bool {
+        controller.paste(from: sender.draggingPasteboard,
+            at: canvasPoint(fromScreen: window!.convertPoint(toScreen: sender.draggingLocation)))
+    }
+
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

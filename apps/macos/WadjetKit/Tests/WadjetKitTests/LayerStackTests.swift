@@ -232,6 +232,28 @@ struct LayerStackTests {
         #expect(try LayerStack(json: json) == stack)
     }
 
+    // Proves image and canvas Annotations survive the annotations.json round
+    // trip in their wire format — {"image":{"asset":…,"frame":…,"crop":…}}.
+    @Test func imageAnnotationsJSONRoundTrip() throws {
+        let fixture = """
+            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"image":{"asset":"8C9A0B1C-2D3E-4F5A-8B9C-0D1E2F3A4B5C","frame":[10,20,100,50],"crop":[0,0,200,100],"cornerRadius":4,"border":"difference"}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}},{"id":"7A2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A","kind":{"canvas":{"link":{"url":"file:///tmp/linked.wadjet"},"frame":[0,0,80,80],"crop":[5,5,40,40],"cornerRadius":0,"border":"colour"}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}
+            """
+        var expected = LayerStack()
+        expected.add(Annotation(id: UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!,
+            kind: .image(asset: UUID(uuidString: "8C9A0B1C-2D3E-4F5A-8B9C-0D1E2F3A4B5C")!,
+                ImagePlacement(frame: CGRect(x: 10, y: 20, width: 100, height: 50),
+                               crop: CGRect(x: 0, y: 0, width: 200, height: 100), cornerRadius: 4)),
+            style: red4))
+        expected.add(Annotation(id: UUID(uuidString: "7A2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A")!,
+            kind: .canvas(CanvasLink(url: URL(fileURLWithPath: "/tmp/linked.wadjet")),
+                ImagePlacement(frame: CGRect(x: 0, y: 0, width: 80, height: 80),
+                               crop: CGRect(x: 5, y: 5, width: 40, height: 40), border: .colour)),
+            style: red4))
+        let stack = try LayerStack(json: Data(fixture.utf8))
+        #expect(stack == expected)
+        #expect(try LayerStack(json: stack.json()) == stack)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }

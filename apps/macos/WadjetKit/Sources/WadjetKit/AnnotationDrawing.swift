@@ -11,13 +11,31 @@ public struct CensorSource: Sendable {
     }
 }
 
+/// a pre-flattened nested Canvas (or an image's pixels) with the rect it
+/// covers in its own source space — the frame a crop maps onto via
+/// `ImagePlacement.sourceFrame`
+public struct CanvasPixels: Sendable {
+    public var image: CGImage
+    public var bounds: CGRect
+    public init(image: CGImage, bounds: CGRect) {
+        self.image = image
+        self.bounds = bounds
+    }
+}
+
 extension CGContext {
     /// draws one Annotation as the Markup panels do; hidden ones not at all. Blur and Pixelate render
     /// from `sources` in `format` and `colorSpace`, over black where no source covers them. A Magnify
     /// composites its viewport through MagnifyRenderer at `scale` pixels per point.
     /// `blending: false` draws with the caller's blend mode — for mask passes.
-    public func draw(_ annotation: Annotation, sources: [CensorSource] = [], scale: CGFloat = 1,
-                     format: CIFormat = .RGBA8,
+    /// Image kinds draw `images[asset]` through their crop; `.canvas` draws `linkedDocuments[link.url]`
+    /// flattened at `scale` (output pixels per point — export quality), else `canvasPixels[link.url]`
+    /// (a cached flatten — cheap, for per-frame compositing), else the package's persisted
+    /// `images[annotation.id]` snapshot, else nothing.
+    public func draw(_ annotation: Annotation, sources: [CensorSource] = [],
+                     images: [UUID: CGImage] = [:], linkedDocuments: [URL: CanvasDocument] = [:],
+                     canvasPixels: [URL: CanvasPixels] = [:],
+                     scale: CGFloat = 1, format: CIFormat = .RGBA8,
                      colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!,
                      blending: Bool = true) {
         guard !annotation.hidden else { return }
@@ -77,6 +95,55 @@ extension CGContext {
                 strokePath()
                 addPath(drawing.ends)
                 fillPath()
+            }
+        case .image, .canvas:
+            guard let placement = annotation.placement,
+                  placement.frame.applying(annotation.affineTransform)
+                    .intersects(boundingBoxOfClipPath) else { break }
+            concatenate(annotation.affineTransform)
+            let frame = placement.frame
+            let radius = min(placement.cornerRadius, min(frame.width, frame.height) / 2)
+            addPath(CGPath(roundedRect: frame, cornerWidth: radius, cornerHeight: radius, transform: nil))
+            clip()
+            switch annotation.kind {
+            case let .image(asset, _):
+                if let image = images[asset] {
+                    draw(image, in: placement.sourceFrame(
+                        for: CGRect(x: 0, y: 0, width: image.width, height: image.height)))
+                }
+            case let .canvas(link, _):
+                if var child = linkedDocuments[link.url] {
+                    // the Annotation's own radius rounds it, never the child's
+                    child.cornerRadius = 0
+                    let k = max(frame.width / placement.crop.width,
+                                frame.height / placement.crop.height)
+                    if let image = try? child.flatten(crop: placement.crop, scale: scale * k) {
+                        draw(image, in: frame)
+                    }
+                } else if let pixels = canvasPixels[link.url] {
+                    draw(pixels.image, in: placement.sourceFrame(for: pixels.bounds))
+                } else if let snapshot = images[annotation.id] {
+                    // the snapshot the host package persisted under the
+                    // Annotation's own id — a reopened link still renders
+                    draw(snapshot, in: frame)
+                }
+            default: break
+            }
+            // the border blends against the image's own pixels inside the clip
+            if placement.border != .hidden {
+                let inset = ImagePlacement.borderWidth / 2
+                setLineWidth(ImagePlacement.borderWidth)
+                addPath(CGPath(roundedRect: frame.insetBy(dx: inset, dy: inset),
+                    cornerWidth: max(0, radius - inset), cornerHeight: max(0, radius - inset), transform: nil))
+                switch placement.border {
+                case .difference:
+                    setBlendMode(.difference)
+                    setStrokeColor(RGBAColour(red: 1, green: 1, blue: 1, alpha: 1).cgColor)
+                case .colour:
+                    setStrokeColor(annotation.style.colour.cgColor)
+                case .hidden: break
+                }
+                strokePath()
             }
         default:
             let path = PathGeometry.path(for: annotation)
