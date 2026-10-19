@@ -63,6 +63,7 @@ extension CanvasDocument {
                 }
                 context.saveGState()
                 context.setAlpha(annotation.style.opacity)
+                if annotation.style.blend == .multiply { context.setBlendMode(.multiply) }
                 context.concatenate(annotation.affineTransform)
                 context.draw(layer.image, in: frame)
                 context.restoreGState()
