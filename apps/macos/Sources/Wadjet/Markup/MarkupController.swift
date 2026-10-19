@@ -413,18 +413,20 @@ final class MarkupController {
     @ObservationIgnored var textEditStart: LayerStack?
     /// this session's unrecorded edits already dirtied the document — the
     /// recorded step then marks it the normal way, so commit balances it
-    @ObservationIgnored private var textDirtyMarked = false
+    @ObservationIgnored var textDirtyMarked = false
     /// a save happened inside this session — its disk image carries the
     /// unrecorded edits, so a net-zero session can't go clean again
-    @ObservationIgnored private var textSavedDuringSession = false
+    @ObservationIgnored var textSavedDuringSession = false
     /// changes the stack without a history step — only the in-place text
     /// editor uses it; its session's one step is recorded by recordTextEdit()
     func mutateUnrecorded(_ change: (inout LayerStack) -> Void) {
-        if !isScreen, !textDirtyMarked, textEditStart != nil {
+        let before = stack
+        change(&stack)
+        // a change that altered nothing dirties nothing
+        if !isScreen, !textDirtyMarked, textEditStart != nil, stack != before {
             document?.updateChangeCount(.changeDone)
             textDirtyMarked = true
         }
-        change(&stack)
         render()
     }
     /// records the whole text session's net change as one undo step — a
@@ -447,6 +449,7 @@ final class MarkupController {
     /// next unrecorded keystroke must mark again, and commit balances only a
     /// mark made since
     func textSessionSaved() {
+        guard textEditStart != nil else { return }
         textDirtyMarked = false
         textSavedDuringSession = true
     }
@@ -524,7 +527,7 @@ final class MarkupController {
         selection = nil // a new Annotation takes the Tool's style and options, not the selection's
         if armed == .text {
             gestureStart = nil // the text session records its own one step
-            textEditStart = stack
+            textEditStart = stack; textDirtyMarked = false; textSavedDuringSession = false
             let a = Annotation(
                 kind: .text(TextData(string: "", origin: p,
                                      format: AppState.shared.config.value.markup.textFormat)),

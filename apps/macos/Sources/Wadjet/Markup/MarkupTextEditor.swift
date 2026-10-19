@@ -173,7 +173,9 @@ extension MarkupController {
               let host = editorHost(for: TextLayout(data).box) else { return }
         // a placed box's session start is captured where it's placed —
         // re-editing an existing text starts the undo window here
-        if textEditStart == nil { textEditStart = stack }
+        if textEditStart == nil {
+            textEditStart = stack; textDirtyMarked = false; textSavedDuringSession = false
+        }
         let tv = TextEditorView()
         tv.onChange = { [weak self] s in self?.editorTextChanged(s) }
         tv.onCommit = { [weak self] in self?.commitEditing() }
