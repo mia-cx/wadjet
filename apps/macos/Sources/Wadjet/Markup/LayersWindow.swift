@@ -120,10 +120,11 @@ struct LayerThumbnail: View {
                 .scaledBy(x: s, y: -s)
                 .translatedBy(x: -b.midX, y: -b.midY)
             // fill and stroke as MarkupView draws them: fillColour for the
-            // inside (a Black out's opaque black), strokeColour for the outline
-            let o = annotation.style.opacity
+            // inside (a Black out's opaque black), strokeColour for the outline,
+            // and whole-Annotation opacity except on Black out, which stays opaque
+            if case .censor = annotation.kind {} else { ctx.opacity = annotation.style.opacity }
             func colour(_ c: RGBAColour) -> Color {
-                Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: c.alpha * o)
+                Color(.sRGB, red: c.red, green: c.green, blue: c.blue, opacity: c.alpha)
             }
             let p = Path(path).applying(t)
             if let f = annotation.fillColour { ctx.fill(p, with: .color(colour(f))) }
