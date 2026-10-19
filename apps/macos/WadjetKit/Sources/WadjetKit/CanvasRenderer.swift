@@ -1,9 +1,11 @@
 import CoreGraphics
+import CoreImage
 
 extension CanvasDocument {
     /// Composites displays, windows, then Annotations back to front. Crop and radius
     /// are global points; scale is output pixels per point. HDR pixels stay extended.
-    /// Black out fills opaque black; sampling Censor methods and Magnify belong to their own slices.
+    /// Black out fills opaque black; Blur and Pixelate sample each display's
+    /// image beneath the Censor; Magnify belongs to its own slice.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
@@ -44,6 +46,27 @@ extension CanvasDocument {
         }
         for annotation in layerStack.annotations {
             context.saveGState()
+            if case let .censor(_, method) = annotation.kind, method.samplesBeneath {
+                // black underneath first: the fallback for parts off every display
+                let path = PathGeometry.path(for: annotation)
+                context.addPath(path)
+                context.clip()
+                context.setFillColor(CGColor(colorSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                             components: [0, 0, 0, 1])!)
+                context.fill(path.boundingBox)
+                let box = path.boundingBox
+                for display in layout where display.frame.intersects(box) {
+                    guard let cg = displayImages[display.id],
+                          let (image, rect) = CensorFilter.render(
+                            method, region: box.intersection(display.frame),
+                            source: CIImage(cgImage: cg), sourceRect: display.frame,
+                            format: .RGBAh,
+                            colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!) else { continue }
+                    context.draw(image, in: rect)
+                }
+                context.restoreGState()
+                continue
+            }
             // PathGeometry applies transforms. Composite fill and stroke together
             // at the panel's whole-Annotation opacity; Black out stays opaque.
             if case .censor = annotation.kind { context.setAlpha(1) }

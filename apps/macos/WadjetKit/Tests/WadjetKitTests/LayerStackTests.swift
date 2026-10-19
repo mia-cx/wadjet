@@ -45,10 +45,10 @@ struct LayerStackTests {
         #expect(try LayerStack(json: stack.json()) == stack)
     }
 
-    // Proves a censor annotation survives the annotations.json round trip, transform included.
+    // Proves every Censor method survives the annotations.json round trip, transform included.
     @Test func censorJSONRoundTrip() throws {
         let fixture = """
-            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"censor":{"method":"blackOut","rect":[10,20,30,40]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4},"transform":{"flipHorizontal":false,"flipVertical":false,"rotation":0.5}}]}
+            {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"censor":{"method":"blackOut","rect":[10,20,30,40]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4},"transform":{"flipHorizontal":false,"flipVertical":false,"rotation":0.5}},{"id":"7B2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A","kind":{"censor":{"method":{"blur":{"radius":12}},"rect":[0,0,5,5]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}},{"id":"8C3E4F5A-2D3E-4F4A-9E4F-3C4D5E6F7A8B","kind":{"censor":{"method":{"pixelate":{"blockSize":9}},"rect":[1,2,3,4]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}
             """
         var expected = LayerStack()
         expected.add(Annotation(id: UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!,
@@ -56,6 +56,14 @@ struct LayerStackTests {
                                               method: .blackOut),
                                 style: red4,
                                 transform: AnnotationTransform(rotation: 0.5)))
+        expected.add(Annotation(id: UUID(uuidString: "7B2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A")!,
+                                kind: .censor(rect: CGRect(x: 0, y: 0, width: 5, height: 5),
+                                              method: .blur(radius: 12)),
+                                style: red4))
+        expected.add(Annotation(id: UUID(uuidString: "8C3E4F5A-2D3E-4F4A-9E4F-3C4D5E6F7A8B")!,
+                                kind: .censor(rect: CGRect(x: 1, y: 2, width: 3, height: 4),
+                                              method: .pixelate(blockSize: 9)),
+                                style: red4))
         let stack = try LayerStack(json: Data(fixture.utf8))
         #expect(stack == expected)
         #expect(try LayerStack(json: stack.json()) == stack)

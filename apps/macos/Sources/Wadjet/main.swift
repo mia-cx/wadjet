@@ -3936,7 +3936,7 @@ struct ToolMenuView: View {
                 tileRow(measureTiles)
             case .markup:
                 if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
-                if tool == .censor { tileRow(censorTiles) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
+                if tool == .censor { CensorControls(ctrl: ctrl) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 selectionRows()
                 if tool == .select { markupGroupRows() }

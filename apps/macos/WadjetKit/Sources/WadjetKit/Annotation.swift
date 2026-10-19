@@ -32,7 +32,8 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
 public enum AnnotationKind: Codable, Equatable, Sendable {
     case line(start: CGPoint, end: CGPoint)
     /// the filled rect in untransformed geometry space; Black out draws opaque
-    /// black whatever the style
+    /// black whatever the style, Blur and Pixelate show the content beneath
+    /// filtered
     case censor(rect: CGRect, method: CensorMethod)
     case shape(ShapeKind, rect: CGRect)
 
@@ -79,9 +80,64 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     }
 }
 
-/// How a Censor obscures its rect; Blur and Pixelate join in #124.
-public enum CensorMethod: String, Codable, Sendable {
+/// How a Censor obscures its rect. Strengths are global points; renderers scale them to pixels.
+public enum CensorMethod: Codable, Equatable, Sendable {
     case blackOut
+    case blur(radius: CGFloat)
+    case pixelate(blockSize: CGFloat)
+    public static let defaultBlur = CensorMethod.blur(radius: 12)
+    public static let defaultPixelate = CensorMethod.pixelate(blockSize: 12)
+    /// Blur and Pixelate draw from the pixels beneath; Black out needs none
+    public var samplesBeneath: Bool {
+        switch self {
+        case .blackOut: false
+        case .blur, .pixelate: true
+        }
+    }
+
+    enum CodingKeys: String, CodingKey { case blur, pixelate }
+    enum BlurKeys: String, CodingKey { case radius }
+    enum PixelateKeys: String, CodingKey { case blockSize }
+    /// `"blackOut"` stays the bare string it always was; the sampling methods
+    /// nest their strength: `{"blur":{"radius":12}}`
+    public init(from decoder: Decoder) throws {
+        if let s = try? decoder.singleValueContainer().decode(String.self) {
+            guard s == "blackOut" else {
+                throw DecodingError.dataCorrupted(
+                    DecodingError.Context(codingPath: decoder.codingPath,
+                                          debugDescription: "unknown CensorMethod \"\(s)\""))
+            }
+            self = .blackOut
+            return
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if c.contains(.blur) {
+            let b = try c.nestedContainer(keyedBy: BlurKeys.self, forKey: .blur)
+            self = .blur(radius: try b.decode(CGFloat.self, forKey: .radius))
+        } else if c.contains(.pixelate) {
+            let p = try c.nestedContainer(keyedBy: PixelateKeys.self, forKey: .pixelate)
+            self = .pixelate(blockSize: try p.decode(CGFloat.self, forKey: .blockSize))
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath,
+                                      debugDescription: "a CensorMethod is \"blackOut\", blur or pixelate"))
+        }
+    }
+    public func encode(to encoder: Encoder) throws {
+        switch self {
+        case .blackOut:
+            var c = encoder.singleValueContainer()
+            try c.encode("blackOut")
+        case let .blur(radius):
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            var b = c.nestedContainer(keyedBy: BlurKeys.self, forKey: .blur)
+            try b.encode(radius, forKey: .radius)
+        case let .pixelate(blockSize):
+            var c = encoder.container(keyedBy: CodingKeys.self)
+            var p = c.nestedContainer(keyedBy: PixelateKeys.self, forKey: .pixelate)
+            try p.encode(blockSize, forKey: .blockSize)
+        }
+    }
 }
 
 /// a CGPoint on the wire as `[x, y]` and a CGRect as `[x, y, width, height]` —

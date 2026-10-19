@@ -134,6 +134,65 @@ struct CanvasDocumentTests {
         #expect(pixel(5, 1) == [1, 0, 0, 1]) // the stroke on the shape's edge
     }
 
+    // Proves a Pixelate censor flattens to uniform blocks of the content beneath.
+    @Test func censorPixelatesFlattenedRect() throws {
+        // every pixel a distinct grey dominated by its quadrant, so blocks only
+        // read uniform once sampled
+        let ramp: [UInt8] = (0..<8).flatMap { y -> [UInt8] in
+            (0..<8).flatMap { x -> [UInt8] in
+                let v = UInt8((x / 4) * 80 + (y / 4) * 140 + (x % 4) * 2 + (y % 4) * 8)
+                return [v, v, v, 255]
+            }
+        }
+        let source = try image(width: 8, height: 8, pixels: ramp)
+        let censor = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 8, height: 8),
+                                              method: .pixelate(blockSize: 4)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 3))
+        let document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 8, height: 8),
+            layerStack: LayerStack([censor]),
+            displayImages: [1: source])
+        let pixels = try linearPixels(document.flatten(scale: 1))
+        func r(_ x: Int, _ y: Int) -> Float { pixels[4 * (y * 8 + x)] }
+        for by in [0, 4] { for bx in [0, 4] {
+            let v = r(bx, by)
+            for y in by..<by + 4 { for x in bx..<bx + 4 {
+                #expect(abs(r(x, y) - v) < 0.001, "pixel (\(x), \(y)) differs inside block (\(bx), \(by))")
+            } }
+        } }
+        // each of the four blocks averages a different quarter of the ramp
+        #expect(abs(r(0, 0) - r(4, 0)) > 0.05)
+        #expect(abs(r(0, 0) - r(0, 4)) > 0.05)
+        #expect(abs(r(0, 0) - r(4, 4)) > 0.05)
+    }
+
+    // Proves a Blur censor softens the content beneath's hard edges.
+    @Test func censorBlursFlattenedRect() throws {
+        // left half black, right half white: a hard vertical edge through the middle
+        let edge: [UInt8] = (0..<8).flatMap { _ -> [UInt8] in
+            (0..<8).flatMap { x -> [UInt8] in
+                let v = UInt8(x < 4 ? 0 : 255)
+                return [v, v, v, 255]
+            }
+        }
+        let source = try image(width: 8, height: 8, pixels: edge)
+        let censor = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 8, height: 8),
+                                              method: .blur(radius: 2)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 3))
+        let document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 8, height: 8),
+            layerStack: LayerStack([censor]),
+            displayImages: [1: source])
+        let pixels = try linearPixels(document.flatten(scale: 1))
+        func r(_ x: Int, _ y: Int) -> Float { pixels[4 * (y * 8 + x)] }
+        // the pixels beside the source's hard edge now sit clearly between 0 and 1
+        for y in 0..<8 { for x in [3, 4] {
+            #expect(r(x, y) > 0.15 && r(x, y) < 0.85, "pixel (\(x), \(y)) kept the hard edge")
+        } }
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])
