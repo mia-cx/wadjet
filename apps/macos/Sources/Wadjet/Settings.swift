@@ -113,6 +113,9 @@ enum SettingsPanes: String, CaseIterable {
         }
         Section("Capture") {
             Toggle("Freeze the screen while selecting", isOn: cfgBinding(\.capture.freeze))
+            Picker("Freeze while recording", selection: cfgBinding(\.capture.freezeWhileRecording)) {
+                Text("Default").tag(Bool?.none); Text("On").tag(Bool?(true)); Text("Off").tag(Bool?(false))
+            }
             Toggle("Capture the cursor", isOn: cfgBinding(\.capture.cursor))
         }
         CanvasRetentionRows()
@@ -220,16 +223,22 @@ enum SettingsPanes: String, CaseIterable {
                            }
                        }))
             }
-            if tool?.kind == .rec {
+            if let tool, tool.kind != .util {
                 DisclosureGroup("Options") {
-                    Picker("Countdown", selection: opt(\.countdown, i: i)) {
-                        Text("Default").tag(-1); Text("Off").tag(0)
-                        Text("3 seconds").tag(3); Text("5 seconds").tag(5); Text("10 seconds").tag(10)
+                    optionRow("Freeze the screen", \.freeze)
+                    if tool.kind != .rec { // a Record Shortcut during a Recording only stops it
+                        optionRow("Freeze while recording", \.freezeWhileRecording)
                     }
-                    optionRow("System audio", \.systemAudio)
-                    optionRow("Microphone", \.microphone)
-                    optionRow("Cursor", \.cursor)
-                    optionRow("Click circles", \.clickCircles)
+                    if tool.kind == .rec {
+                        Picker("Countdown", selection: opt(\.countdown, i: i)) {
+                            Text("Default").tag(-1); Text("Off").tag(0)
+                            Text("3 seconds").tag(3); Text("5 seconds").tag(5); Text("10 seconds").tag(10)
+                        }
+                        optionRow("System audio", \.systemAudio)
+                        optionRow("Microphone", \.microphone)
+                        optionRow("Cursor", \.cursor)
+                        optionRow("Click circles", \.clickCircles)
+                    }
                 }
             }
         }
