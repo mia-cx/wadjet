@@ -507,18 +507,23 @@ final class MarkupController {
     }
 
     /// Pin to screen: a Screenshot's Canvas exactly over the crop it was captured
-    /// from, or an image without one centred on the main display — on top, not
-    /// selected, nothing armed, so it stays like any Annotation until erased or cleared
+    /// from while that is on a current display, else (and for an image without a
+    /// Canvas) centred on the main display — on top, not selected, nothing armed,
+    /// so it stays like any Annotation until erased or cleared
     func pin(_ content: MarkupPasteboard.Content) {
-        let frame: CGRect
+        var captured: CGRect?
+        let size: CGSize
         switch content {
-        case let .canvas(doc, _): frame = doc.crop
-        case let .image(_, size):
-            let screen = NSScreen.main?.frame ?? .zero
-            frame = Self.centred(size, at: CGPoint(x: screen.midX, y: screen.midY), within: screen.size)
+        case let .canvas(doc, _):
+            size = doc.crop.size
+            if NSScreen.screens.contains(where: { $0.frame.intersects(doc.crop) }) { captured = doc.crop }
+        case let .image(_, s): size = s
         }
+        let screen = NSScreen.main?.frame ?? .zero
+        let frame = captured ?? Self.centred(size, at: CGPoint(x: screen.midX, y: screen.midY), within: screen.size)
         edit { $0.add(imageAnnotation(content, frame: frame)) }
-        syncPanels()
+        // a first pin's panels are new, and no selection change renders them
+        syncPanels(); render()
         AppLog.line("markup: pinned \(content.label)")
     }
 
