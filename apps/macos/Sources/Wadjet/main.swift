@@ -864,6 +864,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         cfg.width = Int((scw.frame.width * sc).rounded())
         cfg.height = Int((scw.frame.height * sc).rounded())
         cfg.showsCursor = cursor
+        cfg.ignoreShadows = true // Canvas crop and window pixels share the window frame
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         do {
             let out = try await SCScreenshotManager.captureScreenshot(
@@ -926,21 +927,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
-            // snapshot the context before closeAll — a second Shortcut could
-            // change shot toggles/the tool/the one-shot Workflow mid-capture
-            let shotWorkflow = takeShotWorkflow()
-            let cursor = s.shotCursor
-            let screen = Freeze.shared.displays[display].screen
-            let fallback = Freeze.shared.crop(rect: frame, on: display, hdr: true)
-            overlayCtrl.closeAll()
-            Task { @MainActor in
-                var thumb = await captureWindow(id: id, screen: screen, cursor: cursor)
-                if thumb == nil {
-                    AppLog.line("window \(id) not capturable; falling back to frozen crop")
-                    thumb = fallback
-                }
-                runCapture(thumb: thumb, label: "\(tool.title) \(Int(frame.width))×\(Int(frame.height))", workflow: shotWorkflow)
-            }
+            captureScreenshot(rect: frame, on: display, windowID: id)
         } else {
             recordingWindowID = id
             startRecording(rect: frame, display: display)
@@ -950,38 +937,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let s = AppState.shared
         guard let tool = s.tool else { return }
         if tool.kind == .shot {
-            // snapshot the context before closeAll — a second Shortcut could
-            // change shot toggles/the tool/the one-shot Workflow mid-capture
-            let shotWorkflow = takeShotWorkflow()
-            let cursor = s.shotCursor, wadjet = s.shotWadjet
-            if !overlayCtrl.showsFrozen {
-                // the Screenshot is taken at confirm — collect every overlay-
-                // session window before teardown so it can be left out
-                let screen = Freeze.shared.displays[display].screen
-                var ids = Set(overlayCtrl.panels.map(\.windowNumber))
-                ids.formUnion(overlayCtrl.toolbarPanels.values.map(\.windowNumber))
-                ids.formUnion(overlayCtrl.recBubblePanels.values.map(\.windowNumber))
-                ids.formUnion(overlayCtrl.dyingBubbles.values.map(\.windowNumber))
-                ids.formUnion(MarkupController.shared.windowNumbers)
-                if let m = overlayCtrl.menuPanel { ids.insert(m.windowNumber) }
-                overlayCtrl.closeAll()
-                Task { @MainActor in
-                    let thumb = await overlayCtrl.liveShot(rect: rect, screen: screen, excluding: ids, cursor: cursor, wadjet: wadjet)
-                    self.runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: shotWorkflow)
-                }
-                return
-            }
-            // screenshots keep HDR pixels when the display provides them
-            let thumb = Freeze.shared.crop(rect: rect, on: display, hdr: true)
-            overlayCtrl.closeAll()
-            runCapture(thumb: thumb, label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: shotWorkflow)
+            captureScreenshot(rect: rect, on: display)
         } else {
             startRecording(rect: rect, display: display)
         }
     }
     // capture temp files land in the Captures dir and age out via the sweep
     lazy var captureFiles = CaptureFiles(directory: Self.capturesDir)
-    lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
+    lazy var canvasStore = CanvasStore(directory: Self.historyURL.deletingLastPathComponent().appendingPathComponent("Canvases"))
+    lazy var workflowEffects = AppWorkflowEffects(toast: toastCtrl)
+    lazy var runner = WorkflowRunner(effects: workflowEffects)
 
     /// the Screenshot Workflow for the current Tool, resolved at confirm —
     /// consumes the Shortcut's one-shot pick
@@ -990,42 +955,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         defer { s.triggerWorkflow = nil }
         return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
     }
-    // Screenshots write a temp file, then run the Workflow picked for the Tool —
-    // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
-    func runCapture(thumb: CGImage?, label: String, workflow: String) {
-        guard let img = thumb else {
-            AppLog.line("capture: no image — window capture and frozen crop both failed")
-            return
-        }
-        // HEIC with an ISO gain map when the display gave HDR pixels, else PNG
-        let heic = heicData(img)
-        let bytes = heic ?? NSBitmapImageRep(cgImage: img).representation(using: .png, properties: [:])
-        let ext = heic != nil ? "heic" : "png"
-        guard let bytes, let file = try? captureFiles.newFile(ext: ext) else {
-            AppLog.line("capture: could not name/write temp file")
-            return
-        }
-        do { try bytes.write(to: file) } catch {
-            AppLog.line("capture: temp file write failed: \(error.localizedDescription)")
-            return
-        }
-        if AppState.shared.config.value.markup.clearAfterScreenshot { clearAnnotations() }
-        runCapture(file: file, kind: .screenshot, label: label, workflow: workflow)
-    }
     /// Run a finished capture file through `workflow` (resolved by the caller
     /// at capture time), record it in history, and finish any showToast items.
-    func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String) {
+    func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String,
+                    runID: UUID = UUID(), capturedAt: Date = Date(), canvas: URL? = nil) {
         let state = AppState.shared
         let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
             ?? WadjetConfig().workflows.first { $0.takes == kind }!
         let defaultFolder = expandingTilde(kind.isRecording
             ? state.config.value.folders.recordings
             : state.config.value.folders.screenshots)
-        let runID = UUID()
-        let capturedAt = Date()
+        workflowEffects.canvases[runID] = canvas
         AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
         Task { @MainActor in
-            for await e in runner.run(file, through: wf, defaultFolder: defaultFolder, id: runID) {
+            for await e in runner.run(file, through: wf, defaultFolder: defaultFolder, id: runID, canvas: canvas) {
                 switch e {
                 case .started(let i, let s): AppLog.line("workflow \(wf.name): started \(i) \(s.title)")
                 case .finished(let i, let s): AppLog.line("workflow \(wf.name): finished \(i) \(s.title)")
@@ -1035,7 +978,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     let entry: HistoryEntry?
                     do {
                         entry = try self.history?.record(
-                            kind: kind, createdAt: capturedAt,
+                            id: runID, kind: kind, createdAt: capturedAt,
                             file: saved.last ?? file, errors: errors)
                     } catch {
                         AppLog.line("history: record failed: \(error.localizedDescription)")
@@ -1044,7 +987,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     // OCR is for Screenshots; an MP4 has nothing to read.
                     if let entry, kind == .screenshot {
                         // only Sendable values cross into the detached task
-                        let store = self.history, entryID = entry.id, target = saved.last ?? file
+                        let store = self.history, entryID = entry.id
+                        let target = saved.last { $0.pathExtension != "wadjet" } ?? file
                         Task.detached {
                             do {
                                 let text = try await recognizeText(in: target)
@@ -1061,18 +1005,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                         toastCtrl.startTimer(t)
                     }
                     toastCtrl.runToasts.removeValue(forKey: runID)
+                    workflowEffects.canvases.removeValue(forKey: runID)
                 }
             }
         }
-    }
-    // HEIC with an ISO gain map from an extended-sRGB CGImage; nil for SDR input
-    func heicData(_ img: CGImage) -> Data? {
-        guard img.colorSpace?.name == CGColorSpace.extendedSRGB
-           || img.colorSpace?.name == CGColorSpace.extendedLinearSRGB else { return nil }
-        let data = NSMutableData()
-        guard let dst = CGImageDestinationCreateWithData(data, UTType.heic.identifier as CFString, 1, nil) else { return nil }
-        CGImageDestinationAddImage(dst, img, [kCGImageDestinationEncodeRequest: kCGImageDestinationEncodeToISOGainmap] as CFDictionary)
-        return CGImageDestinationFinalize(dst) ? data as Data : nil
     }
 
     // MARK: recording
@@ -2122,36 +2058,6 @@ final class OverlayController {
         let gap: CGFloat = hasNotch ? 0 : 3
         let pillH = islandH - 2 * gap
         return (sc.frame.maxY - gap - pillH / 2, pillH)
-    }
-    /// a Screenshot taken at confirm, not at freeze — the desktop has moved on
-    /// by then. Called after closeAll, so our session windows are already down;
-    /// their window numbers leave the shot when Wadjet windows stay in.
-    func liveShot(rect: CGRect, screen: NSScreen, excluding: Set<Int>, cursor: Bool, wadjet: Bool) async -> CGImage? {
-        guard let content = try? await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true),
-              let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
-              let disp = content.displays.first(where: { $0.displayID == num }) else {
-            AppLog.line("live shot: no shareable display")
-            return nil
-        }
-        let filter: SCContentFilter
-        if wadjet {
-            // closeAll may have rebuilt the desktop islands since `excluding` was taken
-            let excluded = excluding.union(toolbarPanels.values.map(\.windowNumber))
-            filter = SCContentFilter(display: disp, excludingWindows: content.windows.filter { excluded.contains(Int($0.windowID)) })
-        } else {
-            let own = content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier }
-            filter = SCContentFilter(display: disp, excludingApplications: own, exceptingWindows: [])
-        }
-        let w = Int((screen.frame.width * screen.backingScaleFactor).rounded())
-        let h = Int((screen.frame.height * screen.backingScaleFactor).rounded())
-        let hdr = screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1
-        guard let out = try? await screenshot(disp, width: w, height: h, cursor: cursor, hdr: hdr, filter: filter),
-              let img = out.hdr ?? out.sdr else {
-            AppLog.line("live shot: capture failed")
-            return nil
-        }
-        AppLog.line("live shot \(img.width)x\(img.height)")
-        return Freeze.pixelCrop(of: img, rect: rect, in: screen)
     }
     /// leading edge 8 pt off the right edge of whatever shape is up (island or
     /// expanded bar), centred on the island pill — called on every
@@ -4254,27 +4160,11 @@ struct MenuTile: View {
 @MainActor
 final class AppWorkflowEffects: WorkflowEffects {
     let toast: ToastController
+    var canvases: [UUID: URL] = [:]
     init(toast: ToastController) { self.toast = toast }
 
     func copyImage(_ file: URL, run: UUID) async throws {
-        let data = try Data(contentsOf: file)
-        let pb = NSPasteboard.general
-        pb.clearContents()
-        // HEIC keeps its gain map on the pasteboard; offer png alongside it
-        if file.pathExtension.lowercased() == "heic" {
-            let heicT = NSPasteboard.PasteboardType(UTType.heic.identifier)
-            pb.declareTypes([heicT, .png], owner: nil)
-            pb.setData(data, forType: heicT)
-            if let rep = NSBitmapImageRep(data: data) {
-                pb.setData(rep.representation(using: .png, properties: [:]), forType: .png)
-            }
-            AppState.shared.lastClipboard = "<heic+png \(file.lastPathComponent)>"
-        } else if let img = NSImage(contentsOf: file) {
-            pb.writeObjects([img as NSPasteboardWriting])
-            AppState.shared.lastClipboard = "<image \(file.lastPathComponent)>"
-        } else {
-            throw NSError(domain: "wadjet", code: 1, userInfo: [NSLocalizedDescriptionKey: "couldn't read the image"])
-        }
+        try CanvasClipboard.copyImage(file, canvas: canvases[run])
     }
 
     func copyFile(_ file: URL, run: UUID) async throws {
@@ -4313,7 +4203,8 @@ final class AppWorkflowEffects: WorkflowEffects {
     }
 }
 
-/// A thumbnail for a capture file: ImageIO for images, the first frame via
+/// A thumbnail for a capture file: the package thumbnail for Canvases,
+/// ImageIO for images, the first frame via
 /// AVAssetImageGenerator for .mp4 (ImageIO can't read video). Async because the
 /// video path is.
 func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
@@ -4323,7 +4214,8 @@ func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
         gen.maximumSize = CGSize(width: maxPixels, height: maxPixels)
         return try? await gen.image(at: .zero).image
     }
-    if let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+    let imageFile = file.pathExtension.lowercased() == "wadjet" ? file.appendingPathComponent("thumbnail.png") : file
+    if let src = CGImageSourceCreateWithURL(imageFile as CFURL, nil),
        let cg = CGImageSourceCreateThumbnailAtIndex(src, 0, [
            kCGImageSourceCreateThumbnailFromImageAlways: true,
            kCGImageSourceThumbnailMaxPixelSize: maxPixels,

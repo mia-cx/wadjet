@@ -3,8 +3,10 @@ import Foundation
 import ImageIO
 import UniformTypeIdentifiers
 
-enum CanvasImageCodec {
-    static func heic(_ image: CGImage, quality: Double = 1) throws -> Data {
+/// Image formats shared by Canvas packages and flattened Screenshot exports.
+public enum CanvasImageCodec {
+    /// Encodes HDR with an ISO gain map, or SDR HEIC when no extended pixels exist.
+    public static func heic(_ image: CGImage, quality: Double = 1) throws -> Data {
         let headroom = max(image.contentHeadroom, image.calculatedContentHeadroom)
         var options: [CFString: Any] = [kCGImageDestinationLossyCompressionQuality: quality]
         var source = image
@@ -30,13 +32,14 @@ enum CanvasImageCodec {
         return image
     }
 
-    static func png(_ image: CGImage) throws -> Data {
-        // The package thumbnail is SDR; only display/window HEICs carry HDR.
-        try encode(sdr(image), type: .png, options: [:])
+    /// Encodes an SDR PNG in Display P3 so wide-gamut Screenshots retain their
+    /// colours. Thumbnails can request sRGB; HEIC carries HDR.
+    public static func png(_ image: CGImage, colourSpace: CFString = CGColorSpace.displayP3) throws -> Data {
+        try encode(sdr(image, colourSpace: colourSpace), type: .png, options: [:])
     }
 
-    static func sdr(_ image: CGImage) throws -> CGImage {
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+    static func sdr(_ image: CGImage, colourSpace: CFString = CGColorSpace.sRGB) throws -> CGImage {
+        guard let space = CGColorSpace(name: colourSpace),
               let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
                 bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw CanvasDocumentError.renderFailed

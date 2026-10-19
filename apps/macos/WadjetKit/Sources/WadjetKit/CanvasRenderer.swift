@@ -35,11 +35,20 @@ extension CanvasDocument {
             context.draw(image, in: display.frame)
         }
         for window in windowLayers.sorted(by: { $0.zOrder < $1.zOrder }) where window.frame.intersects(crop) {
+            context.saveGState()
+            // Standalone window captures must not reveal the desktop through
+            // their transparent pixels. Other window layers composite normally.
+            if window.isolatesBackground { context.setBlendMode(.copy) }
             context.draw(window.image, in: window.frame)
+            context.restoreGState()
         }
         for annotation in layerStack.annotations {
             context.saveGState()
-            // The transform/opacity slice will apply its model fields here; Black out stays opaque.
+            // PathGeometry applies transforms. Composite fill and stroke together
+            // at the panel's whole-Annotation opacity; Black out stays opaque.
+            if case .censor = annotation.kind { context.setAlpha(1) }
+            else { context.setAlpha(annotation.style.opacity) }
+            context.beginTransparencyLayer(auxiliaryInfo: nil)
             let path = PathGeometry.path(for: annotation)
             if let fill = annotation.fillColour {
                 context.setFillColor(fill.cgColor)
@@ -54,6 +63,7 @@ extension CanvasDocument {
                 context.addPath(path)
                 context.strokePath()
             }
+            context.endTransparencyLayer()
             context.restoreGState()
         }
         context.endTransparencyLayer()
