@@ -25,7 +25,7 @@ struct GripSnappingTests {
 
     // the press was 3 pt off the grip, so the delta — not the pointer — snaps
     @Test func offCentreCornerPressLandsOnTheGuides() {
-        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 100)), style: style)
+        let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 100), method: .blackOut), style: style)
         let h = SelectionHandle.resize(x: 1, y: 1)
         let r = drag(a, h, from: CGPoint(x: 103, y: 103), to: CGPoint(x: 111, y: 111),
                      targets: [.rect(CGRect(x: 110, y: 110, width: 100, height: 100))])
@@ -36,9 +36,9 @@ struct GripSnappingTests {
         #expect(r.guides.contains { near($0.start.y, 110) && near($0.end.y, 110) })
     }
 
-    // a horizontal Line's end grip moves along x only — the y target gets no guide
+    // a zero-height box's side grip moves along x only — the y target gets no guide
     @Test func horizontalEndGripSnapsXOnly() {
-        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 0), method: .blackOut), style: style)
         let h = SelectionHandle.resize(x: 1, y: 0)
         let r = drag(a, h, from: CGPoint(x: 100, y: 0), to: CGPoint(x: 104, y: 3),
                      targets: [.rect(CGRect(x: 106, y: 5, width: 100, height: 100))])
@@ -48,9 +48,41 @@ struct GripSnappingTests {
         #expect(near(r.guides[0].start.x, 106) && near(r.guides[0].end.x, 106))
     }
 
+    // a Line end grip snaps on both axes, landing on the target corner
+    @Test func vertexGripSnapsBothAxes() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let r = drag(a, .vertex(1), from: CGPoint(x: 100, y: 0), to: CGPoint(x: 104, y: 3),
+                     targets: [.rect(CGRect(x: 106, y: 5, width: 100, height: 100))])
+        guard case let .line(_, e, _) = r.annotation.kind else { Issue.record(); return }
+        #expect(near(e, CGPoint(x: 106, y: 5)))
+        #expect(r.guides.count == 2)
+        #expect(r.guides.contains { near($0.start.x, 106) && near($0.end.x, 106) })
+        #expect(r.guides.contains { near($0.start.y, 5) && near($0.end.y, 5) })
+    }
+
+    // a vertex drag is delta-based like a resize grip: an off-centre press
+    // must not apply the press offset twice, unsnapped or snapped
+    @Test func offCentreVertexPressKeepsTheDelta() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 100)), style: style)
+        let r = drag(a, .vertex(1), from: CGPoint(x: 103, y: 103), to: CGPoint(x: 111, y: 111),
+                     targets: [])
+        guard case let .line(_, e, _) = r.annotation.kind else { Issue.record(); return }
+        #expect(near(e, CGPoint(x: 108, y: 108)))
+    }
+
+    @Test func offCentreVertexPressSnapsToTheGuide() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 100)), style: style)
+        let r = drag(a, .vertex(1), from: CGPoint(x: 103, y: 103), to: CGPoint(x: 111, y: 111),
+                     targets: [.rect(CGRect(x: 110, y: 110, width: 100, height: 100))])
+        guard case let .line(_, e, _) = r.annotation.kind else { Issue.record(); return }
+        #expect(near(e, CGPoint(x: 110, y: 110)))
+        #expect(r.guides.contains { near($0.start.x, 110) && near($0.end.x, 110) })
+        #expect(r.guides.contains { near($0.start.y, 110) && near($0.end.y, 110) })
+    }
+
     // rotated a right angle, the side grip's local x is the screen's y
     @Test func rightAngleRotationSwapsTheFreeAxis() {
-        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style,
+        let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 0), method: .blackOut), style: style,
                            transform: AnnotationTransform(rotation: .pi / 2))
         let h = SelectionHandle.resize(x: 1, y: 0)
         let r = drag(a, h, from: CGPoint(x: 50, y: 50), to: CGPoint(x: 53, y: 54),
@@ -63,7 +95,7 @@ struct GripSnappingTests {
 
     // at other angles a side grip's axis maps to no screen axis: no snapping
     @Test func otherRotationsDontSnapSideGrips() {
-        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style,
+        let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 0), method: .blackOut), style: style,
                            transform: AnnotationTransform(rotation: .pi / 4))
         let h = SelectionHandle.resize(x: 1, y: 0)
         let from = grip(of: a, h, nearest: CGPoint(x: 100, y: 0))!
