@@ -20,6 +20,10 @@ final class MarkupController {
     private(set) var armed: Tool?
     /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
     @ObservationIgnored private var gesture: Gesture?
+    /// every committed change is one undo step
+    @ObservationIgnored private var history = LayerHistory()
+    /// the stack when the drag in flight began — its one undo step
+    @ObservationIgnored private var gestureStart: LayerStack?
     enum Gesture {
         case drawing(Annotation, from: CGPoint)
         case moving(Annotation, from: CGPoint)
@@ -53,9 +57,48 @@ final class MarkupController {
         }
     }
 
+    /// one action = one undo step; every mutation of `stack` goes through here
+    private func edit(_ change: (inout LayerStack) -> Void) {
+        let before = stack
+        change(&stack)
+        history.record(from: before, to: stack)
+        endHistoryIfClosed()
+        render()
+    }
+    /// the drag in flight becomes its one undo step, if it changed anything
+    private func commitGesture() {
+        if let gestureStart { history.record(from: gestureStart, to: stack) }
+        gestureStart = nil
+    }
+    /// history ends once the stack is empty and the session is closed — Clear
+    /// can run after the toolbar closes (Clear after Screenshot), so edits check too
+    private func endHistoryIfClosed() {
+        if !AppState.shared.toolbarOpen { history.end(ifCleared: stack) }
+    }
+    /// Carbon command keys track the toolbar; call on every phase/tool change
+    func syncSession() {
+        MarkupKeys.shared.sync(active: AppState.shared.toolbarOpen)
+        endHistoryIfClosed()
+    }
+
+    func undo() {
+        guard gesture == nil, let s = history.undo(from: stack) else { return }
+        restore(s); AppLog.line("markup: undo")
+    }
+    func redo() {
+        guard gesture == nil, let s = history.redo(from: stack) else { return }
+        restore(s); AppLog.line("markup: redo")
+    }
+    private func restore(_ s: LayerStack) {
+        stack = s
+        if selected == nil { selection = nil }
+        syncPanels(); render()
+    }
+
     /// the want from AppState: a Markup Tool armed while the toolbar is up —
     /// called from the phase/tool didSets, so it runs on every state change
     func syncArmed() {
+        syncSession()
         PeerThrough.shared.sync()
         let s = AppState.shared
         let want: Tool? = s.toolbarOpen && s.tool?.kind == .markup && s.tool?.isAction != true ? s.tool : nil
@@ -63,6 +106,7 @@ final class MarkupController {
         let was = armed
         armed = want
         if want == nil {
+            commitGesture() // a drag cut short by disarming is still one step
             gesture = nil; selection = nil; cmdHeld = false
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
@@ -140,7 +184,9 @@ final class MarkupController {
     }
 
     func clear() {
-        stack.clear(); gesture = nil; selection = nil; syncPanels(); render()
+        commitGesture()
+        edit { $0.clear() }
+        gesture = nil; selection = nil; syncPanels()
     }
 
     /// the selected Annotation's style; setting restyles it alone — the seam the
@@ -150,7 +196,7 @@ final class MarkupController {
         set {
             guard var a = selected, let newValue else { return }
             a.style = newValue
-            stack.replace(a); render()
+            edit { $0.replace(a) }
             AppLog.line("markup: restyled selection")
         }
     }
@@ -159,14 +205,14 @@ final class MarkupController {
     func restyle(_ id: Annotation.ID, _ change: (inout AnnotationStyle) -> Void) {
         guard var a = stack.annotations.first(where: { $0.id == id }) else { return }
         change(&a.style)
-        stack.replace(a); render()
+        edit { $0.replace(a) }
         AppLog.line("markup: restyled selection")
     }
 
     /// apply a value transform (rotate/flip) to the selection
     func transformSelection(_ f: (Annotation) -> Annotation) {
         guard let a = selected else { return }
-        stack.replace(f(a)); render()
+        edit { $0.replace(f(a)) }
         AppLog.line("markup: transformed selection")
     }
 
@@ -181,12 +227,14 @@ final class MarkupController {
 
     func deleteSelection() {
         guard let id = selection else { return }
-        stack.remove(id: id); selection = nil
+        edit { $0.remove(id: id) }
+        selection = nil
         AppLog.line("markup: deleted selection")
     }
 
     // strokes arrive as global screen points from MarkupView; `command` = temporary Select
     func begin(at p: CGPoint, command: Bool) {
+        gestureStart = stack
         if armed == .select || command {
             if let sel = selected {
                 if let h = sel.handle(at: p, radius: Self.handleHitRadius,
@@ -261,6 +309,7 @@ final class MarkupController {
             }
             if drawn { stack.add(d) }
         }
+        commitGesture()
         gesture = nil
         render()
     }
