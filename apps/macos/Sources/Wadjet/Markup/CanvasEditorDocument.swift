@@ -102,6 +102,13 @@ final class CanvasEditorDocument: NSDocument {
         onReload?()
     }
 
+    /// called after every successful save — tell Markup the text session's
+    /// dirty mark went with it so later keystrokes dirty the document again
+    override func updateChangeCount(withToken changeToken: Any, for saveOperation: SaveOperationType) {
+        super.updateChangeCount(withToken: changeToken, for: saveOperation)
+        markupCached?.textSessionSaved()
+    }
+
     /// packages in the CanvasStore are History's — their UUID names are how
     /// History finds them, so renaming or moving them is refused
     private var isStorePackage: Bool {

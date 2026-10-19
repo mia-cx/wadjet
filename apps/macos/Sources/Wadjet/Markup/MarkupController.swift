@@ -432,6 +432,10 @@ final class MarkupController {
         record(from: before)
         textEditStart = nil
     }
+    /// a save (explicit or autosave) consumed this session's dirty mark — the
+    /// next unrecorded keystroke must mark again, and commit balances only a
+    /// mark made since
+    func textSessionSaved() { textDirtyMarked = false }
     func setEditing(_ id: Annotation.ID?) { editing = id }
     func setSelection(_ id: Annotation.ID?) { selection = id }
     /// the panel whose screen holds `p`
