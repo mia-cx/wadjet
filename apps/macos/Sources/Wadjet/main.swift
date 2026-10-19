@@ -3061,8 +3061,8 @@ struct ToolbarView: View {
     let sepMargin: CGFloat = 6
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
-    let lensOverhang: CGFloat = 7
-    let lensIconBoost: CGFloat = 0.15 // icons under the lens grow up to 15%
+    let lensOverhang: CGFloat = 4
+    let lensIconBoost: CGFloat = 0.15 // every icon grows while the lens is active
     var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
     var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
     var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
@@ -3314,6 +3314,7 @@ struct ToolbarView: View {
                     }
                 }
         }
+        .scaleEffect(iconScale)
         .frame(width: toolD, height: selH)
     }
 
@@ -3338,16 +3339,11 @@ struct ToolbarView: View {
     var lensCentreInRow: CGPoint {
         CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
     }
-    /// 1 + lensIconBoost at the lens centre, easing to 1 one cell pitch away
-    /// (blobX and cellCentres are both in row space)
-    func lensIconScale(_ t: Tool) -> CGFloat {
-        guard let c = cellCentres[t] else { return 1 }
-        let f = max(0, 1 - abs(c.x - blobX) / (toolD + cellGap))
-        return 1 + lensIconBoost * f * f * (3 - 2 * f) // smoothstep
-    }
+    /// every icon scales a little while the lens is up — the iconCell copy
+    /// carries it, so the lens strips and the real row stay pixel-aligned
+    var iconScale: CGFloat { lensActive ? 1 + lensIconBoost : 1 }
     func iconStrip(_ color: Color) -> some View {
-        rowContent { t, collapsed in iconCell(t, collapsed: collapsed).scaleEffect(lensIconScale(t)) }
-            .foregroundStyle(color)
+        rowContent(iconCell).foregroundStyle(color)
     }
     /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
@@ -3467,6 +3463,7 @@ struct ToolbarView: View {
                 }
         }
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
+        .scaleEffect(iconScale)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space
