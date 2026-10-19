@@ -50,9 +50,9 @@ public enum SmartRedact {
     /// one (rect containment, so identical or edge-sharing boxes dedupe) or
     /// by an existing visible Black out Censor in `existing` that no later
     /// visible Annotation overlaps — a Blur or Pixelate above it repaints
-    /// original pixels — is skipped. Existing coverage tests the four corners
-    /// of a 0.5 pt shrink inside the Censor's transformed path, so an equal
-    /// rect counts.
+    /// original pixels, and a Magnify paints source pixels into its frame —
+    /// is skipped. Existing coverage tests the four corners of a 0.5 pt
+    /// shrink inside the Censor's transformed path, so an equal rect counts.
     public static func censors(covering boxes: [CGRect], style: AnnotationStyle,
                                existing: LayerStack) -> [Annotation] {
         let layers = existing.annotations
@@ -70,7 +70,9 @@ public enum SmartRedact {
                     let path = PathGeometry.path(for: a)
                     guard corners.allSatisfy({ path.contains($0) }) else { return false }
                     return !layers[(i + 1)...].contains {
-                        !$0.hidden && PathGeometry.path(for: $0).boundingBoxOfPath.intersects(padded)
+                        !$0.hidden && PathGeometry.path(for: $0).boundingBoxOfPath
+                            .union(PathGeometry.coverage(for: $0).boundingBoxOfPath)
+                            .intersects(padded)
                     }
                 }
             guard !covered else { continue }

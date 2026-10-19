@@ -87,6 +87,26 @@ struct SmartRedactTests {
         ])
     }
 
+    // Proves a later Magnify repainting the spot invalidates an older Black
+    // out — its path is only the source outline; the pixels land in `frame`.
+    @Test func censorsMagnifyInvalidatesCoverage() {
+        let style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 2)
+        var existing = LayerStack()
+        existing.add(Annotation(kind: .censor(rect: CGRect(x: 400, y: 400, width: 200, height: 80),
+                                              method: .blackOut), style: style))
+        existing.add(Annotation(kind: .magnify(Magnifier(
+            source: CGRect(x: 0, y: 0, width: 100, height: 40),
+            frame: CGRect(x: 400, y: 400, width: 200, height: 80), zoom: 2,
+            options: MagnifierOptions(shape: .rectangle, leader: false, glass: false))), style: style))
+        let pad = SmartRedact.padding
+        let placed = SmartRedact.censors(covering: [CGRect(x: 420, y: 420, width: 100, height: 20)],
+                                         style: style, existing: existing)
+        #expect(placed.map(\.kind) == [
+            .censor(rect: CGRect(x: 420 - pad, y: 420 - pad, width: 100 + 2 * pad, height: 20 + 2 * pad),
+                    method: .blackOut),
+        ])
+    }
+
     /// one box per display's frame, padded by `SmartRedact.padding` covering
     /// the text's ink
     private func expectBoxesPerDisplay(in sources: [SmartRedactSource],
