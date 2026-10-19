@@ -102,7 +102,12 @@ final class MarkupController {
         PeerThrough.shared.sync()
         let s = AppState.shared
         let want: Tool? = s.toolbarOpen && s.tool?.kind == .markup && s.tool?.isAction != true ? s.tool : nil
-        guard want != armed else { return }
+        guard want != armed else {
+            // same Tool but the phase may have changed: sampling Censors swap
+            // between the Freeze Frame and the live stream on every render
+            render()
+            return
+        }
         let was = armed
         armed = want
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
@@ -266,7 +271,8 @@ final class MarkupController {
             a = Annotation(kind: .shape(MarkupShapes.shape(for: MarkupShapes.variant), rect: CGRect(origin: p, size: .zero)),
                            style: MarkupStyles.shared.style(for: .shapes))
         case .censor:
-            a = Annotation(kind: .censor(rect: CGRect(origin: p, size: .zero), method: .blackOut),
+            a = Annotation(kind: .censor(rect: CGRect(origin: p, size: .zero),
+                                         method: MarkupStyles.shared.censorMethod),
                            style: MarkupStyles.shared.style(for: .censor))
         default:
             return

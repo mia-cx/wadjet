@@ -14,7 +14,7 @@ final class MarkupStyles {
     /// across menu opens
     var wheel: ColourTarget?
 
-    private var config: ConfigStore<WadjetConfig> { AppState.shared.config }
+    var config: ConfigStore<WadjetConfig> { AppState.shared.config }
 
     /// the selected Annotation's style if there is one, else the Tool's
     /// configured default — the #107 selection seam

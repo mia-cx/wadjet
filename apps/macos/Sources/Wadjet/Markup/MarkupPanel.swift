@@ -20,6 +20,11 @@ final class MarkupPanel: NSPanel {
         contentView = view
     }
     override var canBecomeKey: Bool { true }
+    /// closing (hotplug, Markup emptied) stops this display's live sampler
+    override func close() {
+        view.censors.stop()
+        super.close()
+    }
 }
 
 /// draws the Annotations that fall on its display; Annotation points are
@@ -34,8 +39,11 @@ final class MarkupView: NSView {
     /// the display's backing scale; mixed-scale setups get crisp strokes on
     /// every panel because each one follows its own window
     var scale: CGFloat
+    /// Blur/Pixelate Censors on this panel's display
+    let censors: CensorLayers
     init(frame f: NSRect, screen: NSScreen) {
         scale = screen.backingScaleFactor
+        censors = CensorLayers(screen: screen)
         super.init(frame: f)
         wantsLayer = true
         // the bounds origin makes sublayer coordinates global screen points —
@@ -102,6 +110,7 @@ final class MarkupView: NSView {
         }
         canvas.sublayers = annotations.compactMap { shapeLayers[$0.id] }
             + (selection == nil ? [] : [frameLayer, handlesLayer])
+        censors.sync(annotations, layers: shapeLayers)
         CATransaction.commit()
     }
 

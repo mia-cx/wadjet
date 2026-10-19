@@ -42,10 +42,14 @@ extension WadjetConfig {
         public var variant: ShapeVariant?
         /// a Shapes variant's option, at `markup.tools.<variant>.shape`
         public var shape: ShapeKind?
-        public init(style: AnnotationStyle? = nil, variant: ShapeVariant? = nil, shape: ShapeKind? = nil) {
+        /// Censor's default method for new Annotations; nil = .blackOut
+        public var censorMethod: CensorMethod?
+        public init(style: AnnotationStyle? = nil, variant: ShapeVariant? = nil,
+                    shape: ShapeKind? = nil, censorMethod: CensorMethod? = nil) {
             self.style = style
             self.variant = variant
             self.shape = shape
+            self.censorMethod = censorMethod
         }
     }
 }
