@@ -31,14 +31,28 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
 /// What an Annotation is; later slices add cases (shapes, pen, text, images…)
 public enum AnnotationKind: Codable, Equatable, Sendable {
     case line(start: CGPoint, end: CGPoint)
+    /// the filled rect in untransformed geometry space; Black out draws opaque
+    /// black whatever the style
+    case censor(rect: CGRect, method: CensorMethod)
 
-    enum CodingKeys: String, CodingKey { case line }
+    enum CodingKeys: String, CodingKey { case line, censor }
     enum LineKeys: String, CodingKey { case start, end }
+    enum CensorKeys: String, CodingKey { case rect, method }
     public init(from decoder: Decoder) throws {
-        let l = try decoder.container(keyedBy: CodingKeys.self)
-            .nestedContainer(keyedBy: LineKeys.self, forKey: .line)
-        self = .line(start: try l.decodePoint(forKey: .start),
-                     end: try l.decodePoint(forKey: .end))
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        if c.contains(.line) {
+            let l = try c.nestedContainer(keyedBy: LineKeys.self, forKey: .line)
+            self = .line(start: try l.decodePoint(forKey: .start),
+                         end: try l.decodePoint(forKey: .end))
+        } else if c.contains(.censor) {
+            let n = try c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
+            self = .censor(rect: try n.decodeRect(forKey: .rect),
+                           method: try n.decode(CensorMethod.self, forKey: .method))
+        } else {
+            throw DecodingError.dataCorrupted(
+                DecodingError.Context(codingPath: decoder.codingPath,
+                                      debugDescription: "an AnnotationKind is a line or a censor"))
+        }
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
@@ -47,12 +61,21 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             var l = c.nestedContainer(keyedBy: LineKeys.self, forKey: .line)
             try l.encodePoint(start, forKey: .start)
             try l.encodePoint(end, forKey: .end)
+        case let .censor(rect, method):
+            var n = c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
+            try n.encodeRect(rect, forKey: .rect)
+            try n.encode(method, forKey: .method)
         }
     }
 }
 
-/// a CGPoint on the wire as `[x, y]` — later Annotation kinds reuse these for
-/// their points
+/// How a Censor obscures its rect; Blur and Pixelate join in #124.
+public enum CensorMethod: String, Codable, Sendable {
+    case blackOut
+}
+
+/// a CGPoint on the wire as `[x, y]` and a CGRect as `[x, y, width, height]` —
+/// later Annotation kinds reuse these for their geometry
 private extension KeyedDecodingContainer {
     func decodePoint(forKey key: Key) throws -> CGPoint {
         let v = try decode([CGFloat].self, forKey: key)
@@ -62,10 +85,21 @@ private extension KeyedDecodingContainer {
         }
         return CGPoint(x: v[0], y: v[1])
     }
+    func decodeRect(forKey key: Key) throws -> CGRect {
+        let v = try decode([CGFloat].self, forKey: key)
+        guard v.count == 4 else {
+            throw DecodingError.dataCorruptedError(forKey: key, in: self,
+                debugDescription: "a rect is exactly [x, y, width, height], got \(v.count) elements")
+        }
+        return CGRect(x: v[0], y: v[1], width: v[2], height: v[3])
+    }
 }
 private extension KeyedEncodingContainer {
     mutating func encodePoint(_ p: CGPoint, forKey key: Key) throws {
         try encode([p.x, p.y], forKey: key)
+    }
+    mutating func encodeRect(_ r: CGRect, forKey key: Key) throws {
+        try encode([r.origin.x, r.origin.y, r.width, r.height], forKey: key)
     }
 }
 

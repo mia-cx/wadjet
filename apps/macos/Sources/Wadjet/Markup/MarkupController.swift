@@ -8,8 +8,8 @@ import WadjetKit
 @MainActor @Observable
 final class MarkupController {
     static let shared = MarkupController()
-    /// a press shorter than this draws nothing
-    static let minLineLength: CGFloat = 1
+    /// a press that drags less than this draws nothing
+    static let minDraftSize: CGFloat = 1
     static let handleSize: CGFloat = 7      // grip diameter, on-screen points
     static let handleHitRadius: CGFloat = 6
     static let rotateOffset: CGFloat = 20   // rotate grip's distance above the frame
@@ -21,12 +21,12 @@ final class MarkupController {
     /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
     @ObservationIgnored private var gesture: Gesture?
     enum Gesture {
-        case drawing(Annotation)
+        case drawing(Annotation, from: CGPoint)
         case moving(Annotation, from: CGPoint)
         case handle(SelectionHandle, Annotation, from: CGPoint)
     }
     /// the in-progress stroke, for syncPanels/render
-    var draft: Annotation? { if case let .drawing(a) = gesture { a } else { nil } }
+    var draft: Annotation? { if case let .drawing(a, _) = gesture { a } else { nil } }
     private(set) var selection: Annotation.ID? {
         didSet {
             if selection == nil, AppState.shared.openMenu?.kind == .markup {
@@ -205,16 +205,32 @@ final class MarkupController {
             }
             return
         }
-        guard armed == .draw else { return }
+        let a: Annotation
+        switch armed {
+        case .draw:
+            a = Annotation(kind: .line(start: p, end: p), style: MarkupStyles.shared.style(for: .draw))
+        case .censor:
+            a = Annotation(kind: .censor(rect: CGRect(origin: p, size: .zero), method: .blackOut),
+                           style: MarkupStyles.shared.style(for: .censor))
+        default:
+            return
+        }
         selection = nil
-        gesture = .drawing(Annotation(kind: .line(start: p, end: p), style: MarkupStyles.shared.style(for: .draw)))
+        gesture = .drawing(a, from: p)
         render()
     }
     func drag(to p: CGPoint) {
         switch gesture {
-        case let .drawing(d):
-            guard case let .line(start, _) = d.kind else { return }
-            gesture = .drawing(Annotation(id: d.id, kind: .line(start: start, end: p), style: d.style))
+        case let .drawing(d, from):
+            var a = d
+            switch d.kind {
+            case .line:
+                a.kind = .line(start: from, end: p)
+            case let .censor(_, method):
+                a.kind = .censor(rect: CGRect(x: from.x, y: from.y, width: p.x - from.x,
+                                              height: p.y - from.y).standardized, method: method)
+            }
+            gesture = .drawing(a, from: from)
         case let .moving(start, from):
             stack.replace(start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y)))
         case let .handle(h, start, from):
@@ -225,9 +241,14 @@ final class MarkupController {
         render()
     }
     func end() {
-        if case let .drawing(d) = gesture, case let .line(start, end) = d.kind,
-           hypot(end.x - start.x, end.y - start.y) >= Self.minLineLength {
-            stack.add(d)
+        if case let .drawing(d, _) = gesture {
+            let drawn: Bool = switch d.kind {
+            case let .line(start, end):
+                hypot(end.x - start.x, end.y - start.y) >= Self.minDraftSize
+            case let .censor(rect, _):
+                rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
+            }
+            if drawn { stack.add(d) }
         }
         gesture = nil
         render()

@@ -32,6 +32,24 @@ struct PathGeometryTests {
         #expect(PathGeometry.hitTest(a, at: point) == expected)
     }
 
+    // Proves a censor rect hit-tests as a filled shape: inside counts, and
+    // tolerance reaches past its edge; rotated pi/2 about the centre (50,25),
+    // (0,0,100,50) displays x 25…75, y -25…75
+    @Test(arguments: [
+        (CGPoint(x: 50, y: 25), 0.0, 0.0, true),    // centre: filled area hits
+        (CGPoint(x: 101, y: 25), 0.0, 0.0, false),  // just past the edge
+        (CGPoint(x: 101, y: 25), 2.0, 0.0, true),   // tolerance reaches outside
+        (CGPoint(x: 50, y: 70), 0.0, .pi / 2, true),  // inside once rotated
+        (CGPoint(x: 90, y: 25), 0.0, .pi / 2, false), // outside the rotated span
+    ])
+    func censorHitTest(point: CGPoint, tolerance: Double, rotation: Double, expected: Bool) {
+        let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 50),
+                                         method: .blackOut),
+                           style: AnnotationStyle(colour: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1), width: 4),
+                           transform: AnnotationTransform(rotation: rotation))
+        #expect(PathGeometry.hitTest(a, at: point, tolerance: tolerance) == expected)
+    }
+
     // flipped horizontally about the centre, a (0,0)->(100,50) line displays (0,50)->(100,0)
     @Test(arguments: [
         (CGPoint(x: 10, y: 45), true),
