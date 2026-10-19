@@ -3,7 +3,7 @@
 using namespace metal;
 
 // The selection lens, iOS-tab-bar style. Inside the capsule the content is
-// magnified (kCentre < 1); only a thin band at the rim compresses hard
+// 1:1 (kCentre 1); only a thin band at the rim compresses hard
 // (k climbs past 1, pulling in what lies beyond the lens, so the bar's edges
 // fold inside it), with per-channel dispersion in that band and a faint
 // pointer-lit hairline. Samples are clamped to the source. `px` is one
@@ -13,7 +13,7 @@ using namespace metal;
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
 // keep the whole sampled half4 and overwrite only r and b.
-#define kCentre 0.80   // 1 / 0.8 = 1.25× magnification in the body
+#define kCentre 1.0    // body is 1:1 — the lens no longer magnifies
 #define kRim 2.1       // how far the rim reaches outward
 #define band 9.0       // rim band width in points
 #define disp 0.07      // dispersion at the very edge
