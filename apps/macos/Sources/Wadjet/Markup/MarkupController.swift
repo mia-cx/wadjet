@@ -310,9 +310,11 @@ final class MarkupController {
         let format = MarkupCounter.format
         let value = option ? 1 : counterNext ?? stack.nextCounterValue(format)
         counterNext = nil
-        edit { $0.add(Annotation(kind: .counter(center: p, radius: MarkupCounter.size / 2,
-                                                value: value, format: format),
-                                 style: MarkupStyles.shared.style(for: .counter))) }
+        // the click's own gesture snapshot (begin → end) makes this one undo step
+        stack.add(Annotation(kind: .counter(center: p, radius: MarkupCounter.size / 2,
+                                          value: value, format: format),
+                             style: MarkupStyles.shared.style(for: .counter)))
+        render()
         AppLog.line("markup: placed counter \(format.label(value))")
     }
     func drag(to p: CGPoint) {
