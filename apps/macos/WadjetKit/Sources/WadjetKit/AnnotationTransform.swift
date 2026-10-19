@@ -42,6 +42,14 @@ extension AnnotationKind {
             return .shape(kind, rect: rect.mapCorners(f))
         }
     }
+    /// an upright box that mapPoints re-standardizes, so a negative resize
+    /// scale has to become a flip instead
+    var isBox: Bool {
+        switch self {
+        case .line: false
+        case .censor, .shape: true
+        }
+    }
     /// bounding box of `points` — may have zero width or height
     public var bounds: CGRect {
         let xs = points.map(\.x), ys = points.map(\.y)
@@ -83,9 +91,20 @@ extension Annotation {
             var new = self
             new.kind = kind.mapPoints { CGPoint(x: anchor.x + ($0.x - anchor.x) * sx,
                                                 y: anchor.y + ($0.y - anchor.y) * sy) }
+            // a box kind re-standardizes inside mapPoints, so a negative scale
+            // can't mirror it — carry the mirror as a geometry-space flip
+            // (applied before the rotation, unlike flipped(horizontally:)) and
+            // pin the content that sat on the anchor: after the mirror it
+            // lives at the anchor reflected about the NEW bounds centre
+            var pin = anchor
+            if kind.isBox {
+                let c = CGPoint(x: new.kind.bounds.midX, y: new.kind.bounds.midY)
+                if sx < 0 { new.transform.flipHorizontal.toggle(); pin.x = 2 * c.x - pin.x }
+                if sy < 0 { new.transform.flipVertical.toggle(); pin.y = 2 * c.y - pin.y }
+            }
             // the new bounds centre moved, so the transform's pivot did too — keep
-            // the anchor where it was on screen
-            let was = anchor.applying(m), now = anchor.applying(new.affineTransform)
+            // the pin where the anchor was on screen
+            let was = anchor.applying(m), now = pin.applying(new.affineTransform)
             return new.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y))
         case .rotate:
             let c = CGPoint(x: kind.bounds.midX, y: kind.bounds.midY)

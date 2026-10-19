@@ -64,4 +64,22 @@ struct ShapesTests {
         let r = a.dragging(.resize(x: 1, y: 1), from: CGPoint(x: 100, y: 100), to: CGPoint(x: 200, y: 50))
         #expect(r.kind == .shape(.ellipse, rect: CGRect(x: 0, y: 0, width: 200, height: 50)))
     }
+
+    // Proves dragging a grip past its anchor mirrors the shape — the rect
+    // re-standardizes and the mirror lands as a flip on the transform.
+    @Test func resizePastAnchorMirrors() {
+        let style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        let a = Annotation(kind: .shape(.polygon(sides: 3), rect: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                           style: style)
+        let r = a.dragging(.resize(x: 0, y: 1), from: CGPoint(x: 50, y: 100), to: CGPoint(x: 50, y: -100))
+        #expect(r.kind == .shape(.polygon(sides: 3), rect: CGRect(x: 0, y: -100, width: 100, height: 100)))
+        let p = PathGeometry.path(for: r)
+        #expect(p.contains(CGPoint(x: 50, y: -90)))  // the tip followed the grip down
+        #expect(!p.contains(CGPoint(x: 50, y: -10))) // the base stayed with the anchor
+        // an existing flip survives: this mirror adds the other axis
+        let flipped = Annotation(kind: .shape(.polygon(sides: 3), rect: CGRect(x: 0, y: 0, width: 100, height: 100)),
+                                 style: style, transform: AnnotationTransform(flipHorizontal: true))
+        let r2 = flipped.dragging(.resize(x: 0, y: 1), from: CGPoint(x: 50, y: 100), to: CGPoint(x: 50, y: -100))
+        #expect(r2.transform.flipHorizontal && r2.transform.flipVertical)
+    }
 }

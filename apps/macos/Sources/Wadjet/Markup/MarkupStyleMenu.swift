@@ -7,16 +7,28 @@ extension OverlayController {
     /// that strip as outside the menu body
     static let menuHeadroom: CGFloat = 40
 
+    /// the menu panel's height for `t` with its body capped at `maxBody`
+    /// points; sets AppState.menuScrollHeight when the content is taller, so
+    /// the body scrolls instead of running off the display
+    func cappedMenuHeight(_ t: Tool, maxBody: CGFloat) -> CGFloat {
+        AppState.shared.menuScrollHeight = nil
+        let natural = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
+            .padding(.top, Self.menuHeadroom)
+            .frame(maxHeight: .infinity, alignment: .top)).fittingSize.height
+        let body = natural - Self.menuHeadroom
+        AppState.shared.menuScrollHeight = body > maxBody ? maxBody : nil
+        return min(body, maxBody) + Self.menuHeadroom
+    }
+
     /// resizes the open menu's panel to its content, keeping its top edge —
     /// for a menu whose content grows (the colour wheel)
     func fitMenu() {
         guard let t = AppState.shared.openMenu, let p = menuPanel else { return }
-        let size = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
-            .padding(.top, Self.menuHeadroom)
-            .frame(maxHeight: .infinity, alignment: .top)).fittingSize
+        let maxBody = (p.frame.maxY - Self.menuHeadroom) - ((p.screen ?? NSScreen.main!).frame.minY + 8)
+        let h = cappedMenuHeight(t, maxBody: maxBody)
         var f = p.frame
-        f.origin.y = f.maxY - size.height // keep the top edge: the menu grows downward
-        f.size.height = size.height
+        f.origin.y = f.maxY - h // keep the top edge: the menu grows downward
+        f.size.height = h
         p.setFrame(f, display: true)
     }
 }
