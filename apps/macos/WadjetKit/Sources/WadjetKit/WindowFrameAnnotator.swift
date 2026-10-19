@@ -32,7 +32,10 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
 
     /// draws `annotations` into a 32BGRA pixel buffer in place; no-op for an empty list.
     /// `source` supplies the clean pixels Blur and Pixelate sample — never the buffer being drawn on.
-    public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer, source: CVPixelBuffer) {
+    /// `images`/`canvasPixels` feed image-kind Annotations: pre-flattened link
+    /// pixels, since a live flatten per frame would cost a render every time.
+    public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer, source: CVPixelBuffer,
+                     images: [UUID: CGImage] = [:], canvasPixels: [URL: CanvasPixels] = [:]) {
         guard !annotations.isEmpty else { return }
         let w = CVPixelBufferGetWidth(pixelBuffer), h = CVPixelBufferGetHeight(pixelBuffer)
         // the frame's content under the clip as a CensorSource, only when an
@@ -62,6 +65,8 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
         else { return }
         context.clip(to: clip)
         context.concatenate(transform)
-        for annotation in annotations { context.draw(annotation, sources: sources) }
+        for annotation in annotations {
+            context.draw(annotation, sources: sources, images: images, canvasPixels: canvasPixels)
+        }
     }
 }

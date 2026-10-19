@@ -48,21 +48,23 @@ import WadjetKit
     }
 
     /// a grip drag through the targets; the WadjetKit function keeps the
-    /// press offset and snaps only the axes the grip can move
-    mutating func dragging(_ a: Annotation, _ h: SelectionHandle, from: CGPoint, to: CGPoint) -> Annotation {
+    /// press offset and snaps only the axes the grip can move. `stretch`
+    /// (⇧) frees an image kind from its aspect ratio
+    mutating func dragging(_ a: Annotation, _ h: SelectionHandle, from: CGPoint, to: CGPoint,
+                           stretch: Bool = false) -> Annotation {
         let grip = a.handles(minExtent: MarkupController.handleMinExtent, rotateOffset: MarkupController.rotateOffset)
             .filter { $0.handle == h }
             .min { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) }?.at
         let points = grip.map { [CGPoint(x: $0.x + to.x - from.x, y: $0.y + to.y - from.y)] } ?? []
         var rect: CGRect?
         if case .resize = h {
-            let proposed = a.dragging(h, from: from, to: to,
+            let proposed = a.dragging(h, from: from, to: to, stretch: stretch,
                                       minExtent: MarkupController.handleMinExtent,
                                       rotateOffset: MarkupController.rotateOffset,
                                       targets: [], range: range, skip: true).annotation
             rect = proposed.pixelSnapBounds
         }
-        let r = a.dragging(h, from: from, to: to,
+        let r = a.dragging(h, from: from, to: to, stretch: stretch,
                            minExtent: MarkupController.handleMinExtent,
                            rotateOffset: MarkupController.rotateOffset,
                            targets: targets + pixelTargets(rect: rect, points: points), range: range,

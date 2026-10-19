@@ -70,10 +70,19 @@ public struct CanvasDocument {
     public var cornerRadius: CGFloat
     public var layerStack: LayerStack
     public var displayImages: [UInt32: CGImage]
+    /// the assets `.image` Annotations name plus each `.canvas` Annotation's
+    /// persisted snapshot of its linked Canvas — stored under `images/`, keyed
+    /// by the asset id or the Annotation's own id
+    public var images: [UUID: CGImage]
     public var windowLayers: [CanvasWindowLayer]
     /// Keys are package filenames such as `detail.wadjet`, stored beneath `embedded/`.
     public var embeddedCanvases: [String: CanvasDocument]
     public var linkedCanvases: [CanvasLink]
+    /// linked Canvases the caller already opened, keyed by link URL, so flatten
+    /// draws `.canvas` Annotations live; never persisted — a resolvable link's
+    /// content is snapshotted under `images/<annotation-id>` at write time
+    /// instead, so a reopened package still renders
+    public var linkedDocuments: [URL: CanvasDocument] = [:]
     // Travels with Editor saves so History retention never restarts after an edit.
     var storeMetadata: CanvasStoreMetadata?
 
@@ -82,6 +91,7 @@ public struct CanvasDocument {
 
     public init(layout: [CanvasDisplay], crop: CGRect, cornerRadius: CGFloat = 0,
                 layerStack: LayerStack = LayerStack(), displayImages: [UInt32: CGImage],
+                images: [UUID: CGImage] = [:],
                 windowLayers: [CanvasWindowLayer] = [], embeddedCanvases: [String: CanvasDocument] = [:],
                 linkedCanvases: [CanvasLink] = []) {
         self.layout = layout
@@ -89,6 +99,7 @@ public struct CanvasDocument {
         self.cornerRadius = cornerRadius
         self.layerStack = layerStack
         self.displayImages = displayImages
+        self.images = images
         self.windowLayers = windowLayers
         self.embeddedCanvases = embeddedCanvases
         self.linkedCanvases = linkedCanvases
@@ -124,6 +135,20 @@ public struct CanvasDocument {
                 id: window.id, app: window.app, title: window.title))
         }
         try validateWindowLayers()
+        // Packages written before assets existed have no images/ directory.
+        if let assets = fileWrapper.fileWrappers?["images"] {
+            guard assets.isDirectory else { throw CanvasDocumentError.invalidPackage("images") }
+            for (name, child) in assets.fileWrappers ?? [:] {
+                let ext = name.hasSuffix(".heic") ? 5 : name.hasSuffix(".png") ? 4 : 0
+                guard ext > 0, let asset = UUID(uuidString: String(name.dropLast(ext))),
+                      child.isRegularFile, let data = child.regularFileContents else {
+                    throw CanvasDocumentError.invalidPackage("images/\(name)")
+                }
+                let image = try CanvasImageCodec.decode(data)
+                originalImages["images/\(name)"] = (image, data)
+                images[asset] = image
+            }
+        }
         for path in manifest.embeddedCanvases {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
             guard parts.count == 2, parts[0] == "embedded", Self.validName(String(parts[1])),
@@ -161,6 +186,35 @@ public struct CanvasDocument {
             embedded[name] = try canvas.fileWrapper()
         }
         files["embedded"] = FileWrapper(directoryWithFileWrappers: embedded)
+        // .canvas Annotations persist a snapshot of their linked Canvas at the
+        // Annotation's own id, so a reopened package (no linkedDocuments) still
+        // renders; an unresolvable link keeps whatever images[annotation.id]
+        // the package carried — all merged here without mutating self
+        var assets = images
+        for a in layerStack.annotations {
+            guard case let .canvas(link, placement) = a.kind,
+                  var child = linkedDocuments[link.url] else { continue }
+            child.cornerRadius = 0 // the Annotation's own radius rounds it
+            let k = max(placement.frame.width / placement.crop.width,
+                        placement.frame.height / placement.crop.height)
+            assets[a.id] = try child.flatten(crop: placement.crop,
+                scale: k * (child.layout.map(\.scaleFactor).max() ?? 1))
+        }
+        var wrappers: [String: FileWrapper] = [:]
+        for (asset, image) in assets.sorted(by: { $0.key.uuidString < $1.key.uuidString }) {
+            let hdr = max(image.contentHeadroom, image.calculatedContentHeadroom) > 1
+            let name = "\(asset.uuidString).\(hdr ? "heic" : "png")"
+            let data: Data
+            if let original = originalImages["images/\(name)"], original.image === image {
+                data = original.data
+            } else {
+                data = hdr ? try CanvasImageCodec.heic(image) : try CanvasImageCodec.png(image)
+            }
+            let file = FileWrapper(regularFileWithContents: data)
+            file.preferredFilename = name
+            wrappers[name] = file
+        }
+        files["images"] = FileWrapper(directoryWithFileWrappers: wrappers)
         let manifest = Manifest(version: Self.version, layout: layout, crop: crop, cornerRadius: cornerRadius,
             windowLayers: written.map { WindowMetadata(frame: $0.frame, zOrder: $0.zOrder,
                 imageFileName: $0.imageFileName, isolatesBackground: $0.isolatesBackground ? true : nil,

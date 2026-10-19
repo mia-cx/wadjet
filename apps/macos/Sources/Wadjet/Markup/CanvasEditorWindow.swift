@@ -397,6 +397,18 @@ final class EditorCanvasView: NSView {
         super.keyDown(with: e)
     }
 
+    // MARK: paste — Edit ▸ Paste reaches the first responder
+
+    /// canvas coords of the pointer when it's over the canvas, else the
+    /// visible region's centre
+    private var pastePoint: CGPoint {
+        let p = markupView.canvasPoint(fromScreen: NSEvent.mouseLocation)
+        if region.contains(p) { return p }
+        let centre = convert(CGPoint(x: visibleRect.midX, y: visibleRect.midY), to: nil)
+        return markupView.canvasPoint(fromScreen: window!.convertPoint(toScreen: centre))
+    }
+    @objc func paste(_ sender: Any?) { doc.markup.paste(from: .general, at: pastePoint) }
+
     /// ⌘ turns the armed Tool into Select until release; ⇧/⌥ reshape a
     /// Shapes draft mid-drag — the screen's flags monitor does both there
     override func flagsChanged(with e: NSEvent) {
@@ -533,5 +545,12 @@ final class RecropOverlay: NSView {
         default: .top
         }
         NSCursor.frameResize(position: position, directions: .all).set()
+    }
+}
+
+extension EditorCanvasView: NSMenuItemValidation {
+    /// Edit ▸ Paste is enabled while the clipboard holds something Markup takes
+    func validateMenuItem(_ item: NSMenuItem) -> Bool {
+        item.action != #selector(paste(_:)) || MarkupPasteboard.canRead(.general)
     }
 }

@@ -1461,6 +1461,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if MarkupStyles.shared.cancelEyedropper() { AppLog.line("esc: cancelled eyedropper"); updateEscHotkey(); return }
         if MarkupController.shared.finishPen() { AppLog.line("esc: finished pen path"); return }
         if MarkupController.shared.commitEditing() { AppLog.line("esc: committed text"); return }
+        if MarkupController.shared.endRecrop() { AppLog.line("esc: ended recrop"); return }
         if MarkupController.shared.deselect() { AppLog.line("esc: deselected"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
@@ -4045,12 +4046,17 @@ struct ToolMenuView: View {
             case .markup where tool == .moreMarkup:
                 overflowRows()
             case .markup:
-                if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
-                if tool == .counter { CounterControls(ctrl: ctrl) }
-                if tool == .magnify { MagnifyShapeControls() }
-                if tool == .censor { CensorControls(ctrl: ctrl); smartRedactRows() } else {
-                    if tool == .draw { tileRow(drawTiles) }
-                    MarkupStyleControls(tool: tool, ctrl: ctrl)
+                if MarkupController.active.selected?.placement != nil {
+                    // an image kind's menu: opacity, radius, border
+                    ImageStyleControls(tool: tool, ctrl: ctrl)
+                } else {
+                    if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
+                    if tool == .counter { CounterControls(ctrl: ctrl) }
+                    if tool == .magnify { MagnifyShapeControls() }
+                    if tool == .censor { CensorControls(ctrl: ctrl); smartRedactRows() } else {
+                        if tool == .draw { tileRow(drawTiles) }
+                        MarkupStyleControls(tool: tool, ctrl: ctrl)
+                    }
                 }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
                 if tool == .magnify { magnifyRows() }

@@ -15,7 +15,9 @@ extension CanvasEditorDocument {
     }
 
     @IBAction func copy(_ sender: Any?) {
-        do { try CanvasClipboard.copy(current) }
+        // link the package only while it matches what's copied — unsaved
+        // edits paste as a flat image rather than a link to an older revision
+        do { try CanvasClipboard.copy(current, link: isDocumentEdited ? nil : fileURL) }
         catch { presentError(error) }
     }
 

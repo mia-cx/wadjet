@@ -67,6 +67,34 @@ struct ScreenshotCanvasTests {
         #expect(canvas.layerStack.annotations == [kept])
     }
 
+    // Proves a capture keeps only the assets and links its kept Annotations
+    // name, deduplicating links so retention holds each target once.
+    @Test func capturesReferencedImagesAndCanvasLinks() throws {
+        let url = URL(fileURLWithPath: "/tmp/linked.wadjet")
+        let link = CanvasLink(url: url)
+        let style = AnnotationStyle(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2)
+        let placement = ImagePlacement(frame: CGRect(x: 2, y: 2, width: 4, height: 4),
+                                       crop: CGRect(x: 0, y: 0, width: 8, height: 8))
+        let kept = UUID(), dropped = UUID()
+        let image = try solidImage(value: 1)
+        let child = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 8, height: 8),
+                                   displayImages: [:])
+        let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(),
+            crop: CGRect(x: 1, y: 1, width: 8, height: 6),
+            annotations: LayerStack([
+                Annotation(kind: .canvas(link, placement), style: style),
+                Annotation(kind: .canvas(link, placement), style: style),
+                // off the crop but on a display: kept, and keeps its asset
+                Annotation(kind: .image(asset: kept, ImagePlacement(
+                    frame: CGRect(x: -18, y: 12, width: 4, height: 4),
+                    crop: CGRect(x: 0, y: 0, width: 8, height: 8))), style: style),
+            ]),
+            images: [kept: image, dropped: image], canvases: [url: child])
+        #expect(canvas.linkedCanvases == [link])
+        #expect(canvas.linkedDocuments[url] != nil)
+        #expect(canvas.images.count == 1 && canvas.images[kept] != nil)
+    }
+
     // Proves exported pixels use panel geometry (rotation and flips) and multiply style opacity by colour alpha.
     @Test func transformedOpacityMatchesFixture() throws {
         struct Fixture: Decodable { var rotation: Double; var flip: Bool; var samples: [[Float]] }

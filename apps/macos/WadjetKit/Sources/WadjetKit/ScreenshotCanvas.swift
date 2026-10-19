@@ -30,7 +30,8 @@ extension CanvasDocument {
     /// Keeps every captured display for recropping. Region/screen captures retain
     /// off-crop Annotations; a window capture retains fills/strokes touching its frame.
     public init(capturedDisplays: [CapturedCanvasDisplay], crop: CGRect, cornerRadius: CGFloat = 0,
-                annotations: LayerStack, windowCapture: Bool = false) {
+                annotations: LayerStack, windowCapture: Bool = false,
+                images: [UUID: CGImage] = [:], canvases: [URL: CanvasDocument] = [:]) {
         let frames = windowCapture ? [crop] : capturedDisplays.map(\.display.frame)
         let kept = annotations.annotations.filter { annotation in
             let coverage = PathGeometry.coverage(for: annotation)
@@ -38,9 +39,22 @@ extension CanvasDocument {
                 coverage.intersects(CGPath(rect: frame, transform: nil), using: .winding)
             }
         }
+        // assets and links only travel with the Annotations that name them;
+        // linkedCanvases keeps History retention holding the targets
+        var assets: [UUID: CGImage] = [:], links: [CanvasLink] = []
+        for annotation in kept {
+            switch annotation.kind {
+            case let .image(asset, _): assets[asset] = images[asset]
+            case let .canvas(link, _):
+                if !links.contains(where: { $0.url == link.url }) { links.append(link) }
+            default: break
+            }
+        }
         self.init(layout: capturedDisplays.map(\.display), crop: crop, cornerRadius: cornerRadius,
             layerStack: LayerStack(kept),
-            displayImages: Dictionary(uniqueKeysWithValues: capturedDisplays.map { ($0.display.id, $0.image) }))
+            displayImages: Dictionary(uniqueKeysWithValues: capturedDisplays.map { ($0.display.id, $0.image) }),
+            images: assets, linkedCanvases: links)
+        linkedDocuments = canvases.filter { url, _ in links.contains { $0.url == url } }
     }
 
     /// Keeps each window as its own layer. `windows` is front first (window-list

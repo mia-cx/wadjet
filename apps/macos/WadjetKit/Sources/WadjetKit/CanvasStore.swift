@@ -129,6 +129,15 @@ public struct CanvasStore: Sendable {
             let output = try sdr ? CanvasImageCodec.sdr(image) : image
             replace(name, with: try CanvasImageCodec.heic(output, quality: quality), in: wrapper)
         }
+        // PNG assets are already SDR; only the HEIC ones degrade
+        if let assets = wrapper.fileWrappers?["images"] {
+            for (name, _) in assets.fileWrappers ?? [:] where name.hasSuffix(".heic") {
+                guard let asset = UUID(uuidString: String(name.dropLast(5))),
+                      let image = canvas.images[asset] else { continue }
+                let output = try sdr ? CanvasImageCodec.sdr(image) : image
+                replace(name, with: try CanvasImageCodec.heic(output, quality: quality), in: assets)
+            }
+        }
         for (name, child) in canvas.embeddedCanvases {
             try degrade(child, in: wrapper.fileWrappers!["embedded"]!.fileWrappers![name]!, sdr: sdr, quality: quality)
         }

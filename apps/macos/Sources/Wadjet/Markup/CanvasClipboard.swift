@@ -6,21 +6,25 @@ import WadjetKit
 /// editable package to wadjet. Build it before replacing the user's clipboard.
 @MainActor
 enum CanvasClipboard {
+    /// the History package URL the copy belongs to, so a wadjet paste can link it
+    nonisolated static let linkType = NSPasteboard.PasteboardType("cx.mia.wadjet.canvas-link")
     static func copyImage(_ file: URL, canvas: URL?) throws {
         let data = try Data(contentsOf: file)
         try write(image: data, heic: file.pathExtension.lowercased() == "heic",
             canvas: canvas.map { try CanvasDocument.read(from: $0).serializedPackage() },
-            label: "<image+canvas \(file.lastPathComponent)>")
+            link: canvas, label: "<image+canvas \(file.lastPathComponent)>")
     }
 
-    /// the Editor's Copy: the flattened image plus the live package
-    static func copy(_ canvas: CanvasDocument) throws {
+    /// the Editor's Copy: the flattened image plus the live package; `link` is
+    /// the document's file URL, so a wadjet paste can link that package
+    static func copy(_ canvas: CanvasDocument, link: URL? = nil) throws {
         let flat = try canvas.flatImage()
         try write(image: flat.data, heic: flat.type == .heic,
-            canvas: canvas.serializedPackage(), label: "<image+canvas editor>")
+            canvas: canvas.serializedPackage(), link: link, label: "<image+canvas editor>")
     }
 
-    private static func write(image data: Data, heic: Bool, canvas package: Data?, label: String) throws {
+    private static func write(image data: Data, heic: Bool, canvas package: Data?,
+                              link: URL? = nil, label: String) throws {
         let item = NSPasteboardItem()
         if heic {
             item.setData(data, forType: .init(UTType.heic.identifier))
@@ -32,6 +36,7 @@ enum CanvasClipboard {
         item.setData(png, forType: .png)
         if let package {
             item.setData(package, forType: .init(CanvasDocument.contentType.identifier))
+            if let link { item.setString(link.absoluteString, forType: linkType) }
         }
         let pasteboard = NSPasteboard.general
         pasteboard.clearContents()

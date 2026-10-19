@@ -9,6 +9,11 @@ extension CanvasDocument {
     /// window layers stacked beneath them. A `.window` Annotation draws the
     /// window layer it names — layers without an id form the backdrop beneath
     /// every Annotation.
+    /// Black out fills opaque black; Blur and Pixelate sample each display's
+    /// image beneath the Censor; a Magnify strokes its source outline and
+    /// composites its magnified viewport through MagnifyRenderer. `.image` draws
+    /// its asset through its crop, `.canvas` a `linkedDocuments` entry, else its
+    /// persisted snapshot.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
@@ -69,6 +74,11 @@ extension CanvasDocument {
                 context.restoreGState()
                 continue
             }
+            guard !annotation.hidden else { continue }
+            // a missing asset corrupts the package's own data, so it fails loudly
+            if case let .image(asset, _) = annotation.kind, images[asset] == nil {
+                throw CanvasDocumentError.invalidPackage("images/\(asset.uuidString)")
+            }
             var sources = displaySources
             if let box = annotation.sampledRect {
                 let below = layerStack.annotations[..<index].filter {
@@ -79,7 +89,8 @@ extension CanvasDocument {
                     sources = [b]
                 }
             }
-            context.draw(annotation, sources: sources, scale: scale, format: .RGBAh,
+            context.draw(annotation, sources: sources, images: images,
+                         linkedDocuments: linkedDocuments, scale: scale, format: .RGBAh,
                          colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)
         }
         context.endTransparencyLayer()
