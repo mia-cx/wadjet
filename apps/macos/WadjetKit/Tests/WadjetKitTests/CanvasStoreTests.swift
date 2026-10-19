@@ -184,6 +184,45 @@ struct CanvasStoreTests {
         #expect(throws: (any Error).self) { try store.sweep() }
         #expect(try store.url(for: target) != nil)
     }
+
+    // Proves Run Workflow's new entry is independent: its own ID and package,
+    // holding the Editor's changes while the source Canvas keeps none, with the
+    // flattened PNG on disk at crop × outputScale pixels.
+    @Test func runWorkflowFilesTheEditedCanvasAsItsOwnEntry() throws {
+        let root = temporaryCanvasDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = CanvasStore(directory: root.appendingPathComponent("Canvases"))
+        let files = CaptureFiles(directory: root.appendingPathComponent("Captures"))
+        let source = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 64, height: 64), scaleFactor: 2)],
+            crop: CGRect(x: 4, y: 4, width: 12, height: 10), displayImages: [1: try sdrImage(size: 128)])
+        let sourceID = UUID()
+        let sourcePackage = try store.add(source, for: sourceID, createdAt: Date())
+
+        var edited = try #require(try store.canvas(for: sourceID))
+        edited.layerStack = LayerStack([Annotation(
+            kind: .line(start: CGPoint(x: 4, y: 4), end: CGPoint(x: 16, y: 14)),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))])
+        let shot = try store.addScreenshot(edited, files: files, createdAt: Date())
+
+        #expect(shot.id != sourceID && shot.package != sourcePackage)
+        #expect(try store.canvas(for: shot.id)?.layerStack.annotations.count == 1)
+        #expect(try store.canvas(for: sourceID)?.layerStack.annotations.isEmpty == true)
+        #expect(shot.file.pathExtension == "png")
+        let image = try #require(CGImageSourceCreateWithURL(shot.file as CFURL, nil)
+            .flatMap { CGImageSourceCreateImageAtIndex($0, 0, nil) })
+        #expect(CGSize(width: image.width, height: image.height)
+            == edited.crop.size.applying(CGAffineTransform(scaleX: 2, y: 2)))
+    }
+}
+
+private func sdrImage(size: Int) throws -> CGImage {
+    let context = try #require(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
+        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+    return try #require(context.makeImage())
 }
 
 private func temporaryCanvasDirectory() -> URL {

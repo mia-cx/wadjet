@@ -16,6 +16,13 @@ extension AppDelegate {
         file.submenu!.addItem(mi("Save", #selector(NSDocument.save(_:)), "s"))
         file.submenu!.addItem(mi("Duplicate", #selector(NSDocument.duplicate(_:)), "S"))
         file.submenu!.addItem(mi("Revert to Saved", #selector(NSDocument.revertToSaved(_:))))
+        file.submenu!.addItem(.separator())
+        file.submenu!.addItem(mi("Export…", #selector(CanvasEditorDocument.exportImage(_:)), "E"))
+        file.submenu!.addItem(mi("Share…", #selector(CanvasEditorDocument.shareImage(_:))))
+        let workflows = NSMenuItem(title: "Run Workflow", action: nil, keyEquivalent: "")
+        workflows.submenu = NSMenu(title: "Run Workflow")
+        workflows.submenu!.delegate = EditorWorkflowMenu.shared
+        file.submenu!.addItem(workflows)
 
         let view = NSMenuItem()
         view.submenu = NSMenu(title: "View")
