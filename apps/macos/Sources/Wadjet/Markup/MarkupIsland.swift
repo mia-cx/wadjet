@@ -53,10 +53,3 @@ extension ToolbarView {
     var restingGroup: Tool.Kind { s.tool?.kind ?? (MarkupController.shared.stack.isEmpty ? .shot : .markup) }
 }
 
-extension ToolMenuView {
-    func clearAfterScreenshotRow() -> some View {
-        row("Clear After Screenshot", icon: "trash", on: s.config.value.markup.clearAfterScreenshot, isToggle: true) {
-            s.config.update { $0.markup.clearAfterScreenshot.toggle() }
-        }
-    }
-}

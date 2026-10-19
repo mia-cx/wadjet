@@ -56,6 +56,7 @@ final class MarkupController {
     /// the want from AppState: a Markup Tool armed while the toolbar is up —
     /// called from the phase/tool didSets, so it runs on every state change
     func syncArmed() {
+        PeerThrough.shared.sync()
         let s = AppState.shared
         let want: Tool? = s.toolbarOpen && s.tool?.kind == .markup && s.tool?.isAction != true ? s.tool : nil
         guard want != armed else { return }
@@ -257,5 +258,9 @@ final class MarkupController {
     func render() {
         let shown = stack.annotations + [draft].compactMap { $0 }
         for p in panels { p.view.show(shown, selection: selected) }
+        PeerThrough.shared.sync()
     }
+
+    /// the feathered peer-through hole under the pointer, per panel
+    func showPeer(at p: CGPoint?) { for panel in panels { panel.view.peer(at: p) } }
 }

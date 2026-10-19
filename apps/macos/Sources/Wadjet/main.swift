@@ -403,6 +403,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     rebuildMenu()
                 }
                 resolveBookmarks()
+                // the Peer Through toggle, from the menu or a config.json edit
+                PeerThrough.shared.sync()
             }
         }
         registerShortcuts()
@@ -4023,8 +4025,7 @@ struct ToolMenuView: View {
             case .markup:
                 if tool == .censor { tileRow(censorTiles) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
                 selectionRows()
-                divider()
-                clearAfterScreenshotRow()
+                if tool == .select { markupGroupRows() }
             default: EmptyView()
             }
         }
