@@ -54,6 +54,14 @@ public enum ShapeKind: Codable, Equatable, Sendable {
 /// the Shapes Tool's variants, named as config.json's `markup.tools` keys
 public enum ShapeVariant: String, Codable, CaseIterable, Sendable {
     case rectangle, ellipse, polygon, star
+    public var title: String { rawValue.capitalized }
+    public var symbol: String {
+        switch self {
+        case .rectangle: "rectangle"; case .ellipse: "circle"
+        case .polygon: "pentagon"; case .star: "star"
+        }
+    }
+    public var variant: ToolVariant { ToolVariant(id: rawValue, title: title, symbol: symbol) }
     /// the shape a variant draws before the user changes its option
     public var defaultShape: ShapeKind {
         switch self {

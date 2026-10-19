@@ -50,7 +50,7 @@ public enum CanvasImageCodec {
         return sdr
     }
 
-    private static func encode(_ image: CGImage, type: UTType, options: [CFString: Any]) throws -> Data {
+    static func encode(_ image: CGImage, type: UTType, options: [CFString: Any]) throws -> Data {
         let data = NSMutableData()
         guard let destination = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
             throw CanvasDocumentError.imageEncodingFailed

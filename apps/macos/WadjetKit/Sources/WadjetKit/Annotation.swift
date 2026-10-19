@@ -130,6 +130,16 @@ public enum CensorMethod: Codable, Equatable, Sendable {
     case pixelate(blockSize: CGFloat)
     public static let defaultBlur = CensorMethod.blur(radius: 12)
     public static let defaultPixelate = CensorMethod.pixelate(blockSize: 12)
+    /// Censor's variants in menu order, each at its default strength
+    public static let methods: [CensorMethod] = [.blackOut, .defaultBlur, .defaultPixelate]
+    /// the Censor variant this method belongs to
+    public var variant: ToolVariant {
+        switch self {
+        case .blackOut: ToolVariant(id: "blackOut", title: "Black out", symbol: "rectangle.fill")
+        case .blur: ToolVariant(id: "blur", title: "Blur", symbol: "aqi.medium")
+        case .pixelate: ToolVariant(id: "pixelate", title: "Pixelate", symbol: "squareshape.split.3x3")
+        }
+    }
     /// Blur and Pixelate draw from the pixels beneath; Black out needs none
     public var samplesBeneath: Bool {
         switch self {

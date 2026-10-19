@@ -27,20 +27,16 @@ extension CanvasEditorDocument {
         panel.nameFieldStringValue = exportBaseName
         if let image = sourceImage {
             panel.directoryURL = image.deletingLastPathComponent()
-            panel.nameFieldStringValue = image.deletingPathExtension().lastPathComponent
+            panel.nameFieldStringValue = image.lastPathComponent
         }
-        let sourceFormat = sourceImage
-            .flatMap { UTType(filenameExtension: $0.pathExtension) }
-            .flatMap { t in [.png, .heic].first { t.conforms(to: $0) } }
         let picker = ExportFormatPicker(panel: panel,
-            type: sourceFormat ?? (current.showsHDR ? .heic : .png))
+            type: CanvasImageCodec.exportType(source: sourceImage, hdr: current.showsHDR))
         panel.accessoryView = picker.view
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
             do {
                 let image = try self.current.flatten(scale: self.current.outputScale)
-                let data = try picker.type == .heic
-                    ? CanvasImageCodec.heic(image) : CanvasImageCodec.png(image)
+                let data = try CanvasImageCodec.export(image, as: picker.type)
                 try data.write(to: url) // non-atomic: the sandbox grants only this file
             } catch { self.presentError(error) }
         }
@@ -94,22 +90,23 @@ extension CanvasEditorDocument {
     init(panel: NSSavePanel, type initial: UTType) {
         self.panel = panel
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 26), pullsDown: false)
-        popup.addItems(withTitles: ["PNG", "HEIC"])
+        popup.addItems(withTitles: CanvasImageCodec.exportTypes.map { $0.preferredFilenameExtension!.uppercased() })
         view = NSStackView(views: [NSTextField(labelWithString: "Format:"), popup])
         super.init()
         popup.target = self
         popup.action = #selector(changed(_:))
-        popup.selectItem(withTitle: initial == .heic ? "HEIC" : "PNG")
+        popup.selectItem(at: CanvasImageCodec.exportTypes.firstIndex(of: initial) ?? 0)
         changed(popup)
     }
 
     @objc private func changed(_ popup: NSPopUpButton) {
-        type = popup.titleOfSelectedItem == "HEIC" ? .heic : .png
+        type = CanvasImageCodec.exportTypes[popup.indexOfSelectedItem]
         guard let panel else { return }
         panel.allowedContentTypes = [type]
-        // a stale format's extension blocks the new one from being appended
+        // a stale image extension the new format can't write blocks it from
+        // being appended; a non-image tail like "… at 10.00 AM" is never cut
         let ext = (panel.nameFieldStringValue as NSString).pathExtension
-        if ["png", "heic"].contains(ext.lowercased()) {
+        if let t = UTType(filenameExtension: ext), t.conforms(to: .image), !t.conforms(to: type) {
             panel.nameFieldStringValue = (panel.nameFieldStringValue as NSString).deletingPathExtension
         }
     }

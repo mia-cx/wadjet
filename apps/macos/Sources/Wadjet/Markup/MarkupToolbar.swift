@@ -72,7 +72,7 @@ extension ToolMenuView {
     /// More's menu: the overflow Tools, each tap arming it (row() closes the menu)
     @ViewBuilder func overflowRows() -> some View {
         ForEach(MarkupToolbar.shared.overflow, id: \.self) { t in
-            row(t.title, icon: t.symbol, on: false) { AppDelegate.shared?.trigger(t) }
+            row(t.title, icon: t.icon, on: false) { AppDelegate.shared?.trigger(t) }
         }
     }
 }

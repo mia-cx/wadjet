@@ -80,15 +80,15 @@ struct CensorControls: View {
     /// only when switching cases, so a tuned radius survives a tap on its tile
     var tiles: [[MenuTile]] {
         [[
-            MenuTile(icon: "rectangle.fill", caption: "Black out", on: method == .blackOut) {
+            MenuTile(icon: CensorMethod.blackOut.variant.symbol, caption: CensorMethod.blackOut.variant.title, on: method == .blackOut) {
                 styles.setCensorMethod(.blackOut)
                 s.openMenu = nil; ctrl.syncMenu()
             },
-            MenuTile(icon: "aqi.medium", caption: "Blur", on: isBlur) {
+            MenuTile(icon: CensorMethod.defaultBlur.variant.symbol, caption: CensorMethod.defaultBlur.variant.title, on: isBlur) {
                 if !isBlur { styles.setCensorMethod(.defaultBlur) }
                 ctrl.fitMenu()
             },
-            MenuTile(icon: "squareshape.split.3x3", caption: "Pixelate", on: isPixelate) {
+            MenuTile(icon: CensorMethod.defaultPixelate.variant.symbol, caption: CensorMethod.defaultPixelate.variant.title, on: isPixelate) {
                 if !isPixelate { styles.setCensorMethod(.defaultPixelate) }
                 ctrl.fitMenu()
             },

@@ -54,15 +54,11 @@ struct ShapeVariantControls: View {
     /// a slider is mid-drag — re-seeding then would fight the user's thumb
     @State var editing = false
 
-    static let icons: [ShapeVariant: String] = [
-        .rectangle: "rectangle", .ellipse: "circle", .polygon: "pentagon", .star: "star",
-    ]
-
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 ForEach(ShapeVariant.allCases, id: \.self) { v in
-                    MenuTile(icon: Self.icons[v]!, caption: v.rawValue.capitalized,
+                    MenuTile(icon: v.symbol, caption: v.title,
                              on: MarkupShapes.variant == v) {
                         MarkupShapes.pick(v)
                         ctrl.fitMenu() // the option sliders change with the variant
