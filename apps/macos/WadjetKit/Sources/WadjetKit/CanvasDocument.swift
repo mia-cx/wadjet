@@ -78,10 +78,9 @@ public struct CanvasDocument {
     /// Keys are package filenames such as `detail.wadjet`, stored beneath `embedded/`.
     public var embeddedCanvases: [String: CanvasDocument]
     public var linkedCanvases: [CanvasLink]
-    /// linked Canvases the caller already opened, keyed by link URL, so flatten
-    /// draws `.canvas` Annotations live; never persisted — a resolvable link's
-    /// content is snapshotted under `images/<annotation-id>` at write time
-    /// instead, so a reopened package still renders
+    /// Caller-opened or archived sources, keyed by link URL, so flatten draws
+    /// `.canvas` Annotations live. fileWrapper writes cropped image snapshots;
+    /// archiveLinkedCanvases also retains full sources for later recropping.
     public var linkedDocuments: [URL: CanvasDocument] = [:]
     // Travels with Editor saves so History retention never restarts after an edit.
     var storeMetadata: CanvasStoreMetadata?

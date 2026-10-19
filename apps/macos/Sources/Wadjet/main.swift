@@ -442,6 +442,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("history: store failed to open, running without it: \(error.localizedDescription)")
         }
         sweepCaptures()
+        CanvasRetentionRunner.shared.start(store: canvasStore)
         // Entries stay; only the temp files age out. Re-sweep daily while running.
         Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { _ in
             Task { @MainActor in self.sweepCaptures() }

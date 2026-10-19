@@ -171,7 +171,7 @@ public struct WorkflowRunner: Sendable {
                             if format == .canvas {
                                 guard let canvas else { throw CanvasDocumentError.invalidPackage("Screenshot has no Canvas") }
                                 saved.append(try Self.save(canvas, into: directory,
-                                    name: file.deletingPathExtension().lastPathComponent + ".wadjet"))
+                                    name: file.deletingPathExtension().lastPathComponent + ".wadjet", preserveCanvasLinks: true))
                             } else {
                                 currentImage = try Self.save(file, into: directory)
                                 saved.append(currentImage)
@@ -195,7 +195,7 @@ public struct WorkflowRunner: Sendable {
         }
     }
     /// Copy `file` into `dir` under its own name (` 2`, ` 3`, … on collision).
-    static func save(_ file: URL, into dir: URL, name: String? = nil) throws -> URL {
+    static func save(_ file: URL, into dir: URL, name: String? = nil, preserveCanvasLinks: Bool = false) throws -> URL {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
         let base = dir.appendingPathComponent(name ?? file.lastPathComponent)
         var dst = base
@@ -204,7 +204,8 @@ public struct WorkflowRunner: Sendable {
             dst = dir.appendingPathComponent("\(base.deletingPathExtension().lastPathComponent) \(n).\(base.pathExtension)")
             n += 1
         }
-        try FileManager.default.copyItem(at: file, to: dst)
+        if preserveCanvasLinks { try CanvasDocument.saveCopy(from: file, to: dst) }
+        else { try FileManager.default.copyItem(at: file, to: dst) }
         return dst
     }
 }

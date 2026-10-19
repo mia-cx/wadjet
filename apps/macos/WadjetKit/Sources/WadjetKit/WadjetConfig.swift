@@ -19,6 +19,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     public var bookmarks: [String: Data] = [:]
     /// Days before temporary Capture files are swept; their history entries stay.
     public var retentionDays = 7
+    public var canvasRetention = CanvasRetention()
     public var recording = Recording()
     public var capture = Capture()
     public var markup = Markup()
@@ -108,6 +109,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         defaultWorkflows = try c.decodeIfPresent(DefaultWorkflows.self, forKey: .defaultWorkflows) ?? DefaultWorkflows()
         bookmarks = try c.decodeIfPresent([String: Data].self, forKey: .bookmarks) ?? [:]
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 7
+        canvasRetention = try c.decodeIfPresent(CanvasRetention.self, forKey: .canvasRetention) ?? CanvasRetention()
         recording = try c.decodeIfPresent(Recording.self, forKey: .recording) ?? Recording()
         capture = try c.decodeIfPresent(Capture.self, forKey: .capture) ?? Capture()
         markup = try c.decodeIfPresent(Markup.self, forKey: .markup) ?? Markup()
@@ -159,12 +161,13 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(defaultWorkflows, forKey: .defaultWorkflows)
         try c.encode(bookmarks, forKey: .bookmarks)
         try c.encode(retentionDays, forKey: .retentionDays)
+        try c.encode(canvasRetention, forKey: .canvasRetention)
         try c.encode(recording, forKey: .recording)
         try c.encode(capture, forKey: .capture)
         try c.encode(markup, forKey: .markup)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, markup
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, markup, canvasRetention
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }

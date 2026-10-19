@@ -110,13 +110,15 @@ final class CanvasEditorDocument: NSDocument {
     }
 
     /// the package's image payloads and the linked Canvases its `linkedCanvases`
-    /// lists (only those, only when the files exist) so the document's image
-    /// kinds draw and recrop
+    /// lists, plus its embedded full sources, so saved copies can still recrop
+    /// after History expiry.
     private func seedAssets(into m: MarkupController) {
         m.assets.removeAll() // the reload's payload replaces everything, cached flattens too
         m.assets.images = canvas.images
         m.assets.embedded = canvas.embeddedCanvases
-        for link in canvas.linkedCanvases where FileManager.default.fileExists(atPath: link.url.path) {
+        m.assets.canvases = canvas.linkedDocuments
+        for link in canvas.linkedCanvases where m.assets.canvases[link.url] == nil
+            && FileManager.default.fileExists(atPath: link.url.path) {
             m.assets.canvases[link.url] = try? CanvasDocument.read(from: link.url)
         }
     }
@@ -141,7 +143,15 @@ final class CanvasEditorDocument: NSDocument {
     override func fileWrapper(ofType typeName: String) throws -> FileWrapper {
         // FileWrapper can't cross the isolation boundary even synchronously
         try MainActor.assumeIsolated {
-            UnsafeSendable(value: try current.fileWrapper())
+            var writing = current
+            if isStorePackage { return UnsafeSendable(value: try writing.fileWrapper()) }
+            let wrapper = try writing.archiveLinkedCanvases()
+            // Cache archived sources without reloading Markup or its undo stack.
+            // A later autosave must not need the History files archived here.
+            canvas = writing
+            markupCached?.assets.canvases.merge(writing.linkedDocuments) { _, archived in archived }
+            markupCached?.assets.embedded.merge(writing.embeddedCanvases) { _, archived in archived }
+            return UnsafeSendable(value: wrapper)
         }.value
     }
 

@@ -9,7 +9,8 @@ struct CanvasStoreMetadata: Codable {
 
 /// Owns History's UUID-named .wadjet packages in one directory. Save file copies live
 /// elsewhere; links never grant this store ownership of another directory.
-/// Callers serialize adds, edits and sweeps, as with CaptureFiles.
+/// Store mutations coordinate directory access with each other and NSDocument
+/// Editors, so a background sweep cannot overwrite a simultaneous package save.
 public struct CanvasStore: Sendable {
     public let directory: URL
     /// ImageIO quality used for the irreversible lossy retention stage.
@@ -27,12 +28,14 @@ public struct CanvasStore: Sendable {
     public func add(_ canvas: CanvasDocument, for entryID: UUID, createdAt: Date) throws -> URL {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
-        let url = packageURL(for: entryID)
-        guard !fm.fileExists(atPath: url.path) else { throw CocoaError(.fileWriteFileExists) }
-        var canvas = canvas
-        canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt)
-        try canvas.write(to: url)
-        return url
+        return try coordinateMutation {
+            let url = packageURL(for: entryID)
+            guard !fm.fileExists(atPath: url.path) else { throw CocoaError(.fileWriteFileExists) }
+            var canvas = canvas
+            canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt)
+            try canvas.write(to: url)
+            return url
+        }
     }
 
     /// Finds an owned Canvas while its package still exists. History outlives it.
@@ -53,8 +56,58 @@ public struct CanvasStore: Sendable {
     /// package with its completed stages. A failed package is left intact; other
     /// decisions still run and failures surface together. An unreadable manifest
     /// aborts planning, because its links may protect another package from deletion.
+    /// Awaits file presenters and performs package IO on a utility queue.
     @discardableResult
-    public func sweep(settings: CanvasRetentionSettings = .init()) throws -> [CanvasRetentionDecision] {
+    public func sweep(settings: CanvasRetentionSettings = .init()) async throws -> [CanvasRetentionDecision] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        // A plain directory writer does not lock its children. Acquire every
+        // actual package in one batch, awaiting access without blocking Swift's
+        // cooperative executor or nesting one lock frame per History entry.
+        while true {
+            let urls = try packageURLs()
+            guard !urls.isEmpty else { return [] }
+            let intents = [NSFileAccessIntent.writingIntent(with: directory, options: [])]
+                + urls.map { NSFileAccessIntent.writingIntent(with: $0, options: .forMerging) }
+            let decisions: [CanvasRetentionDecision]? = try await withCheckedThrowingContinuation { continuation in
+                // Only the granted accessor uses this coordinator after the
+                // asynchronous request has been scheduled.
+                nonisolated(unsafe) let coordinator = NSFileCoordinator()
+                coordinator.coordinate(with: intents, queue: Self.sweepQueue) { error in
+                    continuation.resume(with: Result {
+                        if let error { throw error }
+                        func paths(_ urls: [URL]) -> Set<String> {
+                            Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
+                        }
+                        // An add may have won the directory before access was
+                        // granted. Retry including the new package in the batch.
+                        guard try paths(packageURLs()) == paths(intents.dropFirst().map(\.url)) else { return nil }
+                        return try sweepCoordinated(settings: settings, coordinator: coordinator)
+                    })
+                }
+            }
+            if let decisions { return decisions }
+        }
+    }
+
+    private static let sweepQueue: OperationQueue = {
+        let queue = OperationQueue()
+        queue.name = "Canvas retention"
+        queue.qualityOfService = .utility
+        return queue
+    }()
+
+    private func packageURLs() throws -> [URL] {
+        try FileManager.default.contentsOfDirectory(at: directory,
+            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
+            .filter { url in
+                guard UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil else { return false }
+                return try isPackage(url)
+            }
+            .sorted { $0.path < $1.path }
+    }
+
+    private func sweepCoordinated(settings: CanvasRetentionSettings,
+                                  coordinator: NSFileCoordinator) throws -> [CanvasRetentionDecision] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path) else { return [] }
         let urls = try fm.contentsOfDirectory(at: directory,
@@ -62,13 +115,14 @@ public struct CanvasStore: Sendable {
         var records: [CanvasRetentionRecord] = []
         var packages: [UUID: URL] = [:]
         var links: [UUID: [CanvasLink]] = [:]
+        var linkedCrops: [String: [CGRect]] = [:]
         for url in urls {
             guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
                   try isPackage(url) else { continue }
             let manifest = try manifest(at: url)
             guard let metadata = manifest.store else { continue }
             packages[id] = url.standardizedFileURL
-            links[id] = try linkedCanvases(in: manifest, at: url)
+            links[id] = try linkedCanvases(in: manifest, at: url, crops: &linkedCrops)
             records.append(.init(id: id, createdAt: metadata.createdAt, state: metadata.state))
         }
         // Directory enumeration adds a trailing slash; file URL equality would
@@ -85,9 +139,15 @@ public struct CanvasStore: Sendable {
             do {
                 let url = packages[decision.canvasID]!
                 if decision.actions == [.delete] {
-                    try fm.removeItem(at: url)
+                    var deletionError: NSError?
+                    var deletion: Result<Void, Error>?
+                    coordinator.coordinate(writingItemAt: url, options: .forDeleting, error: &deletionError) { url in
+                        deletion = Result { try fm.removeItem(at: url) }
+                    }
+                    if let deletionError { throw deletionError }
+                    try deletion!.get()
                 } else {
-                    try apply(decision.actions, to: url)
+                    try apply(decision.actions, to: url, linkedCrops: linkedCrops)
                 }
             } catch { failures.append(error) }
         }
@@ -100,7 +160,8 @@ public struct CanvasStore: Sendable {
         return decisions
     }
 
-    private func apply(_ actions: [CanvasRetentionAction], to url: URL) throws {
+    private func apply(_ actions: [CanvasRetentionAction], to url: URL,
+                       linkedCrops: [String: [CGRect]]) throws {
         let wrapper = try FileWrapper(url: url, options: .immediate)
         let canvas = try CanvasDocument(fileWrapper: wrapper)
         var manifest = try manifest(at: url)
@@ -111,7 +172,7 @@ public struct CanvasStore: Sendable {
                 quality: lossy || metadata.state.contains(.lossyHEIC) ? Self.lossyHEICQuality : 1)
         }
         if actions.contains(.dropUnusedDisplays) {
-            try dropUnusedDisplays(canvas, in: wrapper, manifest: &manifest)
+            try dropUnusedDisplays(canvas, at: url, in: wrapper, manifest: &manifest, linkedCrops: linkedCrops)
             metadata.state.insert(.unusedDisplaysDropped)
         }
         if sdr { metadata.state.insert(.sdr) }
@@ -143,14 +204,17 @@ public struct CanvasStore: Sendable {
         }
     }
 
-    private func dropUnusedDisplays(_ canvas: CanvasDocument, in wrapper: FileWrapper,
-                                    manifest: inout CanvasDocument.Manifest) throws {
+    private func dropUnusedDisplays(_ canvas: CanvasDocument, at url: URL, in wrapper: FileWrapper,
+                                    manifest: inout CanvasDocument.Manifest,
+                                    linkedCrops: [String: [CGRect]]) throws {
         // a display stays while it paints the canvas, an Annotation's coverage,
         // or the source pixels one samples — a Magnify's viewport may sit
         // wholly on a display its magnifier doesn't touch
         let bounds = canvas.layerStack.annotations.flatMap {
             [PathGeometry.coverage(for: $0).boundingBoxOfPath] + ($0.sampledRect.map { [$0] } ?? [])
-        }
+        } + linkedCrops[url.standardizedFileURL.path, default: []]
+        // Keep each touched display in full: a pasted Canvas can recrop beyond
+        // its current Annotation crop to any other part of that display.
         manifest.layout.removeAll { display in
             guard !touches(display.frame, canvas.crop),
                   !bounds.contains(where: { touches(display.frame, $0) }) else { return false }
@@ -161,7 +225,8 @@ public struct CanvasStore: Sendable {
             let childWrapper = wrapper.fileWrappers!["embedded"]!.fileWrappers![name]!
             var childManifest = try JSONDecoder().decode(CanvasDocument.Manifest.self,
                 from: childWrapper.fileWrappers!["canvas.json"]!.regularFileContents!)
-            try dropUnusedDisplays(child, in: childWrapper, manifest: &childManifest)
+            try dropUnusedDisplays(child, at: url.appendingPathComponent("embedded/\(name)"),
+                in: childWrapper, manifest: &childManifest, linkedCrops: linkedCrops)
             try replaceManifest(childManifest, in: childWrapper)
         }
     }
@@ -186,8 +251,21 @@ public struct CanvasStore: Sendable {
 
     // Embedded Canvases age with their root package, so their links are root edges too.
     // Read all required metadata before planning any destructive action.
-    private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL) throws -> [CanvasLink] {
+    private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL,
+                                crops: inout [String: [CGRect]]) throws -> [CanvasLink] {
         var links = manifest.linkedCanvases
+        let stack = try LayerStack(json: Data(contentsOf: url.appendingPathComponent("annotations.json")))
+        for annotation in stack.annotations {
+            switch annotation.kind {
+            case let .canvas(.embedded(name), placement):
+                crops[url.appendingPathComponent("embedded/\(name)").standardizedFileURL.path, default: []]
+                    .append(placement.crop)
+            case let .canvas(.linked(link), placement):
+                links.append(link)
+                crops[link.url.standardizedFileURL.path, default: []].append(placement.crop)
+            default: break
+            }
+        }
         for path in manifest.embeddedCanvases {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
             guard parts.count == 2, parts[0] == "embedded", parts[1] != ".", parts[1] != "..",
@@ -198,7 +276,7 @@ public struct CanvasStore: Sendable {
             guard values.isDirectory == true, values.isSymbolicLink != true, try isPackage(child) else {
                 throw CanvasDocumentError.invalidPackage(path)
             }
-            links += try linkedCanvases(in: self.manifest(at: child), at: child)
+            links += try linkedCanvases(in: self.manifest(at: child), at: child, crops: &crops)
         }
         return links
     }
@@ -210,6 +288,18 @@ public struct CanvasStore: Sendable {
 
     private func packageURL(for id: UUID) -> URL {
         directory.appendingPathComponent(id.uuidString).appendingPathExtension("wadjet")
+    }
+
+    // Coordinate the directory, including link planning, rather than separate
+    // packages: adding a newer linker must not race deletion of its target.
+    private func coordinateMutation<T>(_ operation: () throws -> T) throws -> T {
+        var result: Result<T, Error>?
+        var error: NSError?
+        NSFileCoordinator().coordinate(writingItemAt: directory, options: [], error: &error) { _ in
+            result = Result { try operation() }
+        }
+        if let error { throw error }
+        return try result!.get()
     }
 
     private func replace(_ name: String, with data: Data, in wrapper: FileWrapper) {
