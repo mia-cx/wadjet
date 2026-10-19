@@ -4041,7 +4041,7 @@ struct ToolMenuView: View {
             if let backdrop {
                 ZStack {
                     Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280)
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top) // min 0: take the body's size, not the column's
                         .blur(radius: 24, opaque: true)
                     Color.black.opacity(0.28)
                 }
