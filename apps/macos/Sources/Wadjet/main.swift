@@ -403,6 +403,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     rebuildMenu()
                 }
                 resolveBookmarks()
+                // the Peer Through toggle, from the menu or a config.json edit
+                PeerThrough.shared.sync()
             }
         }
         registerShortcuts()

@@ -9,7 +9,6 @@ extension ToolMenuView {
         clearAfterScreenshotRow()
         row("Peer Through", icon: "circle.dashed", on: s.config.value.markup.peerThrough, isToggle: true) {
             s.config.update { $0.markup.peerThrough.toggle() }
-            PeerThrough.shared.sync()
         }
     }
 
