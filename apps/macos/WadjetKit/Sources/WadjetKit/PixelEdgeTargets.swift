@@ -1,5 +1,21 @@
 import CoreGraphics
 
+extension CanvasDocument {
+    /// The visible unannotated backdrop for one display, at its retained bitmap
+    /// resolution. Window layers replace/composite the display as in the Editor;
+    /// crop, rounded corners and Annotations must not contribute pixel targets.
+    public func snappingImage(for display: CanvasDisplay) throws -> CGImage {
+        guard let image = displayImages[display.id] else {
+            throw CanvasDocumentError.invalidPackage(display.imageFileName)
+        }
+        guard windowLayers.contains(where: { $0.frame.intersects(display.frame) }) else { return image }
+        var backdrop = self
+        backdrop.layerStack = LayerStack()
+        backdrop.cornerRadius = 0
+        return try backdrop.flatten(crop: display.frame, scale: CGFloat(image.width) / display.frame.width)
+    }
+}
+
 extension PixelBuffer {
     /// Measure's colour-run boundaries near the moving rectangle's perimeter or
     /// points. `bounds` positions this top-down bitmap in bottom-up Canvas/screen

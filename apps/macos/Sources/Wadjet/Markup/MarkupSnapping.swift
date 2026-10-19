@@ -21,7 +21,11 @@ import WadjetKit
         guard c.snapping else { return nil }
         range = c.snapRange
         pixels = pixelSources?() ?? (AppState.shared.phase == .frozen && canvasBounds == nil
-            ? Freeze.shared.displays.map { MarkupPixelEdges(image: $0.clean, bounds: $0.screen.frame) } : [])
+            && AppDelegate.shared?.overlayCtrl.showsFrozen == true
+            ? Freeze.shared.displays.map {
+                let image = AppState.shared.shotWadjet ? $0.clean : $0.bareClean ?? $0.clean
+                return MarkupPixelEdges(image: image, bounds: $0.screen.frame)
+            } : [])
         if let canvasBounds {
             targets = SnapTarget.annotations(stack.annotations, excluding: id)
                 + [.rect(canvasBounds)]

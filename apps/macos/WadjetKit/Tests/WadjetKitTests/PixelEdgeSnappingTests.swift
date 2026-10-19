@@ -3,6 +3,44 @@ import Testing
 import WadjetKit
 
 struct PixelEdgeSnappingTests {
+    // Proves visible window UI supplies targets instead of occluded display UI,
+    // retaining native pixels even when the Canvas crop covers a smaller area.
+    @Test func editorWindowBackdrop() throws {
+        let frame = CGRect(x: -20, y: 10, width: 20, height: 20)
+        let display = CanvasDisplay(id: 1, frame: frame, scaleFactor: 2)
+        let screen = try bandImage(edge: 12)
+        let window = try bandImage(edge: 20)
+        let canvas = CanvasDocument(layout: [display], crop: CGRect(x: -15, y: 15, width: 5, height: 5),
+                                    cornerRadius: 2, displayImages: [1: screen], windowLayers: [
+            CanvasWindowLayer(frame: frame, zOrder: 0, imageFileName: "window.heic", image: window,
+                              isolatesBackground: true)
+        ])
+        let image = try canvas.snappingImage(for: display)
+        #expect(image.width == 40 && image.height == 40)
+        let context = try #require(CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8,
+                                            bytesPerRow: 160, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 40, height: 40))
+        let data = try #require(context.data)
+        let pixels = PixelBuffer(base: data.assumingMemoryBound(to: UInt8.self), width: 40, height: 40)
+        let hidden = CGPoint(x: -14.5, y: 20) // old display edge at -14
+        #expect(pixels.snapTargets(points: [hidden], bounds: frame, range: 1.5).isEmpty)
+        let visible = CGPoint(x: -11, y: 20) // visible window edge at -10
+        let targets = pixels.snapTargets(points: [visible], bounds: frame, range: 1.5)
+        #expect(SnappingEngine.snap(points: [visible], targets: targets, range: 1.5).offset == CGPoint(x: 1, y: 0))
+    }
+
+    private func bandImage(edge: Int) throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8,
+                                            bytesPerRow: 160, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue))
+        context.setFillColor(CGColor(gray: 1, alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: 40, height: 40))
+        context.setFillColor(CGColor(gray: 0, alpha: 1))
+        context.fill(CGRect(x: edge, y: 0, width: 40 - edge, height: 40))
+        return try #require(context.makeImage())
+    }
+
     // Proves boxes and Line ends use real image edges in global points at both
     // display scales, while edges beyond the user's range leave them alone.
     @Test(arguments: [CGFloat(1), CGFloat(2)])
