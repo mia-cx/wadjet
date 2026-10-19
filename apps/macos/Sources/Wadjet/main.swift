@@ -81,7 +81,7 @@ let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
-    @Published var phase: Phase = .desktop { didSet { MarkupController.shared.syncArmed() } }
+    @Published var phase: Phase = .desktop { didSet { MarkupController.shared.syncArmed(); MarkupStyles.shared.syncEyedropper() } }
     /// the toolbar is up, over an overlay or alone
     var toolbarOpen: Bool { phase == .frozen || phase == .toolbar }
     @Published var recActive = false // a Recording is running (independent of the overlay)
@@ -95,7 +95,7 @@ final class AppState: ObservableObject {
         cursor = config.value.capture.cursor
     }
     @Published var bubblesDying = false // set while a recording bubble merges back into the island
-    @Published var tool: Tool? = nil { didSet { MarkupController.shared.syncArmed() } }
+    @Published var tool: Tool? = nil { didSet { MarkupController.shared.syncArmed(); MarkupStyles.shared.syncEyedropper() } }
     @Published var workflowByTool: [Tool: String] = [:]
     /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
     @Published var triggerWorkflow: String? = nil
@@ -1481,6 +1481,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func handleEsc() {
         let s = AppState.shared
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
+        if MarkupStyles.shared.cancelEyedropper() { AppLog.line("esc: cancelled eyedropper"); updateEscHotkey(); return }
         if MarkupController.shared.deselect() { AppLog.line("esc: deselected"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
@@ -1686,26 +1687,29 @@ final class OverlayController {
         let di = AppState.shared.expandedDisplay ?? mouseDisplay()
         guard let tp = toolbarPanels[di], t.hasMenu else { return }
         hideMenu()
-        // 40 pt of headroom above the menu so its scale-in never clips
-        let headroom: CGFloat = 40
-        var f = NSRect(origin: .zero, size: NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self).padding(.top, headroom)).fittingSize)
+        // headroom above the menu so its scale-in never clips; top-aligned so
+        // a growing menu grows downward
+        var f = NSRect(origin: .zero, size: NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self)
+            .padding(.top, Self.menuHeadroom).frame(maxHeight: .infinity, alignment: .top)).fittingSize)
         let scr = tp.screen?.frame ?? NSScreen.main!.frame
         let bar = toolbarShapeScreenRect(on: di)
         let anchor = buttonScreenRect(t, on: di) ?? bar ?? CGRect(x: scr.midX, y: scr.maxY - 40, width: 0, height: 0)
         // centred under the Tool, its top 8 pt below the bar's bottom edge
         let top = min(anchor.minY, bar?.minY ?? anchor.minY) - 8
         f.origin = CGPoint(x: min(max(scr.minX + 8, anchor.midX - f.width / 2), scr.maxX - f.width - 8),
-                           y: max(scr.minY + 8, top - (f.height - headroom)))
-        // the menu's own frost: the Freeze Frame under its body, blurred and
-        // darkened, under .regular glass for the rim — nil without a Freeze
+                           y: max(scr.minY + 8, top - (f.height - Self.menuHeadroom)))
+        // the menu's own frost: the Freeze Frame column from its body's top to
+        // the display's bottom, so a menu that grows downward stays aligned;
+        // blurred and darkened, under .regular glass for the rim — nil without a Freeze
         var backdrop: CGImage? = nil
         #if CLEAR_GLASS_PATCH
         if showsFrozen, di < Freeze.shared.displays.count {
-            backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: f.minY - scr.minY,
-                                                     width: f.width, height: f.height - headroom), on: di)
+            backdrop = Freeze.shared.crop(rect: CGRect(x: f.minX - scr.minX, y: 0,
+                                                     width: f.width, height: f.maxY - Self.menuHeadroom - scr.minY), on: di)
         }
         #endif
-        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self, backdrop: backdrop).padding(.top, headroom))
+        let h = NSHostingView(rootView: ToolMenuView(tool: t, ctrl: self, backdrop: backdrop)
+            .padding(.top, Self.menuHeadroom).frame(maxHeight: .infinity, alignment: .top))
         h.frame.size = f.size
         let p = NSPanel(contentRect: f, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
         p.level = .screenSaver + 2; p.isOpaque = false; p.backgroundColor = .clear
@@ -1719,8 +1723,8 @@ final class OverlayController {
             // clicks inside the toolbar are the toolbar's own business —
             // the tap lands in its gesture and toggles the menu from there
             if toolbarShapeScreenRect(on: di, visible: true)?.contains(NSEvent.mouseLocation) == true { return e }
-            // the panel's top 40 pt is scale-in headroom — clicks there count as outside
-            let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - 40)
+            // the panel's top strip is scale-in headroom — clicks there count as outside
+            let body = NSRect(x: mp.frame.minX, y: mp.frame.minY, width: mp.frame.width, height: mp.frame.height - Self.menuHeadroom)
             if !body.contains(NSEvent.mouseLocation) {
                 AppState.shared.openMenu = nil; self.syncMenu()
                 AppLog.line("menu closed (outside click)")
@@ -2687,6 +2691,7 @@ final class OverlayNSView: NSView {
             if let w = hoverWin { app?.didSelectWindow(id: w.id, frame: w.frame, on: di) }
         case .pickColour:
             let c = Freeze.shared.pixel(at: pt, on: di)
+            if MarkupStyles.shared.pick(c) { break } // a Markup eyedropper took the pixel
             let s = (ColourFormat(rawValue: AppState.shared.colourFmt) ?? .hex).format(c)
             clipboard(s); showHUD("Copied \(s)", swatch: ColourFormat.hex.format(c))
             ctrl?.closeAll()
@@ -4016,7 +4021,9 @@ struct ToolMenuView: View {
             case .util where tool == .measure:
                 tileRow(measureTiles)
             case .markup:
+                MarkupStyleControls(tool: tool, ctrl: ctrl)
                 selectionRows()
+                divider()
                 clearAfterScreenshotRow()
             default: EmptyView()
             }
@@ -4027,11 +4034,14 @@ struct ToolMenuView: View {
         // their corners nest inside the menu's
         .containerShape(Self.shape)
         // heavy frost like the reference menu: the frozen world behind, hard
-        // blurred and darkened, under the glass's rim and highlight
+        // blurred and darkened, under the glass's rim and highlight. The crop
+        // is the whole column under the menu body, drawn at its natural size
+        // top-aligned — a taller menu reveals more of it, aligned with the scene
         .background {
             if let backdrop {
                 ZStack {
-                    Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280).resizable()
+                    Image(decorative: backdrop, scale: CGFloat(backdrop.width) / 280)
+                        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity, alignment: .top) // min 0: take the body's size, not the column's
                         .blur(radius: 24, opaque: true)
                     Color.black.opacity(0.28)
                 }

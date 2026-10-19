@@ -68,6 +68,7 @@ final class MarkupView: NSView {
             l.fillColor = nil
             let c = a.style.colour
             l.strokeColor = CGColor(srgbRed: c.red, green: c.green, blue: c.blue, alpha: c.alpha)
+            l.opacity = Float(a.style.opacity)
             l.lineWidth = a.style.width
             l.lineCap = .round; l.lineJoin = .round
             l.contentsScale = scale

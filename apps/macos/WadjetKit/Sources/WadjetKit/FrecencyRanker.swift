@@ -4,7 +4,7 @@ import Foundation
 /// Each use contributes one point, halving every `halfLife` seconds. Callers can
 /// take a prefix of `rankedItems` for toolbar slots, recent fonts, or swatches.
 public struct FrecencyRanker<Item: Hashable & Codable>: Codable {
-    private struct Usage: Codable {
+    private struct Usage: Codable, Equatable {
         var score: Double
         var date: Date
     }
@@ -68,4 +68,14 @@ public struct FrecencyRanker<Item: Hashable & Codable>: Codable {
         guard let entry = usage[item] else { return 0 }
         return entry.score * pow(0.5, max(0, date.timeIntervalSince(entry.date)) / halfLife)
     }
+
+    /// Every item with recorded use, most recent first — lets a caller rank
+    /// everything it has recorded (the colour swatches), since recent colours
+    /// have no fixed candidate list.
+    public var usedItems: [Item] {
+        usage.sorted { $0.value.date > $1.value.date }.map(\.key)
+    }
 }
+
+extension FrecencyRanker: Equatable where Item: Equatable {}
+extension FrecencyRanker: Sendable where Item: Sendable {}
