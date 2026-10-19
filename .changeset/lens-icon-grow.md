@@ -2,4 +2,4 @@
 "@wadjet/macos": patch
 ---
 
-The pressed lens no longer magnifies the toolbar and is a little smaller; every Tool grows while it's pressed.
+The pressed lens works like iOS 26's tab bar: the toolbar looks squeezed inside it, and Tools grow as they pass into it.

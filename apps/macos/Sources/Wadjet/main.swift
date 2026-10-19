@@ -3062,7 +3062,7 @@ struct ToolbarView: View {
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
     let lensOverhang: CGFloat = 4
-    let lensIconBoost: CGFloat = 0.15 // every icon grows while the lens is active
+    let lensIconBoost: CGFloat = 0.15 // icons seen through the lens are this much bigger
     var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
     var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
     var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
@@ -3314,7 +3314,6 @@ struct ToolbarView: View {
                     }
                 }
         }
-        .scaleEffect(iconScale)
         .frame(width: toolD, height: selH)
     }
 
@@ -3339,11 +3338,11 @@ struct ToolbarView: View {
     var lensCentreInRow: CGPoint {
         CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
     }
-    /// every icon scales a little while the lens is up — the iconCell copy
-    /// carries it, so the lens strips and the real row stay pixel-aligned
-    var iconScale: CGFloat { lensActive ? 1 + lensIconBoost : 1 }
+    /// the lens's icon copy — every icon always grown about its own centre;
+    /// the copy only shows inside the lens, so the real row never scales
     func iconStrip(_ color: Color) -> some View {
-        rowContent(iconCell).foregroundStyle(color)
+        rowContent { t, collapsed in iconCell(t, collapsed: collapsed).scaleEffect(1 + lensIconBoost) }
+            .foregroundStyle(color)
     }
     /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
@@ -3383,18 +3382,9 @@ struct ToolbarView: View {
                     .resizable()
                     .frame(width: panelW, height: panelH)
             }
-            ZStack(alignment: .top) {
-                barSurface
-                ZStack {
-                    iconStrip(.white)
-                    iconStrip(Color.wadjetAccent)
-                        .mask(Capsule().frame(width: lensW, height: lensH)
-                              .scaleEffect(x: stretchX, y: stretchY)
-                              .position(lensCentreInRow))
-                }
+            barSurface
                 .frame(width: shapeW, height: shapeH, alignment: .top)
                 .padding(.top, shapeTop + contentTop)
-            }
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -3402,9 +3392,24 @@ struct ToolbarView: View {
     /// through LensEffect so the mask, rim and SDF share the same
     /// interpolated values every frame (shader args don't animate on
     /// their own — the mask would run ahead of them during the springs)
+    /// the icons, kept out of the shader so they read like the real row —
+    /// grown about their own centres in this copy only, so a Tool swells as
+    /// it passes into the lens. Same panel-space spot it had in lensSource.
+    var lensIcons: some View {
+        ZStack {
+            iconStrip(.white)
+            iconStrip(Color.wadjetAccent)
+                .mask(Capsule().frame(width: lensW, height: lensH)
+                      .scaleEffect(x: stretchX, y: stretchY)
+                      .position(lensCentreInRow))
+        }
+        .frame(width: shapeW, height: shapeH, alignment: .top)
+        .padding(.top, shapeTop + contentTop)
+        .frame(width: panelW, height: panelH, alignment: .top)
+    }
     var lensLayer: some View {
         lensSource
-            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
+            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, icons: lensIcons, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
                                  stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
@@ -3463,7 +3468,6 @@ struct ToolbarView: View {
                 }
         }
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
-        .scaleEffect(iconScale)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space
@@ -3649,9 +3653,10 @@ struct BarGlassEffect: ViewModifier {
     }
 }
 
-struct LensEffect: ViewModifier, @preconcurrency Animatable {
+struct LensEffect<Icons: View>: ViewModifier, @preconcurrency Animatable {
     let ctrl: OverlayController
     let di: Int
+    let icons: Icons // rides above the refraction, inside the same mask
     @ObservedObject var light = PointerLight.shared
     var bounds: CGSize = .zero // the source layer's size; samples clamp to it
     var centre: CGPoint
@@ -3681,6 +3686,7 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
                                    }(),
                                    .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
                 maxSampleOffset: CGSize(width: 64, height: 64))
+            .overlay { icons }
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
                     .scaleEffect(x: stretch.width, y: stretch.height)
