@@ -77,25 +77,6 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
             cursor = try c.decodeIfPresent(Bool.self, forKey: .cursor) ?? true
         }
     }
-    /// Markup settings: per-Tool settings keyed by the Markup Tool's raw name
-    /// ("draw"), and the colours used in Markup, ranked for the colour
-    /// control's swatches (hex "#RRGGBB").
-    public struct Markup: Codable, Equatable, Sendable {
-        public var tools: [String: MarkupTool] = [:]
-        public var recentColours = FrecencyRanker<String>()
-        public init() {}
-        public init(from decoder: Decoder) throws {
-            let c = try decoder.container(keyedBy: CodingKeys.self)
-            tools = try c.decodeIfPresent([String: MarkupTool].self, forKey: .tools) ?? [:]
-            recentColours = try c.decodeIfPresent(FrecencyRanker<String>.self, forKey: .recentColours) ?? FrecencyRanker()
-        }
-    }
-    /// one Markup Tool's settings; later slices add theirs (Line ends, Text font…) here
-    public struct MarkupTool: Codable, Equatable, Sendable {
-        /// nil until the user restyles the Tool; the app then uses the Tool's built-in default
-        public var style: AnnotationStyle?
-        public init(style: AnnotationStyle? = nil) { self.style = style }
-    }
 
     /// Custom so missing keys still fall back to defaults and cross-references
     /// (Shortcut.workflow, defaultWorkflows) validate against `workflows`.

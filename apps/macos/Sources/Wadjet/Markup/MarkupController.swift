@@ -8,8 +8,6 @@ import WadjetKit
 @MainActor @Observable
 final class MarkupController {
     static let shared = MarkupController()
-    /// fixed until per-Tool styles land: opaque red, 4 pt
-    static let lineStyle = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
     /// a press shorter than this draws nothing
     static let minLineLength: CGFloat = 1
     static let handleSize: CGFloat = 7      // grip diameter, on-screen points
@@ -201,7 +199,7 @@ final class MarkupController {
         }
         guard armed == .draw else { return }
         selection = nil
-        gesture = .drawing(Annotation(kind: .line(start: p, end: p), style: Self.lineStyle))
+        gesture = .drawing(Annotation(kind: .line(start: p, end: p), style: MarkupStyles.shared.style(for: .draw)))
         render()
     }
     func drag(to p: CGPoint) {
