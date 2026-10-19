@@ -157,6 +157,31 @@ struct LayerStackTests {
         #expect(try LayerStack(json: stack.json()) == stack)
     }
 
+    // styles saved before ends/dashes existed decode with the defaults
+    @Test func styleDefaultsDecode() throws {
+        let fixture = Data(#"{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}"#.utf8)
+        let s = try JSONDecoder().decode(AnnotationStyle.self, from: fixture)
+        #expect(s.head == .none && s.tail == .none && s.dash == .solid && s.opacity == 1)
+        #expect(try JSONDecoder().decode(AnnotationStyle.self, from: JSONEncoder().encode(
+            AnnotationStyle(colour: s.colour, width: 6, opacity: 0.5,
+                            head: .filledArrow, tail: .dot, dash: .dotted)))
+            == AnnotationStyle(colour: s.colour, width: 6, opacity: 0.5,
+                               head: .filledArrow, tail: .dot, dash: .dotted))
+    }
+
+    // a bent Line round-trips through annotations.json; one saved before
+    // `bend` existed decodes nil
+    @Test func bentLineJSON() throws {
+        var stack = LayerStack()
+        stack.add(Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0),
+                                       bend: CGPoint(x: 50, y: 40)), style: red4))
+        #expect(try LayerStack(json: stack.json()) == stack)
+        let old = Data(#"{"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"line":{"start":[0,0],"end":[100,0]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}}]}"#.utf8)
+        let s = try LayerStack(json: old)
+        guard case let .line(_, _, bend) = s.annotations[0].kind else { Issue.record(); return }
+        #expect(bend == nil)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }

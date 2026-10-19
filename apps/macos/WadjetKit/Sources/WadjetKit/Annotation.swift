@@ -40,7 +40,8 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
 
 /// What an Annotation is; later slices add cases (pen, text, images…)
 public enum AnnotationKind: Codable, Equatable, Sendable {
-    case line(start: CGPoint, end: CGPoint)
+    /// `bend` is the on-curve point the Line passes through at t = 0.5; nil = straight
+    case line(start: CGPoint, end: CGPoint, bend: CGPoint? = nil)
     /// the filled rect in untransformed geometry space; Black out draws opaque
     /// black whatever the style, Blur and Pixelate show the content beneath
     /// filtered
@@ -49,7 +50,7 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     case counter(center: CGPoint, radius: CGFloat, value: Int, format: CounterFormat)
 
     enum CodingKeys: String, CodingKey { case line, censor, shape, counter }
-    enum LineKeys: String, CodingKey { case start, end }
+    enum LineKeys: String, CodingKey { case start, end, bend }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
     enum CounterKeys: String, CodingKey { case center, radius, value, format }
@@ -58,7 +59,8 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
         if c.contains(.line) {
             let l = try c.nestedContainer(keyedBy: LineKeys.self, forKey: .line)
             self = .line(start: try l.decodePoint(forKey: .start),
-                         end: try l.decodePoint(forKey: .end))
+                         end: try l.decodePoint(forKey: .end),
+                         bend: try l.decodePointIfPresent(forKey: .bend))
         } else if c.contains(.censor) {
             let n = try c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
             self = .censor(rect: try n.decodeRect(forKey: .rect),
@@ -82,10 +84,11 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case let .line(start, end):
+        case let .line(start, end, bend):
             var l = c.nestedContainer(keyedBy: LineKeys.self, forKey: .line)
             try l.encodePoint(start, forKey: .start)
             try l.encodePoint(end, forKey: .end)
+            if let bend { try l.encodePoint(bend, forKey: .bend) }
         case let .censor(rect, method):
             var n = c.nestedContainer(keyedBy: CensorKeys.self, forKey: .censor)
             try n.encodeRect(rect, forKey: .rect)
@@ -175,6 +178,11 @@ private extension KeyedDecodingContainer {
         }
         return CGPoint(x: v[0], y: v[1])
     }
+    /// a point that may be absent — like decodePoint but returns nil when the key is missing
+    func decodePointIfPresent(forKey key: Key) throws -> CGPoint? {
+        guard contains(key) else { return nil }
+        return try decodePoint(forKey: key)
+    }
     func decodeRect(forKey key: Key) throws -> CGRect {
         let v = try decode([CGFloat].self, forKey: key)
         guard v.count == 4 else {
@@ -193,22 +201,30 @@ private extension KeyedEncodingContainer {
     }
 }
 
-/// How an Annotation draws: stroke colour, width, and opacity — shapes add a
-/// fill and can drop their stroke.
+/// How an Annotation draws: stroke colour, width, and opacity. `head` sits at
+/// the end point, `tail` at the start point; `dash` patterns the stroke;
+/// shapes add a `fill` and can drop their stroke.
 public struct AnnotationStyle: Codable, Equatable, Sendable {
     public var colour: RGBAColour
     public var width: CGFloat // stroke width, points
     /// whole-Annotation opacity, separate from colour alpha
     public var opacity: Double
-    /// shapes only: the inside's colour, nil = unfilled
+    public var head: LineEnd
+    public var tail: LineEnd
+    public var dash: LineDash
+    /// the inside's colour — shapes, and closed paths in a later slice; nil = unfilled
     public var fill: RGBAColour?
     /// shapes only: false leaves just the fill
     public var stroked: Bool
     public init(colour: RGBAColour, width: CGFloat, opacity: Double = 1,
+                head: LineEnd = .none, tail: LineEnd = .none, dash: LineDash = .solid,
                 fill: RGBAColour? = nil, stroked: Bool = true) {
         self.colour = colour
         self.width = width
         self.opacity = opacity
+        self.head = head
+        self.tail = tail
+        self.dash = dash
         self.fill = fill
         self.stroked = stroked
     }
@@ -217,6 +233,9 @@ public struct AnnotationStyle: Codable, Equatable, Sendable {
         colour = try c.decode(RGBAColour.self, forKey: .colour)
         width = try c.decode(CGFloat.self, forKey: .width)
         opacity = try c.decodeIfPresent(Double.self, forKey: .opacity) ?? 1 // saved before opacity existed
+        head = try c.decodeIfPresent(LineEnd.self, forKey: .head) ?? .none   // saved before ends existed
+        tail = try c.decodeIfPresent(LineEnd.self, forKey: .tail) ?? .none
+        dash = try c.decodeIfPresent(LineDash.self, forKey: .dash) ?? .solid // saved before dashes existed
         fill = try c.decodeIfPresent(RGBAColour.self, forKey: .fill) // saved before shapes existed
         stroked = try c.decodeIfPresent(Bool.self, forKey: .stroked) ?? true
     }

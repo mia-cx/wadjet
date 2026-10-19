@@ -19,6 +19,10 @@ public struct AnnotationTransform: Codable, Equatable, Sendable {
 public enum SelectionHandle: Hashable, Sendable {
     /// x and y are each -1, 0 or 1: the min edge, the middle, or the max edge of the untransformed bounds
     case resize(x: Int, y: Int)
+    /// a Line end (0 start, 1 end); Pen will reuse it for path nodes
+    case vertex(Int)
+    /// the Line's on-curve midpoint — drag it to bend
+    case bend
     case rotate
 }
 
@@ -27,7 +31,7 @@ extension AnnotationKind {
     /// are its rect's min and max corners, so mapping them resizes
     var points: [CGPoint] {
         switch self {
-        case let .line(start, end): [start, end]
+        case let .line(start, end, bend): [start, end] + (bend.map { [$0] } ?? [])
         case let .censor(rect, _), let .shape(_, rect):
             [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
         case let .counter(center, radius, _, _):
@@ -39,7 +43,7 @@ extension AnnotationKind {
     /// from its mapped box so it stays a circle
     func mapPoints(_ f: (CGPoint) -> CGPoint) -> AnnotationKind {
         switch self {
-        case let .line(start, end): return .line(start: f(start), end: f(end))
+        case let .line(start, end, bend): return .line(start: f(start), end: f(end), bend: bend.map(f))
         case let .censor(rect, method):
             return .censor(rect: rect.mapCorners(f), method: method)
         case let .shape(kind, rect):
@@ -67,12 +71,18 @@ extension AnnotationKind {
         case .censor, .shape, .counter: true
         }
     }
-    /// bounding box of `points` — may have zero width or height
+    /// tight bounds of the untransformed geometry — a bent Line's frame hugs
+    /// the curve; straight segments keep the points' box so a horizontal
+    /// Line's height stays exactly 0 (the grip logic keys on `== 0`)
     public var bounds: CGRect {
-        let xs = points.map(\.x), ys = points.map(\.y)
-        return CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0,
-                      width: (xs.max() ?? 0) - (xs.min() ?? 0),
-                      height: (ys.max() ?? 0) - (ys.min() ?? 0))
+        let segs = segments
+        guard segs.contains(where: { !$0.straight }) else {
+            let xs = points.map(\.x), ys = points.map(\.y)
+            return CGRect(x: xs.min() ?? 0, y: ys.min() ?? 0,
+                          width: (xs.max() ?? 0) - (xs.min() ?? 0),
+                          height: (ys.max() ?? 0) - (ys.min() ?? 0))
+        }
+        return PathGeometry.path(segments: segs).boundingBoxOfPath
     }
 }
 
@@ -94,9 +104,58 @@ extension Annotation {
         return a
     }
 
-    /// a handle drag, computed from the state at drag start (`self`) so it can't drift
-    public func dragging(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint) -> Annotation {
+    /// this close to the chord midpoint a bend straightens back to a line
+    public static let bendStraightenRadius: CGFloat = 3
+
+    /// the same geometry baked into screen coordinates — lossless for kinds
+    /// whose points mapPoints covers (flips+rotation are similarities)
+    var baked: Annotation {
+        var a = self
+        a.kind = kind.mapPoints { $0.applying(affineTransform) }
+        a.transform = .identity
+        return a
+    }
+
+    /// a handle drag, computed from the state at drag start (`self`) so it can't
+    /// drift; `constrained` (Shift) snaps a vertex drag to 45° of the other end
+    public func dragging(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint,
+                         constrained: Bool = false) -> Annotation {
         switch handle {
+        case let .vertex(i):
+            // the grip's position at drag start plus the drag — the press needn't land dead-on
+            var a = baked
+            guard case var .line(s, e, b) = a.kind else { return a }
+            let d = CGPoint(x: point.x - start.x, y: point.y - start.y)
+            var p = i == 0 ? CGPoint(x: s.x + d.x, y: s.y + d.y)
+                           : CGPoint(x: e.x + d.x, y: e.y + d.y)
+            if constrained { p = PathGeometry.snapAngle(p, from: i == 0 ? e : s) }
+            // the bend keeps its place relative to the chord: z = (B−S)/(E−S)
+            // as complex numbers, so B' = S' + z·(E'−S')
+            if let bendPt = b {
+                let chord = CGPoint(x: e.x - s.x, y: e.y - s.y)
+                if chord.x != 0 || chord.y != 0 {
+                    let d2 = chord.x * chord.x + chord.y * chord.y
+                    let rel = CGPoint(x: bendPt.x - s.x, y: bendPt.y - s.y)
+                    let zr = (rel.x * chord.x + rel.y * chord.y) / d2
+                    let zi = (rel.y * chord.x - rel.x * chord.y) / d2
+                    let (ns, ne) = i == 0 ? (p, e) : (s, p)
+                    let newChord = CGPoint(x: ne.x - ns.x, y: ne.y - ns.y)
+                    b = CGPoint(x: ns.x + zr * newChord.x - zi * newChord.y,
+                                y: ns.y + zr * newChord.y + zi * newChord.x)
+                }
+            }
+            if i == 0 { s = p } else { e = p }
+            a.kind = .line(start: s, end: e, bend: b)
+            return a
+        case .bend:
+            var a = baked
+            guard case let .line(s, e, b) = a.kind else { return a }
+            let mid = CGPoint(x: (s.x + e.x) / 2, y: (s.y + e.y) / 2)
+            let grip = b ?? mid
+            let p = CGPoint(x: grip.x + point.x - start.x, y: grip.y + point.y - start.y)
+            a.kind = .line(start: s, end: e,
+                           bend: hypot(p.x - mid.x, p.y - mid.y) < Self.bendStraightenRadius ? nil : p)
+            return a
         case let .resize(x, y):
             let b = kind.bounds, m = affineTransform
             let p = point.applying(m.inverted())
@@ -161,7 +220,24 @@ extension Annotation {
             .map { $0.applying(m) }
     }
 
-    /// screen positions of the selection's grips:
+    /// screen positions of the selection's grips — a Line gets a grip per end
+    /// and one on its curve; every kind also gets `.rotate` above the frame
+    /// (other kinds fall back to the bounds' resize grips)
+    public func handles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+        guard case let .line(start, end, bend) = kind else {
+            return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        }
+        let m = affineTransform
+        let mid = bend ?? CGPoint(x: (start.x + end.x) / 2, y: (start.y + end.y) / 2)
+        let b = kind.bounds, c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
+        return [(.vertex(0), start.applying(m)),
+                (.vertex(1), end.applying(m)),
+                (.bend, mid.applying(m)),
+                (.rotate, CGPoint(x: c.x - v * sin(transform.rotation),
+                                  y: c.y + v * cos(transform.rotation)))]
+    }
+
+    /// screen positions of the bounds-based grips:
     /// - the 4 corners (x, y ∈ {-1, 1}), a component set to 0 on any axis whose
     ///   extent is exactly 0 (it would resize nothing), deduplicated keeping
     ///   first-seen order (x outer, y inner, -1 before 1) — so a horizontal
@@ -171,7 +247,7 @@ extension Annotation {
     ///   and height are ≥ `minExtent`
     /// - then `.rotate` above the frame's top centre — placed by rotation alone
     ///   so a flip can't put it below
-    public func handles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+    public func frameHandles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
         let b = kind.bounds, m = affineTransform
         func at(_ x: Int, _ y: Int) -> CGPoint {
             CGPoint(x: b.midX + CGFloat(x) * b.width / 2,
