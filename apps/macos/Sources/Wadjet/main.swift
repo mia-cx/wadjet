@@ -384,6 +384,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// The stream's frame queue — SCStream calls back here, the actor serializes writes.
     let recQueue = DispatchQueue(label: "wadjet.recstream")
 
+    /// the first NSDocumentController made becomes .shared — it must exist
+    /// before launch-time Open events and restoration pick a document class
+    func applicationWillFinishLaunching(_ n: Notification) {
+        _ = EditorDocumentController()
+    }
+
     func applicationDidFinishLaunching(_ n: Notification) {
         #if CLEAR_GLASS_PATCH
         ClearGlassPatch.install()

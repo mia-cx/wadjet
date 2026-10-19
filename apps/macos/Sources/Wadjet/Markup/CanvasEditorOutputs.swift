@@ -25,7 +25,15 @@ extension CanvasEditorDocument {
         panel.prompt = "Export"
         panel.isExtensionHidden = false
         panel.nameFieldStringValue = exportBaseName
-        let picker = ExportFormatPicker(panel: panel, hdr: current.showsHDR)
+        if let image = sourceImage {
+            panel.directoryURL = image.deletingLastPathComponent()
+            panel.nameFieldStringValue = image.deletingPathExtension().lastPathComponent
+        }
+        let sourceFormat = sourceImage
+            .flatMap { UTType(filenameExtension: $0.pathExtension) }
+            .flatMap { t in [.png, .heic].first { t.conforms(to: $0) } }
+        let picker = ExportFormatPicker(panel: panel,
+            type: sourceFormat ?? (current.showsHDR ? .heic : .png))
         panel.accessoryView = picker.view
         panel.beginSheetModal(for: window) { [weak self] response in
             guard response == .OK, let url = panel.url, let self else { return }
@@ -83,7 +91,7 @@ extension CanvasEditorDocument {
     let view: NSView
     private weak var panel: NSSavePanel?
 
-    init(panel: NSSavePanel, hdr: Bool) {
+    init(panel: NSSavePanel, type initial: UTType) {
         self.panel = panel
         let popup = NSPopUpButton(frame: NSRect(x: 0, y: 0, width: 90, height: 26), pullsDown: false)
         popup.addItems(withTitles: ["PNG", "HEIC"])
@@ -91,7 +99,7 @@ extension CanvasEditorDocument {
         super.init()
         popup.target = self
         popup.action = #selector(changed(_:))
-        if hdr { popup.selectItem(withTitle: "HEIC") }
+        popup.selectItem(withTitle: initial == .heic ? "HEIC" : "PNG")
         changed(popup)
     }
 

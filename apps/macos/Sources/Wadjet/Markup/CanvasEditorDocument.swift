@@ -26,10 +26,29 @@ final class CanvasEditorDocument: NSDocument {
     private(set) var canvas = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 1, height: 1),
                                              displayImages: [:])
     private var markupCached: MarkupController?
+    /// the plain image this untitled Canvas came from; Save never writes it —
+    /// ⌘S writes `<name>.wadjet` beside it, and Export starts there
+    private(set) var sourceImage: URL?
+    /// holds the sandbox's related-item access to the sibling .wadjet for later autosaves
+    var siblingPresenter: NSFilePresenter?
     /// the window asks to rebuild after a Revert — set by its controller
     var onReload: (() -> Void)?
 
     override class var autosavesInPlace: Bool { true }
+    /// the Save panel never offers an image format now that public.image is an Editor type
+    override class var writableTypes: [String] { [CanvasDocument.contentType.identifier] }
+
+    /// an opened image becomes the Canvas — the document stays untitled
+    func load(image url: URL) throws {
+        canvas = try CanvasDocument(image: Data(contentsOf: url))
+        sourceImage = url
+    }
+
+    override func close() {
+        if let siblingPresenter { NSFileCoordinator.removeFilePresenter(siblingPresenter) }
+        siblingPresenter = nil
+        super.close()
+    }
 
     /// the Canvas's Markup: edits its own stack, undo lands in the document's
     /// UndoManager, and Select is armed from the start
@@ -114,6 +133,9 @@ final class CanvasEditorDocument: NSDocument {
     /// store packages are UUID-named; title them by when the Screenshot was taken
     override var displayName: String! {
         get {
+            if fileURL == nil, let sourceImage {
+                return FileManager.default.displayName(atPath: sourceImage.path)
+            }
             guard isStorePackage, let url = fileURL,
                   let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate else {
                 return super.displayName
