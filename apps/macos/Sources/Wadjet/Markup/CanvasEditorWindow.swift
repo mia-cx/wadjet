@@ -280,7 +280,8 @@ final class EditorCanvasView: NSView {
             l.preferredDynamicRange = .high
             return l
         }
-        let isolated = canvas.windowLayers.filter(\.isolatesBackground)
+        // windows an Annotation names draw on the Markup surface, not the backdrop
+        let isolated = canvas.windowLayers.filter { $0.id == nil && $0.isolatesBackground }
         if !isolated.isEmpty {
             let p = CGMutablePath()
             p.addRect(region)
@@ -293,7 +294,7 @@ final class EditorCanvasView: NSView {
             displays.mask = m
         }
         var layers: [CALayer] = [displays]
-        for w in canvas.windowLayers.sorted(by: { $0.zOrder < $1.zOrder }) {
+        for w in canvas.windowLayers.filter({ $0.id == nil }).sorted(by: { $0.zOrder < $1.zOrder }) {
             let l = CALayer()
             l.contents = w.image
             l.frame = w.frame
@@ -320,24 +321,41 @@ final class EditorCanvasView: NSView {
     }
 
     /// Censors in an Editor sample exactly what output flattens: the same
-    /// renderer over the whole Canvas, without Annotations or the crop's corner
+    /// renderer over the whole Canvas, without Annotations or the crop's
+    /// corner — `render` re-runs per Censor with the windows stacked beneath it
     private func censorSource() -> CensorLayers? {
-        var canvas = doc.canvas
-        canvas.layerStack = LayerStack()
-        canvas.cornerRadius = 0
-        guard let image = try? canvas.flatten(crop: canvas.displayBounds, scale: 1) else { return nil }
-        return CensorLayers(staticImage: image, coverage: canvas.displayBounds, scale: 1)
+        let canvas = doc.canvas
+        return CensorLayers(coverage: canvas.displayBounds, scale: 1) { windows in
+            var c = canvas
+            c.layerStack = LayerStack(windows)
+            c.cornerRadius = 0
+            do {
+                return try c.flatten(crop: c.displayBounds, scale: 1)
+            } catch {
+                AppLog.line("censor source: \(error.localizedDescription)")
+                return nil
+            }
+        }
     }
 
-    /// Magnifies in an Editor sample the Canvas's own displays — the same
-    /// pixels flatten draws, at the window's backing scale so they stay crisp
+    /// Magnifies in an Editor sample what flatten draws: the Canvas's displays
+    /// plus the windows beneath each one, at the window's backing scale so
+    /// they stay crisp
     private func magnifierSource() -> MagnifierLayers? {
         let canvas = doc.canvas
         let sources = canvas.layout.compactMap { d -> MagnifyRenderer.Source? in
             canvas.displayImages[d.id].map { (CIImage(cgImage: $0), d.frame) }
         }
         guard !sources.isEmpty else { return nil }
-        return MagnifierLayers(staticSources: sources, scale: window?.backingScaleFactor ?? 2)
+        return MagnifierLayers(staticSources: sources, scale: window?.backingScaleFactor ?? 2) {
+            windows, rect, scale in
+            do {
+                return try canvas.beneathSource(windows: windows, rect: rect, scale: scale)
+            } catch {
+                AppLog.line("magnifier source: \(error.localizedDescription)")
+                return nil
+            }
+        }
     }
 
     // MARK: keys — the view is the window's first responder

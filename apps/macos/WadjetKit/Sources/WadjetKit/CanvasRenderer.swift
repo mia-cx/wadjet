@@ -2,11 +2,13 @@ import CoreGraphics
 import CoreImage
 
 extension CanvasDocument {
-    /// Composites displays, windows, then Annotations back to front. Crop and radius
-    /// are global points; scale is output pixels per point. HDR pixels stay extended.
-    /// Black out fills opaque black; Blur and Pixelate sample each display's
-    /// image beneath the Censor; a Magnify strokes its source outline and
-    /// composites its magnified viewport through MagnifyRenderer.
+    /// Composites displays, backdrop windows, then Annotations back to front.
+    /// Crop and radius are global points; scale is output pixels per point. HDR
+    /// pixels stay extended. Black out fills opaque black; Blur, Pixelate and
+    /// Magnify sample each display's image beneath them plus the visible
+    /// window layers stacked beneath them. A `.window` Annotation draws the
+    /// window layer it names — layers without an id form the backdrop beneath
+    /// every Annotation.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
@@ -37,7 +39,8 @@ extension CanvasDocument {
             }
             context.draw(image, in: display.frame)
         }
-        for window in windowLayers.sorted(by: { $0.zOrder < $1.zOrder }) where window.frame.intersects(crop) {
+        for window in windowLayers.filter({ $0.id == nil }).sorted(by: { $0.zOrder < $1.zOrder })
+            where window.frame.intersects(crop) {
             context.saveGState()
             // Standalone window captures must not reveal the desktop through
             // their transparent pixels. Other window layers composite normally.
@@ -45,17 +48,84 @@ extension CanvasDocument {
             context.draw(window.image, in: window.frame)
             context.restoreGState()
         }
-        // the pixels Blur and Pixelate sample: each display's image beneath
-        // the Censor; a Magnify's magnified viewport comes from the same set
-        let sources = layout.compactMap { d in
+        // the pixels Blur, Pixelate and Magnify sample: each display's image
+        // beneath them
+        let displaySources = layout.compactMap { d in
             displayImages[d.id].map { CensorSource(image: $0, frame: d.frame) }
         }
-        for annotation in layerStack.annotations {
+        let windows = Dictionary(windowLayers.compactMap { w in w.id.map { ($0, w) } },
+                                 uniquingKeysWith: { a, _ in a })
+        for (index, annotation) in layerStack.annotations.enumerated() {
+            if case let .window(layerID, frame) = annotation.kind {
+                guard !annotation.hidden else { continue }
+                guard let layer = windows[layerID] else {
+                    throw CanvasDocumentError.invalidPackage("window Annotation \(layerID) has no layer")
+                }
+                context.saveGState()
+                context.setAlpha(annotation.style.opacity)
+                if annotation.style.blend == .multiply { context.setBlendMode(.multiply) }
+                context.concatenate(annotation.affineTransform)
+                context.draw(layer.image, in: frame)
+                context.restoreGState()
+                continue
+            }
+            var sources = displaySources
+            if let box = annotation.sampledRect {
+                let below = layerStack.annotations[..<index].filter {
+                    if case .window = $0.kind { return !$0.hidden }
+                    return false
+                }
+                if !below.isEmpty, let b = try beneathSource(windows: below, rect: box, scale: scale) {
+                    sources = [b]
+                }
+            }
             context.draw(annotation, sources: sources, scale: scale, format: .RGBAh,
                          colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)
         }
         context.endTransparencyLayer()
         guard let image = context.makeImage() else { throw CanvasDocumentError.renderFailed }
         return image
+    }
+
+    /// The pixels a sampling Annotation reads when windows sit beneath it: the
+    /// displays plus `windows` (visible `.window` Annotations, back to front;
+    /// backdrop layers stay out) rendered over `rect` snapped outward to the
+    /// pixel grid at `scale` — at least `scale` pixels per point, and the
+    /// captured displays' own density where higher, so magnifying never starts
+    /// from a downsampled source. The frame's size comes from the rendered
+    /// image. Moved windows are sampled where they sit, not where the flat
+    /// displays froze them — the filters only read inside their sampled rect.
+    /// Returns nil when no window paints on `rect` or the snapped rect isn't
+    /// valid — callers then keep the display sources unchanged.
+    public func beneathSource(windows: [Annotation], rect: CGRect,
+                            scale: CGFloat) throws -> CensorSource? {
+        let touching = windows.filter {
+            PathGeometry.path(for: $0).boundingBox.intersects(rect)
+        }
+        guard !touching.isEmpty else { return nil }
+        let density = max(scale, layout.filter { $0.frame.intersects(rect) }
+            .map(\.scaleFactor).max() ?? 0)
+        // snap outward to the output pixel grid: flatten allocates
+        // ceil-sized pixels, and the filters infer one scale from
+        // width — an unsnapped box would leave a strip unsampled. The
+        // frame's size comes from the rendered image: at fractional
+        // scales snapped.width*scale can round up a pixel, so the
+        // image is the exact record of what was rendered (pixel i
+        // covers snapped.min + i/scale; a roundoff pixel sits past
+        // the edge).
+        let snapped = CGRect(x: floor(rect.minX * density) / density,
+                             y: floor(rect.minY * density) / density,
+                             width: ceil(rect.maxX * density) / density - floor(rect.minX * density) / density,
+                             height: ceil(rect.maxY * density) / density - floor(rect.minY * density) / density)
+        guard Self.validRect(snapped) else { return nil }
+        var beneath = self
+        beneath.layerStack = LayerStack(touching)
+        beneath.cornerRadius = 0
+        beneath.windowLayers = windowLayers.filter { $0.id != nil }
+        let image = try beneath.flatten(crop: snapped, scale: density)
+        return CensorSource(image: image, frame: CGRect(
+            origin: snapped.origin,
+            size: CGSize(width: CGFloat(image.width) / density,
+                         height: CGFloat(image.height) / density)))
     }
 }

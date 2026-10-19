@@ -122,7 +122,8 @@ final class MarkupView: NSView {
             }
             let l = (shapeLayers[a.id] as? AnnotationLayer) ?? AnnotationLayer()
             shapeLayers[a.id] = l
-            l.update(a, scale: scale)
+            l.update(a, scale: scale,
+                     windowImage: a.windowLayerID.flatMap { controller.windowLayers[$0]?.image })
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }

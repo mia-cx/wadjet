@@ -58,6 +58,44 @@ struct PixelEdgeSnappingTests {
         #expect(SnappingEngine.snap(points: [visible], targets: targets, range: 1.5).offset == CGPoint(x: 1, y: 0))
     }
 
+    // Proves a window moved onto a display it didn't cover at capture paints
+    // its pixels there — the flat-display fast path keys on the window
+    // Annotations' current frames, not the layers' capture-time frames.
+    @Test func movedWindowSnapsWhereItSits() throws {
+        let a = CanvasDisplay(id: 1, frame: CGRect(x: 0, y: 0, width: 100, height: 100), scaleFactor: 1)
+        let b = CanvasDisplay(id: 2, frame: CGRect(x: 100, y: 0, width: 100, height: 100), scaleFactor: 1)
+        var canvas = CanvasDocument(layout: [a, b],
+            crop: CGRect(x: 0, y: 0, width: 200, height: 100),
+            displayImages: [1: try solid([0, 0, 1]), 2: try solid([0, 1, 0])])
+        canvas.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 10, y: 10, width: 40, height: 40),
+                           image: try solid([1, 0, 0])),
+        ])
+        let window = try #require(canvas.layerStack.annotations.last)
+        canvas.layerStack.replace(window.moved(by: CGVector(dx: 100, dy: 0))) // now over B
+        let image = try canvas.snappingImage(for: b)
+        // the window's left edge sits at canvas x 110 → B-local x 10
+        let context = try #require(CGContext(data: nil, width: 100, height: 100, bitsPerComponent: 8,
+                                            bytesPerRow: 400, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: 100, height: 100))
+        let pixels = PixelBuffer(base: try #require(context.data)
+            .assumingMemoryBound(to: UInt8.self), width: 100, height: 100)
+        let probe = CGPoint(x: 115, y: 30)
+        let targets = pixels.snapTargets(points: [probe], bounds: b.frame, range: 6)
+        #expect(SnappingEngine.snap(points: [probe], targets: targets, range: 6).offset == CGPoint(x: -5, y: 0),
+                "window edge pulls the point to x 110")
+    }
+
+    private func solid(_ colour: [CGFloat], side: Int = 100) throws -> CGImage {
+        let context = try #require(CGContext(data: nil, width: side, height: side, bitsPerComponent: 8,
+                                            bytesPerRow: side * 4, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.setFillColor(CGColor(srgbRed: colour[0], green: colour[1], blue: colour[2], alpha: 1))
+        context.fill(CGRect(x: 0, y: 0, width: side, height: side))
+        return try #require(context.makeImage())
+    }
+
     private func bandImage(edge: Int) throws -> CGImage {
         let context = try #require(CGContext(data: nil, width: 40, height: 40, bitsPerComponent: 8,
                                             bytesPerRow: 160, space: CGColorSpace(name: CGColorSpace.sRGB)!,

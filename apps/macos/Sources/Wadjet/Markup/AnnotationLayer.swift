@@ -2,12 +2,14 @@ import AppKit
 import WadjetKit
 
 /// one Annotation on screen: `fill` at the bottom (a closed path's interior),
-/// `stroke` above (the dash-patterned body), `ends` on top (arrowheads, dots,
-/// bars — all filled with the stroke colour). Shapes and Censors draw on
-/// `stroke` alone, like upstream's shape layer; a counter adds `label` — its
-/// white glyph outlines on top.
+/// `image` for a `.window` Annotation's captured window, `stroke` above (the
+/// dash-patterned body), `ends` on top (arrowheads, dots, bars — all filled
+/// with the stroke colour). Shapes and Censors draw on `stroke` alone, like
+/// upstream's shape layer; a counter adds `label` — its white glyph outlines
+/// on top.
 final class AnnotationLayer: CALayer {
     let fill = CAShapeLayer()
+    let image = CALayer()
     let stroke = CAShapeLayer()
     let ends = CAShapeLayer()
     let label = CAShapeLayer()
@@ -19,6 +21,7 @@ final class AnnotationLayer: CALayer {
         stroke.lineCap = .round
         stroke.lineJoin = .round
         addSublayer(fill)
+        addSublayer(image)
         addSublayer(stroke)
         addSublayer(ends)
         addSublayer(label)
@@ -28,9 +31,26 @@ final class AnnotationLayer: CALayer {
     required init?(coder: NSCoder) { fatalError() }
 
     /// repaints the paths from the Annotation's drawing and restyles them;
-    /// a Censor ignores the style: opaque black fill over its rect
-    func update(_ a: Annotation, scale: CGFloat) {
+    /// a Censor ignores the style: opaque black fill over its rect. A window
+    /// Annotation draws `windowImage` (its CanvasWindowLayer's pixels) alone.
+    func update(_ a: Annotation, scale: CGFloat, windowImage: CGImage? = nil) {
         switch a.kind {
+        case let .window(_, frame):
+            fill.path = nil
+            stroke.path = nil
+            ends.path = nil
+            image.contents = windowImage
+            image.contentsGravity = .resize
+            image.preferredDynamicRange = .high
+            image.bounds = CGRect(origin: .zero, size: frame.size)
+            image.position = CGPoint(x: frame.midX, y: frame.midY)
+            // CA transforms about the centre anchor, matching affineTransform
+            image.setAffineTransform(
+                CGAffineTransform(scaleX: a.transform.flipHorizontal ? -1 : 1,
+                                  y: a.transform.flipVertical ? -1 : 1)
+                    .concatenating(CGAffineTransform(rotationAngle: a.transform.rotation)))
+            image.opacity = Float(a.style.opacity)
+            opacity = 1
         case .censor:
             fill.path = nil
             stroke.path = PathGeometry.path(for: a)
@@ -56,6 +76,7 @@ final class AnnotationLayer: CALayer {
         default:
             updateStroke(a)
         }
+        if case .window = a.kind {} else { image.contents = nil }
         // a counter's label: white child layer, gone when there's no label
         label.path = PathGeometry.labelPath(for: a)
         label.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
@@ -64,7 +85,7 @@ final class AnnotationLayer: CALayer {
         // panel; the window server still composites the panel over other apps
         // with normal alpha
         compositingFilter = a.style.blend == .multiply ? "multiplyBlendMode" : nil
-        for l in [self, fill, stroke, ends, label] as [CALayer] { l.contentsScale = scale }
+        for l in [self, fill, image, stroke, ends, label] as [CALayer] { l.contentsScale = scale }
     }
 
     private func updateStroke(_ a: Annotation) {

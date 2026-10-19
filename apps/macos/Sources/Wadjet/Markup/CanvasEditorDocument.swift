@@ -55,11 +55,13 @@ final class CanvasEditorDocument: NSDocument {
     var markup: MarkupController {
         if let markupCached { return markupCached }
         let m = MarkupController(editing: canvas.layerStack)
+        m.windowLayers = Dictionary(canvas.windowLayers.compactMap { l in l.id.map { ($0, l) } },
+                                    uniquingKeysWith: { a, _ in a })
         m.undoManager = undoManager
         m.document = self
         m.snapPixelSources = { [weak self] in
             guard let self else { return [] }
-            let canvas = canvas
+            let canvas = current // the live stack: window Annotations decide each backdrop
             return canvas.layout.map { display in
                 MarkupPixelEdges(bounds: display.frame) {
                     do { return try canvas.snappingImage(for: display) }
@@ -90,6 +92,9 @@ final class CanvasEditorDocument: NSDocument {
         try MainActor.assumeIsolated {
             canvas = try CanvasDocument(fileWrapper: wrapper.value)
             if let markupCached {
+                markupCached.windowLayers = Dictionary(
+                    canvas.windowLayers.compactMap { l in l.id.map { ($0, l) } },
+                    uniquingKeysWith: { a, _ in a })
                 markupCached.load(canvas.layerStack)
                 onReload?()
             }

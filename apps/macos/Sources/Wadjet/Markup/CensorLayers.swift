@@ -14,8 +14,12 @@ import WadjetKit
     /// the global rect sampling covers: the display's frame, or the Canvas's bounds
     private let coverage: CGRect
     private let contentScale: CGFloat
-    /// an Editor's fixed source — the Canvas's composited displays and windows
-    private let staticSource: CIImage?
+    /// an Editor's source renderer: the visible `.window` Annotations beneath a
+    /// Censor in, the Canvas flattened with them — mirrors CanvasRenderer
+    private let render: (([Annotation]) -> CGImage?)?
+    /// an Editor's rendered sources by the windows beneath the Censor, reused
+    /// across syncs until a sync uses them no more
+    private var staticSources: [(windows: [Annotation], image: CIImage?)] = []
     private var imageLayers: [Annotation.ID: CALayer] = [:]
 
     /// a screen panel's Censors draw from the shared ScreenSamples
@@ -23,15 +27,16 @@ import WadjetKit
         self.screen = screen
         coverage = screen.frame
         contentScale = screen.backingScaleFactor
-        staticSource = nil
+        render = nil
     }
 
-    /// an Editor's Censors sample the Canvas's own flat image — no live stream
-    init(staticImage: CGImage, coverage: CGRect, scale: CGFloat) {
+    /// an Editor's Censors sample the Canvas's own flat image — no live
+    /// stream; `render` re-flattens it from the windows beneath a Censor
+    init(coverage: CGRect, scale: CGFloat, render: @escaping ([Annotation]) -> CGImage?) {
         screen = nil
         self.coverage = coverage
         contentScale = scale
-        staticSource = CIImage(cgImage: staticImage)
+        self.render = render
     }
 
     /// the view's annotations each render; `layers` is MarkupView's
@@ -41,8 +46,10 @@ import WadjetKit
             guard case let .censor(_, m) = a.kind, m.samplesBeneath else { return false }
             return PathGeometry.path(for: a).boundingBox.intersects(coverage)
         }
-        let source = staticSource.map { (image: $0, rect: coverage) }
-            ?? screen.flatMap { ScreenSamples.shared.source(on: $0) }
+        // the shared source for the screen: ScreenSamples' frozen frame or
+        // live stream; an Editor resolves each Censor's own in the loop below
+        let shared = screen.flatMap { ScreenSamples.shared.source(on: $0) }
+        var usedWindowSets: [[Annotation]] = []
         // standalone layers outside the panel's own transaction need implicit
         // animations off, or every new sample would smear in
         CATransaction.begin()
@@ -56,9 +63,30 @@ import WadjetKit
             imageLayers[a.id] = layer
             if layer.superlayer !== shape { shape.addSublayer(layer) }
             layer.contentsScale = contentScale
+            var source: CIImage?, sourceRect = CGRect.zero
+            if let render {
+                // what flatten samples: only the visible windows beneath this
+                // Censor in stack order — cached per distinct set
+                let i = annotations.firstIndex(where: { $0.id == a.id }) ?? annotations.endIndex
+                let below = Array(annotations[..<i]).filter {
+                    if case .window = $0.kind { return !$0.hidden }
+                    return false
+                }
+                if let cached = staticSources.first(where: { $0.windows == below }) {
+                    source = cached.image
+                } else {
+                    source = render(below).map(CIImage.init)
+                    staticSources.append((below, source))
+                }
+                usedWindowSets.append(below)
+                sourceRect = coverage
+            } else if let shared {
+                source = shared.image
+                sourceRect = shared.rect
+            }
             guard let source,
                   let (image, rect) = CensorFilter.render(method, region: box,
-                                                          source: source.image, sourceRect: source.rect) else {
+                                                          source: source, sourceRect: sourceRect) else {
                 layer.isHidden = true // no source yet: the shape's black fill shows
                 continue
             }
@@ -75,6 +103,7 @@ import WadjetKit
             imageLayers[id]?.removeFromSuperlayer()
             imageLayers[id] = nil
         }
+        staticSources = staticSources.filter { usedWindowSets.contains($0.windows) }
         CATransaction.commit()
     }
 

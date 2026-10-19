@@ -18,6 +18,9 @@ public struct CanvasDisplay: Codable, Equatable, Sendable {
 }
 
 /// A captured window above the flat displays. Larger z-orders draw in front.
+/// A nil `id` is a backdrop layer (old Canvases and the standalone Capture
+/// Window image), drawn beneath every Annotation by zOrder as before; a
+/// non-nil `id` draws only through the `.window` Annotation naming it.
 public struct CanvasWindowLayer {
     public var frame: CGRect
     public var zOrder: Int
@@ -26,13 +29,20 @@ public struct CanvasWindowLayer {
     /// A standalone window Screenshot replaces the desktop beneath its frame,
     /// preserving window alpha while retaining the displays for recropping.
     public var isolatesBackground: Bool
+    public var id: UUID?
+    public var app: String?
+    public var title: String?
 
-    public init(frame: CGRect, zOrder: Int, imageFileName: String, image: CGImage, isolatesBackground: Bool = false) {
+    public init(frame: CGRect, zOrder: Int, imageFileName: String, image: CGImage, isolatesBackground: Bool = false,
+                id: UUID? = nil, app: String? = nil, title: String? = nil) {
         self.frame = frame
         self.zOrder = zOrder
         self.imageFileName = imageFileName
         self.image = image
         self.isolatesBackground = isolatesBackground
+        self.id = id
+        self.app = app
+        self.title = title
     }
 }
 
@@ -110,8 +120,10 @@ public struct CanvasDocument {
             guard Self.validRect(window.frame) else { throw CanvasDocumentError.invalidGeometry }
             windowLayers.append(CanvasWindowLayer(frame: window.frame, zOrder: window.zOrder,
                 imageFileName: window.imageFileName, image: try readImage(window.imageFileName, in: fileWrapper),
-                isolatesBackground: window.isolatesBackground ?? false))
+                isolatesBackground: window.isolatesBackground ?? false,
+                id: window.id, app: window.app, title: window.title))
         }
+        try validateWindowLayers()
         for path in manifest.embeddedCanvases {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
             guard parts.count == 2, parts[0] == "embedded", Self.validName(String(parts[1])),
@@ -124,8 +136,12 @@ public struct CanvasDocument {
     }
 
     /// Builds the complete directory wrapper, including a flattened SDR thumbnail.
+    /// An id'd window layer is written only while a `.window` Annotation names
+    /// it — deleting the Annotation drops its image from the saved package.
     public func fileWrapper() throws -> FileWrapper {
-        try validateMetadata(windowNames: windowLayers.map(\.imageFileName))
+        try validateWindowLayers()
+        let written = writtenWindowLayers
+        try validateMetadata(windowNames: written.map(\.imageFileName))
         var files: [String: FileWrapper] = [:]
         for display in layout {
             guard let image = displayImages[display.id] else {
@@ -133,7 +149,7 @@ public struct CanvasDocument {
             }
             files[display.imageFileName] = try imageWrapper(image, name: display.imageFileName)
         }
-        for window in windowLayers {
+        for window in written {
             guard Self.validRect(window.frame) else { throw CanvasDocumentError.invalidGeometry }
             files[window.imageFileName] = try imageWrapper(window.image, name: window.imageFileName)
         }
@@ -146,8 +162,9 @@ public struct CanvasDocument {
         }
         files["embedded"] = FileWrapper(directoryWithFileWrappers: embedded)
         let manifest = Manifest(version: Self.version, layout: layout, crop: crop, cornerRadius: cornerRadius,
-            windowLayers: windowLayers.map { WindowMetadata(frame: $0.frame, zOrder: $0.zOrder,
-                imageFileName: $0.imageFileName, isolatesBackground: $0.isolatesBackground ? true : nil) },
+            windowLayers: written.map { WindowMetadata(frame: $0.frame, zOrder: $0.zOrder,
+                imageFileName: $0.imageFileName, isolatesBackground: $0.isolatesBackground ? true : nil,
+                id: $0.id, app: $0.app, title: $0.title) },
             embeddedCanvases: embedded.keys.sorted().map { "embedded/\($0)" }, linkedCanvases: linkedCanvases,
             store: storeMetadata)
         let encoder = JSONEncoder()
@@ -158,6 +175,30 @@ public struct CanvasDocument {
         let thumbnail = try flatten(scale: thumbnailScale)
         files["thumbnail.png"] = FileWrapper(regularFileWithContents: try CanvasImageCodec.png(thumbnail, colourSpace: CGColorSpace.sRGB))
         return FileWrapper(directoryWithFileWrappers: files)
+    }
+
+    /// the window layers a save writes: every backdrop layer plus each id'd
+    /// layer some `.window` Annotation in `layerStack` references
+    private var writtenWindowLayers: [CanvasWindowLayer] {
+        let referenced = Set(layerStack.annotations.compactMap { a -> UUID? in
+            guard case let .window(id, _) = a.kind else { return nil }
+            return id
+        })
+        return windowLayers.filter { $0.id.map(referenced.contains) ?? true }
+    }
+
+    /// window layer ids are unique, and every `.window` Annotation names one
+    private func validateWindowLayers() throws {
+        let ids = windowLayers.compactMap(\.id)
+        guard Set(ids).count == ids.count else {
+            throw CanvasDocumentError.invalidPackage("duplicate window layer ids")
+        }
+        let known = Set(ids)
+        for case let .window(id, _) in layerStack.annotations.map(\.kind) {
+            guard known.contains(id) else {
+                throw CanvasDocumentError.invalidPackage("window Annotation \(id) has no layer")
+            }
+        }
     }
 
     private mutating func readImage(_ name: String, in wrapper: FileWrapper) throws -> CGImage {
@@ -221,6 +262,11 @@ public struct CanvasDocument {
         var zOrder: Int
         var imageFileName: String
         var isolatesBackground: Bool?
+        // nil fields omit themselves, so manifests written before window
+        // layers existed read identically
+        var id: UUID?
+        var app: String?
+        var title: String?
     }
 }
 

@@ -154,7 +154,8 @@ private struct EditorLayersList: View {
             LayersView(annotations: c.stack.annotations,
                        selection: Binding(get: { c.selection }, set: { c.select($0) }),
                        move: c.moveLayer,
-                       update: c.update)
+                       update: c.update,
+                       windowLayers: c.windowLayers)
         }
     }
 }

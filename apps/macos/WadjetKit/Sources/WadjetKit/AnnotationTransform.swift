@@ -39,7 +39,7 @@ extension AnnotationKind {
         case let .line(start, end, bend): [start, end] + (bend.map { [$0] } ?? [])
         case let .path(data):
             data.nodes.flatMap { [$0.anchor] + [$0.handleIn, $0.handleOut].compactMap { $0 } }
-        case let .censor(rect, _), let .shape(_, rect):
+        case let .censor(rect, _), let .shape(_, rect), let .window(_, rect):
             [CGPoint(x: rect.minX, y: rect.minY), CGPoint(x: rect.maxX, y: rect.maxY)]
         case let .counter(center, radius, _, _):
             [CGPoint(x: center.x - radius, y: center.y - radius),
@@ -64,6 +64,8 @@ extension AnnotationKind {
             return .censor(rect: rect.mapCorners(f), method: method)
         case let .shape(kind, rect):
             return .shape(kind, rect: rect.mapCorners(f))
+        case let .window(layerID, frame):
+            return .window(layerID: layerID, frame: frame.mapCorners(f))
         case let .counter(center, radius, value, format):
             let a = f(CGPoint(x: center.x - radius, y: center.y - radius)),
                 b = f(CGPoint(x: center.x + radius, y: center.y + radius))
@@ -87,7 +89,7 @@ extension AnnotationKind {
     /// resizes with one scale on both axes so it keeps its shape
     var keepsAspect: Bool {
         switch self {
-        case .counter: true
+        case .counter, .window: true
         case .line, .path, .censor, .shape, .magnify, .text: false
         }
     }
@@ -96,7 +98,7 @@ extension AnnotationKind {
     var isBox: Bool {
         switch self {
         case .line, .path, .text: false
-        case .censor, .shape, .counter, .magnify: true
+        case .censor, .shape, .counter, .magnify, .window: true
         }
     }
     /// whether rotation and flips apply — a Magnify's frame only moves and

@@ -52,7 +52,7 @@ extension AnnotationKind {
                                     straight: last.handleOut == nil && first.handleIn == nil))
             }
             return segs
-        case .censor, .shape, .counter, .magnify, .text:
+        case .censor, .shape, .counter, .magnify, .text, .window:
             return []
         }
     }
@@ -111,6 +111,8 @@ public enum PathGeometry {
             }
         case let .text(d):
             p.addRect(TextLayout(d).box)
+        case let .window(_, frame):
+            p.addRect(frame)
         }
         var t = a.affineTransform
         return p.copy(using: &t) ?? p
@@ -184,8 +186,9 @@ public enum PathGeometry {
             ends: ends.copy(using: &t) ?? ends)
     }
 
-    /// the area an Annotation paints, as one path: its fill when `fillColour`
-    /// is set, ∪ its stroked outline when `strokeColour` is (∪ a Line's filled
+    /// the area an Annotation paints, as one path: its fill when it fills an
+    /// area (`fillsArea` — filled kinds and windows), ∪ its stroked outline
+    /// when `strokeColour` is (∪ a Line's filled
     /// end marks), ∪ for a Magnify the magnifier's silhouette (∪ that
     /// silhouette stroked at style.width when it carries a border). Use it
     /// where "does it paint here" matters — retention, coverage masks — where
@@ -193,7 +196,7 @@ public enum PathGeometry {
     public static func coverage(for a: Annotation) -> CGPath {
         let p = path(for: a)
         var covered = CGMutablePath() as CGPath
-        if a.fillColour != nil {
+        if a.fillsArea {
             covered = covered.union(p, using: .winding)
         }
         if a.strokeColour != nil {
@@ -220,7 +223,7 @@ public enum PathGeometry {
         if case let .magnify(m) = a.kind,
            m.options.shape.path(in: m.frame).contains(point) { return true }
         let p = path(for: a)
-        if a.fillColour != nil && p.contains(point) { return true }
+        if a.fillsArea && p.contains(point) { return true }
         if p.copy(strokingWithWidth: (a.strokeColour == nil ? 0 : a.style.width) + 2 * tolerance,
                   lineCap: .round, lineJoin: .round, miterLimit: 10)
             .contains(point) { return true }

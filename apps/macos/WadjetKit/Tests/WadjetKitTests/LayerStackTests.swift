@@ -215,6 +215,23 @@ struct LayerStackTests {
         #expect(try JSONDecoder().decode(AnnotationStyle.self, from: old).fill == nil)
     }
 
+    // Proves a .window Annotation on the wire — {"window":{"layer":"<UUID>",
+    // "frame":[x,y,w,h]}} — decodes to the expected Annotation and round-trips.
+    @Test func windowAnnotationJSONRoundTrip() throws {
+        let layerID = UUID(uuidString: "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")!
+        var stack = LayerStack()
+        stack.add(Annotation(kind: .window(layerID: layerID, frame: CGRect(x: 1, y: 2, width: 3, height: 4)),
+                             style: red4))
+        let json = try stack.json()
+        let root = try #require(JSONSerialization.jsonObject(with: json) as? [String: Any])
+        let annotation = try #require((root["annotations"] as? [[String: Any]])?.first)
+        let kind = try #require(annotation["kind"] as? [String: Any])
+        let window = try #require(kind["window"] as? [String: Any])
+        #expect(window["layer"] as? String == "6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F")
+        #expect(window["frame"] as? [Double] == [1, 2, 3, 4])
+        #expect(try LayerStack(json: json) == stack)
+    }
+
     @Test func newerVersionIsRejected() {
         let json = Data(#"{"version":2,"annotations":[]}"#.utf8)
         #expect(throws: (any Error).self) { try LayerStack(json: json) }

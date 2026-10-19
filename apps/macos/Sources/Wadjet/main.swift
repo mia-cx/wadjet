@@ -4027,6 +4027,7 @@ struct ToolMenuView: View {
             case .shot:
                 tileRow(shotTiles)
                 autoRedactRow()
+                keepWindowsRow()
                 if tool == .capRegion { section("Start") { confirmRow() } }
                 section("Workflow") { workflowRows() }
             case .rec:

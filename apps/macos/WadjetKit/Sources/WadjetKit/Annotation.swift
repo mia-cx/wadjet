@@ -52,12 +52,16 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
     case path(PathData)
     case magnify(Magnifier)
     case text(TextData)
+    /// a captured window shown from the Canvas's window layer `layerID`, at
+    /// `frame` (untransformed, global points)
+    case window(layerID: UUID, frame: CGRect)
 
-    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify, text }
+    enum CodingKeys: String, CodingKey { case line, censor, shape, counter, path, magnify, text, window }
     enum LineKeys: String, CodingKey { case start, end, bend }
     enum CensorKeys: String, CodingKey { case rect, method }
     enum ShapeKeys: String, CodingKey { case kind, rect }
     enum CounterKeys: String, CodingKey { case center, radius, value, format }
+    enum WindowKeys: String, CodingKey { case layer, frame }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         if c.contains(.line) {
@@ -85,10 +89,14 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             self = .magnify(try c.decode(Magnifier.self, forKey: .magnify))
         } else if c.contains(.text) {
             self = .text(try c.decode(TextData.self, forKey: .text))
+        } else if c.contains(.window) {
+            let n = try c.nestedContainer(keyedBy: WindowKeys.self, forKey: .window)
+            self = .window(layerID: try n.decode(UUID.self, forKey: .layer),
+                           frame: try n.decodeRect(forKey: .frame))
         } else {
             throw DecodingError.dataCorrupted(
                 DecodingError.Context(codingPath: decoder.codingPath,
-                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, a magnify, or a text"))
+                                      debugDescription: "an AnnotationKind is a line, a path, a censor, a shape, a counter, a magnify, a text, or a window"))
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -119,6 +127,10 @@ public enum AnnotationKind: Codable, Equatable, Sendable {
             try c.encode(m, forKey: .magnify)
         case let .text(data):
             try c.encode(data, forKey: .text)
+        case let .window(layerID, frame):
+            var n = c.nestedContainer(keyedBy: WindowKeys.self, forKey: .window)
+            try n.encode(layerID, forKey: .layer)
+            try n.encodeRect(frame, forKey: .frame)
         }
     }
 }
@@ -287,7 +299,7 @@ extension Annotation {
         case .line, .magnify: style.colour
         case let .path(d): !d.closed || style.stroked ? style.colour : nil
         case .shape: style.stroked ? style.colour : nil
-        case .censor, .counter, .text: nil
+        case .censor, .counter, .text, .window: nil
         }
     }
     /// what the inside fills with: a shape's or closed path's `style.fill`, a
@@ -296,7 +308,7 @@ extension Annotation {
     /// the glyphs in the text colour
     public var fillColour: RGBAColour? {
         switch kind {
-        case .line, .magnify: nil
+        case .line, .magnify, .window: nil
         case let .path(d): d.closed ? style.fill : nil
         case .shape: style.fill
         case .censor: RGBAColour(red: 0, green: 0, blue: 0, alpha: 1)
@@ -314,6 +326,11 @@ extension Annotation {
         case let .magnify(m): m.viewport
         default: nil
         }
+    }
+    /// hit-tested by its area: filled kinds and windows
+    public var fillsArea: Bool {
+        if case .window = kind { return true }
+        return fillColour != nil
     }
 }
 

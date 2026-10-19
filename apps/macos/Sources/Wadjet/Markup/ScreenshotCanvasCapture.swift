@@ -16,6 +16,7 @@ extension AppDelegate {
         let annotations = MarkupController.shared.stack
         let workflow = takeShotWorkflow()
         let cursor = state.shotCursor, wadjet = state.shotWadjet
+        let keepWindows = tool.captureSettings.map { state.config.value.tools[keyPath: $0].windowLayers } ?? false
         let clear = state.config.value.markup.clearAfterScreenshot
         let live = !overlayCtrl.showsFrozen
         let redact = tool.captureSettings.map { state.config.value.tools[keyPath: $0].smartRedact } ?? false
@@ -42,7 +43,31 @@ extension AppDelegate {
                     : displays
                 var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius ?? 0,
                     annotations: annotations, windowCapture: windowID != nil)
-                if let windowID {
+                if keepWindows {
+                    // a capture failure keeps the window's flat pixels, so it
+                    // still occludes what the flat displays show behind it
+                    let flat = { () -> CanvasDocument in
+                        var c = canvas; c.layerStack = LayerStack(); c.cornerRadius = 0; return c
+                    }()
+                    var windows = await overlayCtrl.captureWindowLayers(over: screens, cursor: cursor,
+                        wadjet: wadjet) { frame, scale in
+                        do { return try flat.flatten(crop: frame, scale: scale) }
+                        catch {
+                            AppLog.line("window layers: flat fallback: \(error.localizedDescription)")
+                            return nil
+                        }
+                    }
+                    if let windowID {
+                        // the captured window stays topmost so the output
+                        // matches a plain Capture Window
+                        if let i = windows.firstIndex(where: { $0.id == windowID }) {
+                            windows.insert(windows.remove(at: i), at: 0)
+                        } else {
+                            AppLog.line("window \(windowID) not capturable; falling back to clean display crop")
+                        }
+                    }
+                    canvas.addWindowLayers(windows.map(\.window))
+                } else if let windowID {
                     if let image = await captureWindow(id: windowID, screen: screen, cursor: cursor) {
                         // A window capture keeps its unobscured contents, including
                         // portions offscreen. The clean displays remain available for recropping.
@@ -58,22 +83,32 @@ extension AppDelegate {
                     SmartRedact.censors(covering: boxes, style: redactStyle, existing: canvas.layerStack)
                         .forEach { canvas.layerStack.add($0) }
                 }
-                try writeScreenshot(canvas, scale: scale, capturedAt: capturedAt, clear: clear,
+                let writing = Date()
+                let package = try writeScreenshot(canvas, scale: scale, capturedAt: capturedAt, clear: clear,
                     label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: workflow)
+                if keepWindows {
+                    let written = Int(Date().timeIntervalSince(writing) * 1000)
+                    func mb(_ bytes: Int) -> String { String(format: "%.1f", Double(bytes) / 1_000_000) }
+                    let decoded = canvas.windowLayers.reduce(0) { $0 + $1.image.bytesPerRow * $1.image.height }
+                    AppLog.line("window layers: Canvas \(mb(packageSizeOnDisk(package))) MB on disk, written in \(written) ms; window images \(mb(decoded)) MB decoded; footprint \(mb(processFootprint())) MB")
+                }
             } catch {
                 AppLog.line("Screenshot Canvas: \(error.localizedDescription)")
             }
         }
     }
 
-    /// Writes both outputs before Clear after Screenshot can discard the editable layers.
+    /// Writes both outputs before Clear after Screenshot can discard the editable
+    /// layers. Returns the Canvas package's URL in the store.
+    @discardableResult
     func writeScreenshot(_ canvas: CanvasDocument, scale: CGFloat, capturedAt: Date, clear: Bool,
-                         label: String, workflow: String) throws {
+                         label: String, workflow: String) throws -> URL {
         let shot = try canvasStore.addScreenshot(canvas, files: captureFiles, scale: scale,
             createdAt: capturedAt)
         if clear { clearAnnotations() }
         runCapture(file: shot.file, kind: .screenshot, label: label, workflow: workflow,
             runID: shot.id, capturedAt: capturedAt, canvas: shot.package)
+        return shot.package
     }
 }
 
