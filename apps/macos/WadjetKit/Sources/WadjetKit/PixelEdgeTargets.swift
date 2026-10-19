@@ -10,16 +10,20 @@ extension Annotation {
 }
 
 extension CanvasDocument {
-    /// The visible unannotated backdrop for one display, at its retained bitmap
-    /// resolution. Window layers replace/composite the display as in the Editor;
-    /// crop, rounded corners and Annotations must not contribute pixel targets.
+    /// The visible backdrop for one display at its retained bitmap resolution:
+    /// the display plus its visible `.window` Annotations composite as in the
+    /// Editor; crop, rounded corners and other Annotations must not contribute
+    /// pixel targets.
     public func snappingImage(for display: CanvasDisplay) throws -> CGImage {
         guard let image = displayImages[display.id] else {
             throw CanvasDocumentError.invalidPackage(display.imageFileName)
         }
         guard windowLayers.contains(where: { $0.frame.intersects(display.frame) }) else { return image }
         var backdrop = self
-        backdrop.layerStack = LayerStack()
+        backdrop.layerStack = LayerStack(layerStack.annotations.filter {
+            if case .window = $0.kind { return !$0.hidden }
+            return false
+        })
         backdrop.cornerRadius = 0
         return try backdrop.flatten(crop: display.frame, scale: CGFloat(image.width) / display.frame.width)
     }
