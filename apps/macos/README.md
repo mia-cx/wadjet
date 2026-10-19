@@ -58,7 +58,9 @@ delete, the arrows and punctuation; every shortcut needs a modifier unless it's 
 f-key. `tool` is a ToolID (`captureRegion`, `captureWindow`, `captureScreen`,
 `recordRegion`, `recordWindow`, `recordScreen`, `pickColour`, `copyText`, `measure`).
 `workflow` names a Workflow of the right kind for the tool; the optional `options`
-apply countdown/systemAudio/microphone/cursor/clickCircles before the tool triggers.
+apply countdown/systemAudio/microphone/cursor/clickCircles before the tool triggers,
+and `freeze`/`freezeWhileRecording` override whether the tool opens on a Freeze
+Frame (`capture.freezeWhileRecording` does the same globally during a recording).
 Edits are picked up live; a shortcut that clashes with an enabled macOS screenshot
 shortcut is still registered but flagged with a toast and a log line.
 `defaultWorkflows.screenshot` / `.recording` pick the Workflow each kind runs when
