@@ -50,6 +50,8 @@ final class MarkupView: NSView {
     let magnifiers: MagnifierLayers?
     /// the annotations from the last `show`, for syncSampled
     private var shown: [Annotation] = []
+    /// the last `show`'s Eraser-marked ids, re-applied by syncSampled
+    private var shownDimmed: Set<Annotation.ID> = []
     /// a panel's view: screen frame for its region, its own backing scale
     convenience init(frame f: NSRect, screen: NSScreen) {
         self.init(frame: f, region: screen.frame, scale: screen.backingScaleFactor,
@@ -114,10 +116,13 @@ final class MarkupView: NSView {
     /// without touching the rest; array order = back to front. Image kinds get
     /// a MarkupImageLayer, the rest a CAShapeLayer. `selection` draws its frame
     /// and grips on top — except while the selection is the text being edited —
-    /// and while `cropping` names it, only resize grips show.
+    /// and while `cropping` names it, only resize grips show. `dimmed` are the
+    /// Annotations an Eraser drag has marked — they draw faint until release.
     func show(_ annotations: [Annotation], selection: Annotation?,
-              editing: Annotation.ID? = nil, cropping: Annotation.ID? = nil) {
+              editing: Annotation.ID? = nil, cropping: Annotation.ID? = nil,
+              dimmed: Set<Annotation.ID> = []) {
         shown = annotations
+        shownDimmed = dimmed
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for a in annotations {
@@ -125,19 +130,25 @@ final class MarkupView: NSView {
                 let l = (shapeLayers[a.id] as? TextAnnotationLayer) ?? TextAnnotationLayer()
                 shapeLayers[a.id] = l
                 l.show(a, editing: a.id == editing, scale: scale)
+                // TextLayout.draw applies the style's opacity itself; the
+                // layer's carries only the Eraser's dim, reset every show
+                l.opacity = dimmed.contains(a.id) ? Float(MarkupEraser.dimOpacity) : 1
                 continue
             }
             let l = (shapeLayers[a.id] as? AnnotationLayer) ?? AnnotationLayer()
             if a.placement != nil { // image kinds never get a shape layer
                 let l = imageLayers[a.id] ?? MarkupImageLayer()
                 imageLayers[a.id] = l
+                // update() sets the style's opacity; the dim multiplies it
                 l.update(a, source: controller.assets.source(for: a),
                          cropping: a.id == cropping, scale: scale)
+                if dimmed.contains(a.id) { l.opacity *= Float(MarkupEraser.dimOpacity) }
                 continue
             }
             shapeLayers[a.id] = l
             l.update(a, scale: scale,
                      windowImage: a.windowLayerID.flatMap { controller.windowLayers[$0]?.image })
+            if dimmed.contains(a.id) { l.opacity *= Float(MarkupEraser.dimOpacity) }
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }
@@ -191,7 +202,7 @@ final class MarkupView: NSView {
         // into their own AnnotationLayers
         let layers = shapeLayers.compactMapValues { $0 as? AnnotationLayer }
         censors?.sync(annotations, layers: layers)
-        magnifiers?.sync(annotations, layers: layers, scale: scale)
+        magnifiers?.sync(annotations, layers: layers, scale: scale, dimmed: dimmed)
         CATransaction.commit()
     }
 
@@ -202,7 +213,7 @@ final class MarkupView: NSView {
         CATransaction.setDisableActions(true)
         let layers = shapeLayers.compactMapValues { $0 as? AnnotationLayer }
         censors?.sync(shown, layers: layers)
-        magnifiers?.sync(shown, layers: layers, scale: scale)
+        magnifiers?.sync(shown, layers: layers, scale: scale, dimmed: shownDimmed)
         CATransaction.commit()
     }
 
@@ -265,6 +276,8 @@ final class MarkupView: NSView {
     func setToolCursor() {
         let c = controller
         if c.selecting { NSCursor.arrow.set() }
+        // the eraser ring is drawn at the view's zoom, not screen size
+        else if c.armed == .eraser { MarkupEraser.cursor(zoom: c.zoom).set() }
         else if let t = c.armed { WadjetCursors.cursor(for: t).set() }
     }
 }

@@ -63,8 +63,10 @@ import WadjetKit
 
     /// the panel's annotations each render, in stack order; `layers` is
     /// MarkupView's AnnotationLayer map so each magnifier lands on its own
-    /// Magnify's layer
-    func sync(_ annotations: [Annotation], layers: [Annotation.ID: AnnotationLayer], scale: CGFloat) {
+    /// Magnify's layer. `dimmed` dims a marked Magnify's glass rim too — its
+    /// wrapper is a view above the canvas, outside the layer's own opacity
+    func sync(_ annotations: [Annotation], layers: [Annotation.ID: AnnotationLayer],
+              scale: CGFloat, dimmed: Set<Annotation.ID> = []) {
         var seen = Set<Annotation.ID>()
         var ordered: [NSView] = []
         let renderScale = staticScale ?? scale
@@ -136,6 +138,7 @@ import WadjetKit
                 wrapper.wantsLayer = true
                 wrapper.frame = m.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
                 wrapper.alphaValue = CGFloat(a.style.opacity)
+                    * (dimmed.contains(a.id) ? MarkupEraser.dimOpacity : 1)
                 if host.superview !== wrapper {
                     wrapper.addSubview(host)
                     host.frame = wrapper.bounds

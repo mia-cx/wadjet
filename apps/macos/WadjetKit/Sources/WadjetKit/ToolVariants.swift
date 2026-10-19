@@ -18,6 +18,7 @@ extension ToolID {
     /// A Tool gains variants here, and scroll and the toolbar icon follow.
     public var variants: [ToolVariant] {
         switch self {
+        case .eraser: EraserVariant.allCases.map(\.variant)
         case .draw: DrawVariant.allCases.map(\.variant)
         case .shapes: ShapeVariant.allCases.map(\.variant)
         case .censor: CensorMethod.methods.map(\.variant)
