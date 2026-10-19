@@ -54,7 +54,9 @@ final class MarkupController {
     @ObservationIgnored private var panels: [MarkupPanel] = []
     @ObservationIgnored private var flagsMon: Any?
     @ObservationIgnored private var keyMon: Any?
-    var windowNumbers: [Int] { panels.map(\.windowNumber) }
+    var windowNumbers: [Int] {
+        panels.map(\.windowNumber) + (LayersWindow.shared.windowNumber.map { [$0] } ?? [])
+    }
 
     init() {
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -81,9 +83,11 @@ final class MarkupController {
     private func endHistoryIfClosed() {
         if !AppState.shared.toolbarOpen { history.end(ifCleared: stack) }
     }
-    /// Carbon command keys track the toolbar; call on every phase/tool change
+    /// Carbon command keys and the Layers window track the toolbar; call on
+    /// every phase/tool change
     func syncSession() {
         MarkupKeys.shared.sync(active: AppState.shared.toolbarOpen)
+        LayersWindow.shared.sync()
         endHistoryIfClosed()
     }
 
@@ -97,7 +101,8 @@ final class MarkupController {
     }
     private func restore(_ s: LayerStack) {
         stack = s
-        if selected == nil { selection = nil }
+        // gone, hidden, or locked: none of those can stay the selection
+        if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
         syncPanels(); render()
     }
 
@@ -226,6 +231,33 @@ final class MarkupController {
         guard let a = selected else { return }
         edit { $0.replace(f(a)) }
         AppLog.line("markup: transformed selection")
+    }
+
+    /// ⌘] / ⌘[ / ⇧⌘] / ⇧⌘[ move the selection through the stack
+    func restackSelection(_ move: LayerStack.Restack) {
+        guard let id = selection else { return }
+        edit { $0.restack(id, move) }
+        AppLog.line("markup: restacked selection \(move)")
+    }
+
+    /// the Layers window's drag: `index` is back-to-front
+    func moveLayer(_ id: Annotation.ID, to index: Int) {
+        edit { $0.move(id, to: index) }
+    }
+
+    /// hide/lock from the Layers window — a hidden or locked selection can't stay selected
+    func update(_ a: Annotation) {
+        edit { $0.replace(a) }
+        if a.hidden || a.locked, selection == a.id { selection = nil }
+    }
+
+    /// the Layers window's row tap: nil deselects; a real id arms Select first
+    /// if nothing is armed, then selects — hidden and locked Annotations refuse
+    func select(_ id: Annotation.ID?) {
+        guard let id else { deselect(); return }
+        guard let a = stack.annotations.first(where: { $0.id == id }), !a.hidden, !a.locked else { return }
+        if armed == nil { AppDelegate.shared?.trigger(.select) }
+        if armed != nil { selection = id }
     }
 
     /// true when there was a selection to drop
@@ -371,7 +403,7 @@ final class MarkupController {
     }
 
     func render() {
-        let shown = stack.annotations + [draft].compactMap { $0 }
+        let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
     }

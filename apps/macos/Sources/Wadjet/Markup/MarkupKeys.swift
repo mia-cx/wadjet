@@ -1,11 +1,12 @@
 import AppKit
 import Carbon
 
-/// Markup's command keys (⌘Z, ⇧⌘Z) as Carbon hot keys, registered while the
-/// toolbar is open — the same seam Escape uses — so the apps underneath keep
-/// their own undo the rest of the time. Keys follow the current keyboard
-/// layout: a character means wherever that character is typed, not the ANSI
-/// key position (Z sits where US has Y on German QWERTZ).
+/// Markup's command keys (⌘Z ⇧⌘Z undo, ⌘] ⌘[ ⇧⌘] ⇧⌘[ restack, ⌘⌥L Layers) as
+/// Carbon hot keys, registered while the toolbar is open — the same seam
+/// Escape uses — so the apps underneath keep their own undo the rest of the
+/// time. Keys follow the current keyboard layout: a character means wherever
+/// that character is typed, not the ANSI key position (Z sits where US has Y
+/// on German QWERTZ).
 @MainActor
 final class MarkupKeys {
     static let shared = MarkupKeys()
@@ -16,6 +17,11 @@ final class MarkupKeys {
     private static let keys: [(character: Character, fallback: Int, modifiers: Int, action: @MainActor () -> Void)] = [
         ("z", kVK_ANSI_Z, cmdKey, { MarkupController.shared.undo() }),
         ("z", kVK_ANSI_Z, cmdKey | shiftKey, { MarkupController.shared.redo() }),
+        ("]", kVK_ANSI_RightBracket, cmdKey, { MarkupController.shared.restackSelection(.up) }),
+        ("[", kVK_ANSI_LeftBracket, cmdKey, { MarkupController.shared.restackSelection(.down) }),
+        ("]", kVK_ANSI_RightBracket, cmdKey | shiftKey, { MarkupController.shared.restackSelection(.front) }),
+        ("[", kVK_ANSI_LeftBracket, cmdKey | shiftKey, { MarkupController.shared.restackSelection(.back) }),
+        ("l", kVK_ANSI_L, cmdKey | optionKey, { LayersWindow.shared.toggle() }),
     ]
     private var refs: [EventHotKeyRef] = []
     private var registered = false
