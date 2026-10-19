@@ -12,9 +12,13 @@ struct SmartRedactDetectorTests {
     // Proves each supported category is found, while invalid checksums and token near misses stay clear.
     @Test(arguments: [
         Fixture(text: "mia@example.com", category: .email),
+        Fixture(text: "mia at example dot com", category: nil),
         Fixture(text: "+1 (415) 555-2671", category: .phoneNumber),
+        Fixture(text: "Room 12", category: nil),
         Fixture(text: "https://example.com/private", category: .link),
+        Fixture(text: "example dot com", category: nil),
         Fixture(text: "1 Infinite Loop, Cupertino, CA 95014", category: .streetAddress),
+        Fixture(text: "Infinite Loop", category: nil),
         Fixture(text: "4111 1111 1111 1111", category: .cardNumber),
         Fixture(text: "4111-1111-1111-1111", category: .cardNumber),
         Fixture(text: "4111 1111 1111 1112", category: nil),

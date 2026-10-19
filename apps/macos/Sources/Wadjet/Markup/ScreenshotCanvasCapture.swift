@@ -18,6 +18,9 @@ extension AppDelegate {
         let cursor = state.shotCursor, wadjet = state.shotWadjet
         let clear = state.config.value.markup.clearAfterScreenshot
         let live = !overlayCtrl.showsFrozen
+        let redact = tool.captureSettings.map { state.config.value.tools[keyPath: $0].smartRedact } ?? false
+        let categories = smartRedactCategories
+        let redactStyle = MarkupStyles.shared.style(for: .censor)
         let capturedAt = Date()
         let screens = frozen.map(\.screen)
         let displays = frozen.compactMap { fd -> CapturedCanvasDisplay? in
@@ -47,6 +50,13 @@ extension AppDelegate {
                     } else {
                         AppLog.line("window \(windowID) not capturable; falling back to clean display crop")
                     }
+                }
+                if redact {
+                    let boxes = try await SmartRedact.boxes(
+                        in: [.init(image: canvas.flatten(scale: scale), frame: canvas.crop)],
+                        categories: categories)
+                    SmartRedact.censors(covering: boxes, style: redactStyle, existing: canvas.layerStack)
+                        .forEach { canvas.layerStack.add($0) }
                 }
                 try writeScreenshot(canvas, scale: scale, capturedAt: capturedAt, clear: clear,
                     label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: workflow)

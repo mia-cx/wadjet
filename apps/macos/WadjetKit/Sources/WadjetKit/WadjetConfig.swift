@@ -35,12 +35,28 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     }
     public struct Tools: Codable, Equatable, Sendable {
         public var pickColour = PickColour(); public var measure = Measure(); public var region = Region()
+        public var captureRegion = CaptureTool()
+        public var captureWindow = CaptureTool()
+        public var captureScreen = CaptureTool()
         public init() {}
         public init(from decoder: Decoder) throws { // members keep defaults when a section is partial
             let c = try decoder.container(keyedBy: CodingKeys.self)
             pickColour = try c.decodeIfPresent(PickColour.self, forKey: .pickColour) ?? PickColour()
             measure = try c.decodeIfPresent(Measure.self, forKey: .measure) ?? Measure()
             region = try c.decodeIfPresent(Region.self, forKey: .region) ?? Region()
+            captureRegion = try c.decodeIfPresent(CaptureTool.self, forKey: .captureRegion) ?? CaptureTool()
+            captureWindow = try c.decodeIfPresent(CaptureTool.self, forKey: .captureWindow) ?? CaptureTool()
+            captureScreen = try c.decodeIfPresent(CaptureTool.self, forKey: .captureScreen) ?? CaptureTool()
+        }
+    }
+    /// one Capture Tool's settings at `tools.<toolID>`; `smartRedact` blacks
+    /// out Smart Redact matches in each Screenshot before its Workflow runs
+    public struct CaptureTool: Codable, Equatable, Sendable {
+        public var smartRedact = false
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            smartRedact = try decoder.container(keyedBy: CodingKeys.self)
+                .decodeIfPresent(Bool.self, forKey: .smartRedact) ?? false
         }
     }
     public struct PickColour: Codable, Equatable, Sendable { public var format = ColourFormat.hex; public init() {} }

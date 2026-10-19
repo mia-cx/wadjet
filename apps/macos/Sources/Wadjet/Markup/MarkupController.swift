@@ -293,6 +293,13 @@ final class MarkupController {
         syncPanels()
     }
 
+    /// adds Annotations as one undo step — Smart Redact's Censors
+    func add(_ annotations: [Annotation]) {
+        guard !annotations.isEmpty else { return }
+        edit { s in annotations.forEach { s.add($0) } }
+        syncPanels(); render()
+    }
+
     /// the selected Annotation's style; setting restyles it alone — the seam the
     /// Tool menu's style tiles hook into
     var selectedStyle: AnnotationStyle? {
