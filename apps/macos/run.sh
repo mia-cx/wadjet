@@ -38,6 +38,8 @@ fi
 xcodebuild -project Wadjet.xcodeproj -scheme Wadjet -configuration Release \
     -derivedDataPath build/DerivedData -destination "platform=macOS,arch=$(uname -m)" \
     ONLY_ACTIVE_ARCH=YES CODE_SIGN_IDENTITY="$IDENTITY" $TEAM_ARG \
+    MARKETING_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist)" \
+    CURRENT_PROJECT_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' Resources/Info.plist)" \
     SWIFT_ACTIVE_COMPILATION_CONDITIONS="$CONDITIONS" -quiet "$@" build
 
 rm -rf "$APP"

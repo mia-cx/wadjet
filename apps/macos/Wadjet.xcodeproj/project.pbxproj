@@ -34,6 +34,8 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000003 /* Wadjet */,
+				B10000000000000000000003 /* CanvasThumbnail */,
+				B20000000000000000000003 /* CanvasPreview */,
 				A10000000000000000000006 /* Products */,
 			);
 			sourceTree = "<group>";
@@ -42,6 +44,8 @@
 			isa = PBXGroup;
 			children = (
 				A10000000000000000000007 /* Wadjet.app */,
+				B10000000000000000000002 /* CanvasThumbnail.appex */,
+				B20000000000000000000002 /* CanvasPreview.appex */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -55,10 +59,13 @@
 			buildPhases = (
 				A10000000000000000000009 /* Sources */,
 				A10000000000000000000004 /* Frameworks */,
+				B30000000000000000000001 /* Embed App Extensions */,
 			);
 			buildRules = (
 			);
 			dependencies = (
+				B1000000000000000000000d /* CanvasThumbnail */,
+				B2000000000000000000000d /* CanvasPreview */,
 			);
 			fileSystemSynchronizedGroups = (
 				A10000000000000000000003 /* Wadjet */,
@@ -106,6 +113,8 @@
 			projectRoot = "";
 			targets = (
 				A10000000000000000000008 /* Wadjet */,
+				B10000000000000000000005 /* CanvasThumbnail */,
+				B20000000000000000000005 /* CanvasPreview */,
 			);
 		};
 /* End PBXProject section */
@@ -337,6 +346,242 @@
 			productName = KeyboardShortcuts;
 		};
 /* End XCSwiftPackageProductDependency section */
+
+		B30000000000000000000001 /* Embed App Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (B10000000000000000000001, B20000000000000000000001,);
+			name = "Embed App Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000001 /* CanvasThumbnail.appex in Embed App Extensions */ = {
+			isa = PBXBuildFile;
+			fileRef = B10000000000000000000002;
+			settings = { ATTRIBUTES = (RemoveHeadersOnCopy,); };
+		};
+		B10000000000000000000002 /* CanvasThumbnail.appex */ = {
+			isa = PBXFileReference;
+			explicitFileType = "wrapper.app-extension";
+			includeInIndex = 0;
+			path = CanvasThumbnail.appex;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		B10000000000000000000003 /* CanvasThumbnail */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (B10000000000000000000004,);
+			path = Extensions/CanvasThumbnail;
+			sourceTree = "<group>";
+		};
+		B10000000000000000000004 = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (Info.plist,);
+			target = B10000000000000000000005;
+		};
+		B10000000000000000000005 /* CanvasThumbnail */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B10000000000000000000006;
+			buildPhases = (B10000000000000000000007, B10000000000000000000008,);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (B10000000000000000000003,);
+			name = CanvasThumbnail;
+			packageProductDependencies = (B10000000000000000000009,);
+			productName = CanvasThumbnail;
+			productReference = B10000000000000000000002;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B10000000000000000000006 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (B1000000000000000000000a, B1000000000000000000000b,);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B10000000000000000000007 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000008 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (B1000000000000000000000c,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B10000000000000000000009 = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000011;
+			productName = WadjetKit;
+		};
+		B1000000000000000000000c = {
+			isa = PBXBuildFile;
+			productRef = B10000000000000000000009;
+		};
+		B1000000000000000000000d = {
+			isa = PBXTargetDependency;
+			target = B10000000000000000000005;
+			targetProxy = B1000000000000000000000e;
+		};
+		B1000000000000000000000e = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000000A;
+			proxyType = 1;
+			remoteGlobalIDString = B10000000000000000000005;
+			remoteInfo = CanvasThumbnail;
+		};
+		B1000000000000000000000a /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/QuickLook.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = VJKBGC9AMK;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/CanvasThumbnail/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = ("@executable_path/../Frameworks", "@executable_path/../../../../Frameworks",);
+				PRODUCT_BUNDLE_IDENTIFIER = cx.mia.wadjet.thumbnail;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+			};
+			name = Debug;
+		};
+		B1000000000000000000000b /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/QuickLook.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = VJKBGC9AMK;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/CanvasThumbnail/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = ("@executable_path/../Frameworks", "@executable_path/../../../../Frameworks",);
+				PRODUCT_BUNDLE_IDENTIFIER = cx.mia.wadjet.thumbnail;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+			};
+			name = Release;
+		};
+		B20000000000000000000001 /* CanvasPreview.appex in Embed App Extensions */ = {
+			isa = PBXBuildFile;
+			fileRef = B20000000000000000000002;
+			settings = { ATTRIBUTES = (RemoveHeadersOnCopy,); };
+		};
+		B20000000000000000000002 /* CanvasPreview.appex */ = {
+			isa = PBXFileReference;
+			explicitFileType = "wrapper.app-extension";
+			includeInIndex = 0;
+			path = CanvasPreview.appex;
+			sourceTree = BUILT_PRODUCTS_DIR;
+		};
+		B20000000000000000000003 /* CanvasPreview */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			exceptions = (B20000000000000000000004,);
+			path = Extensions/CanvasPreview;
+			sourceTree = "<group>";
+		};
+		B20000000000000000000004 = {
+			isa = PBXFileSystemSynchronizedBuildFileExceptionSet;
+			membershipExceptions = (Info.plist,);
+			target = B20000000000000000000005;
+		};
+		B20000000000000000000005 /* CanvasPreview */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = B20000000000000000000006;
+			buildPhases = (B20000000000000000000007, B20000000000000000000008,);
+			buildRules = ();
+			dependencies = ();
+			fileSystemSynchronizedGroups = (B20000000000000000000003,);
+			name = CanvasPreview;
+			packageProductDependencies = (B20000000000000000000009,);
+			productName = CanvasPreview;
+			productReference = B20000000000000000000002;
+			productType = "com.apple.product-type.app-extension";
+		};
+		B20000000000000000000006 = {
+			isa = XCConfigurationList;
+			buildConfigurations = (B2000000000000000000000a, B2000000000000000000000b,);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		B20000000000000000000007 = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = ();
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000008 = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (B2000000000000000000000c,);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		B20000000000000000000009 = {
+			isa = XCSwiftPackageProductDependency;
+			package = A10000000000000000000011;
+			productName = WadjetKit;
+		};
+		B2000000000000000000000c = {
+			isa = PBXBuildFile;
+			productRef = B20000000000000000000009;
+		};
+		B2000000000000000000000d = {
+			isa = PBXTargetDependency;
+			target = B20000000000000000000005;
+			targetProxy = B2000000000000000000000e;
+		};
+		B2000000000000000000000e = {
+			isa = PBXContainerItemProxy;
+			containerPortal = A1000000000000000000000A;
+			proxyType = 1;
+			remoteGlobalIDString = B20000000000000000000005;
+			remoteInfo = CanvasPreview;
+		};
+		B2000000000000000000000a /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/QuickLook.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = VJKBGC9AMK;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/CanvasPreview/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = ("@executable_path/../Frameworks", "@executable_path/../../../../Frameworks",);
+				PRODUCT_BUNDLE_IDENTIFIER = cx.mia.wadjet.preview;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+			};
+			name = Debug;
+		};
+		B2000000000000000000000b /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				APPLICATION_EXTENSION_API_ONLY = YES;
+				CODE_SIGN_ENTITLEMENTS = Extensions/QuickLook.entitlements;
+				CODE_SIGN_IDENTITY = "-";
+				CODE_SIGN_STYLE = Manual;
+				DEVELOPMENT_TEAM = VJKBGC9AMK;
+				ENABLE_HARDENED_RUNTIME = NO;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = Extensions/CanvasPreview/Info.plist;
+				LD_RUNPATH_SEARCH_PATHS = ("@executable_path/../Frameworks", "@executable_path/../../../../Frameworks",);
+				PRODUCT_BUNDLE_IDENTIFIER = cx.mia.wadjet.preview;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SKIP_INSTALL = YES;
+				SWIFT_TREAT_WARNINGS_AS_ERRORS = YES;
+			};
+			name = Release;
+		};
 	};
 	rootObject = A1000000000000000000000A /* Project object */;
 }
