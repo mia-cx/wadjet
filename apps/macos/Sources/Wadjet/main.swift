@@ -156,16 +156,20 @@ struct FrozenDisplay {
     /// chrome on this display; nil means "share the regular images"
     var bare: CGImage?, bareHDR: CGImage?, bareClean: CGImage?, bareCleanHDR: CGImage?
     var bareCaptured = false
-    /// the image a Screenshot shows and saves, picked by the Cursor/Wadjet
-    /// toggles — pixel reads keep using `clean` regardless
+    /// the image the overlay shows and a Screenshot saves, picked by the
+    /// Cursor/Wadjet toggles — for a Utility it's always the regular scene,
+    /// whose pixels `clean` reads (a Wadjet-off image would show different
+    /// pixels than the loupe/Pick Colour report)
     @MainActor var outputHDR: CGImage? {
         let s = AppState.shared
+        if s.tool?.kind == .util { return hdrImage }
         return s.shotWadjet
             ? (s.shotCursor ? hdrImage : cleanHDR)
             : (s.shotCursor ? bareHDR ?? hdrImage : bareCleanHDR ?? cleanHDR)
     }
     @MainActor func output(hdr: Bool) -> CGImage {
         let s = AppState.shared
+        if s.tool?.kind == .util { return (hdr ? hdrImage : nil) ?? image }
         let sdr = s.shotWadjet
             ? (s.shotCursor ? image : clean)
             : (s.shotCursor ? bare ?? image : bareClean ?? clean)
@@ -794,7 +798,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.phase == .frozen {
             if s.tool != tool {
                 guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
-                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.applyFreezeVisibility(); AppLog.line("tool switched to \(tool.title)")
+                s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.applyFreezeVisibility(); overlayCtrl.swapFrozenImages(); AppLog.line("tool switched to \(tool.title)")
             }
             return
         }
