@@ -31,6 +31,8 @@ final class MarkupPanel: NSPanel {
 /// global screen coords, so every panel draws its own part of each stroke
 final class MarkupView: NSView {
     let canvas = CALayer()
+    /// the Annotation layers, below the selection chrome; an Editor masks it to the crop
+    let content = CALayer()
     var shapeLayers: [Annotation.ID: AnnotationLayer] = [:]
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
@@ -65,6 +67,10 @@ final class MarkupView: NSView {
         canvas.position = .zero
         canvas.bounds = region
         layer?.addSublayer(canvas)
+        content.anchorPoint = .zero
+        content.position = .zero
+        content.bounds = region
+        canvas.addSublayer(content)
         guidesLayer.anchorPoint = .zero
         guidesLayer.position = .zero
         guidesLayer.bounds = region
@@ -124,8 +130,8 @@ final class MarkupView: NSView {
             handlesLayer.shadowRadius = 1 / controller.zoom
             handlesLayer.shadowOffset = CGSize(width: 0, height: -0.5 / controller.zoom)
         }
-        canvas.sublayers = annotations.compactMap { shapeLayers[$0.id] }
-            + (selection == nil ? [] : [frameLayer, handlesLayer])
+        content.sublayers = annotations.compactMap { shapeLayers[$0.id] }
+        canvas.sublayers = [content] + (selection == nil ? [] : [frameLayer, handlesLayer])
         censors?.sync(annotations, layers: shapeLayers)
         CATransaction.commit()
     }

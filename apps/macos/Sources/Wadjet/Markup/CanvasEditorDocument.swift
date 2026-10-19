@@ -113,7 +113,9 @@ final class CanvasEditorDocument: NSDocument {
     }
 
     override func makeWindowControllers() {
-        addWindowController(CanvasEditorWindowController())
+        let wc = CanvasEditorWindowController()
+        addWindowController(wc) // first: setUp's `guard let doc` needs it attached
+        wc.setUp()
     }
 
     /// a menu-bar app opening a document window joins the Dock for it

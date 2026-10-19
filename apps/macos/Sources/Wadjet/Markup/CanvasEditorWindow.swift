@@ -51,8 +51,10 @@ final class CanvasEditorWindowController: NSWindowController, NSWindowDelegate {
     }
     required init?(coder: NSCoder) { fatalError() }
 
-    override func windowDidLoad() {
-        super.windowDidLoad()
+    /// builds the window's contents — called from makeWindowControllers after
+    /// the document attaches (NSWindowController(window:) never runs
+    /// windowDidLoad); restoration goes through the same path
+    func setUp() {
         guard let doc, let window else { return }
         let state = EditorState(doc.canvas)
         self.state = state
@@ -206,7 +208,6 @@ final class EditorCanvasView: NSView {
 
         container.bounds = region
         buildBackdrop()
-        layer?.mask = state.recrop ? nil : cropMask()
 
         if markupView == nil {
             markupView = MarkupView(frame: NSRect(origin: .zero, size: region.size),
@@ -217,7 +218,17 @@ final class EditorCanvasView: NSView {
         } else {
             markupView.frame = NSRect(origin: .zero, size: region.size)
             markupView.canvas.bounds = region
+            markupView.content.bounds = region
             markupView.guidesLayer.bounds = region
+        }
+        // the crop masks the backdrop and the Annotations — never the
+        // selection chrome above them
+        if state.recrop {
+            container.mask = nil
+            markupView.content.mask = nil
+        } else {
+            container.mask = cropMask()
+            markupView.content.mask = cropMask()
         }
 
         if state.recrop {
@@ -242,14 +253,21 @@ final class EditorCanvasView: NSView {
         if state.recrop {
             overlay?.needsLayout = true
         } else {
-            layer?.mask = cropMask()
+            container.mask = cropMask()
+            markupView?.content.mask = cropMask()
         }
     }
 
-    /// one CALayer per display, then window layers by z-order — Canvas coords
+    /// one CALayer per display, then window layers by z-order — Canvas coords.
+    /// An isolating window Screenshot replaces the desktop under it, so the
+    /// displays get a hole where its transparent pixels must not show through.
     private func buildBackdrop() {
         let canvas = doc.canvas
-        var layers: [CALayer] = canvas.layout.map { display in
+        let displays = CALayer()
+        displays.anchorPoint = .zero
+        displays.position = .zero
+        displays.bounds = region
+        displays.sublayers = canvas.layout.map { display in
             let l = CALayer()
             l.contents = canvas.displayImages[display.id]
             l.frame = display.frame
@@ -257,6 +275,19 @@ final class EditorCanvasView: NSView {
             l.preferredDynamicRange = .high
             return l
         }
+        let isolated = canvas.windowLayers.filter(\.isolatesBackground)
+        if !isolated.isEmpty {
+            let p = CGMutablePath()
+            p.addRect(region)
+            for w in isolated { p.addRect(w.frame) }
+            let m = CAShapeLayer()
+            m.path = p
+            m.fillRule = .evenOdd
+            m.frame = displays.bounds
+            m.bounds = displays.bounds // Canvas coords, like `displays`' children
+            displays.mask = m
+        }
+        var layers: [CALayer] = [displays]
         for w in canvas.windowLayers.sorted(by: { $0.zOrder < $1.zOrder }) {
             let l = CALayer()
             l.contents = w.image
@@ -271,14 +302,15 @@ final class EditorCanvasView: NSView {
         CATransaction.commit()
     }
 
-    /// the rounded-crop mask in the view's own coordinates
-    private func cropMask() -> CALayer {
-        let r = CGRect(x: state.crop.minX - region.minX, y: state.crop.minY - region.minY,
-                       width: state.crop.width, height: state.crop.height)
+    /// one rounded-crop mask per masked layer — the path is in Canvas
+    /// coordinates, matching the masked layers' bounds-origin trick
+    private func cropMask() -> CAShapeLayer {
         let radius = min(state.radius, doc.canvas.maxCornerRadius)
         let mask = CAShapeLayer()
-        mask.path = CGPath(roundedRect: r, cornerWidth: radius, cornerHeight: radius, transform: nil)
-        mask.frame = CGRect(origin: .zero, size: region.size)
+        mask.path = CGPath(roundedRect: state.crop, cornerWidth: radius, cornerHeight: radius,
+                           transform: nil)
+        mask.frame = region
+        mask.bounds = region // the path is in Canvas coords, like the masked layer's children
         return mask
     }
 
