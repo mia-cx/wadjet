@@ -834,7 +834,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
         if tool.isAction { if tool == .clearAnnotations { clearAnnotations() }; return }
-        if tool.kind == .markup { Tool.lastMarkup = tool }
         if !tool.opensFreezeFrame, s.phase == .desktop || s.phase == .frozen { overlayCtrl.showLiveToolbar(armed: tool); return }
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
