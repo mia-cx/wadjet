@@ -23,7 +23,7 @@ public final class WindowFrameCompositor {
     /// placed, else a copy of it from a reused pool with the Annotations drawn on; nil before any capture
     public func compose(window: CGRect, primaryHeight: CGFloat, annotations: [Annotation],
                         images: [UUID: CGImage] = [:],
-                        canvasPixels: [URL: CanvasPixels] = [:]) -> CVPixelBuffer? {
+                        canvasPixels: [NestedCanvas: CanvasPixels] = [:]) -> CVPixelBuffer? {
         guard let base else { return nil }
         let frame = CGSize(width: CVPixelBufferGetWidth(base), height: CVPixelBufferGetHeight(base))
         let annotator = WindowFrameAnnotator(window: window, primaryHeight: primaryHeight,

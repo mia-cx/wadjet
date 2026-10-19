@@ -28,13 +28,15 @@ extension CGContext {
     /// from `sources` in `format` and `colorSpace`, over black where no source covers them. A Magnify
     /// composites its viewport through MagnifyRenderer at `scale` pixels per point.
     /// `blending: false` draws with the caller's blend mode — for mask passes.
-    /// Image kinds draw `images[asset]` through their crop; `.canvas` draws `linkedDocuments[link.url]`
-    /// flattened at `scale` (output pixels per point — export quality), else `canvasPixels[link.url]`
-    /// (a cached flatten — cheap, for per-frame compositing), else the package's persisted
-    /// `images[annotation.id]` snapshot, else nothing.
+    /// Image kinds draw `images[asset]` through their crop; `.canvas` draws its document —
+    /// `linkedDocuments[link.url]` or `embeddedCanvases[name]` — flattened at `scale` (output pixels
+    /// per point — export quality), else `canvasPixels[nested]` (a cached flatten — cheap, for
+    /// per-frame compositing), else the package's persisted `images[annotation.id]` snapshot,
+    /// else nothing.
     public func draw(_ annotation: Annotation, sources: [CensorSource] = [],
                      images: [UUID: CGImage] = [:], linkedDocuments: [URL: CanvasDocument] = [:],
-                     canvasPixels: [URL: CanvasPixels] = [:],
+                     embeddedCanvases: [String: CanvasDocument] = [:],
+                     canvasPixels: [NestedCanvas: CanvasPixels] = [:],
                      scale: CGFloat = 1, format: CIFormat = .RGBA8,
                      colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!,
                      blending: Bool = true) {
@@ -111,8 +113,12 @@ extension CGContext {
                     draw(image, in: placement.sourceFrame(
                         for: CGRect(x: 0, y: 0, width: image.width, height: image.height)))
                 }
-            case let .canvas(link, _):
-                if var child = linkedDocuments[link.url] {
+            case let .canvas(nested, _):
+                let child = switch nested {
+                case let .linked(link): linkedDocuments[link.url]
+                case let .embedded(name): embeddedCanvases[name]
+                }
+                if var child {
                     // the Annotation's own radius rounds it, never the child's
                     child.cornerRadius = 0
                     let k = max(frame.width / placement.crop.width,
@@ -120,7 +126,7 @@ extension CGContext {
                     if let image = try? child.flatten(crop: placement.crop, scale: scale * k) {
                         draw(image, in: frame)
                     }
-                } else if let pixels = canvasPixels[link.url] {
+                } else if let pixels = canvasPixels[nested] {
                     draw(pixels.image, in: placement.sourceFrame(for: pixels.bounds))
                 } else if let snapshot = images[annotation.id] {
                     // the snapshot the host package persisted under the

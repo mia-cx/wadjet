@@ -11,10 +11,21 @@ final class MarkupAssets {
     var images: [UUID: CGImage] = [:]
     /// pasted Canvases the `.canvas` Annotations link, keyed by link URL
     var canvases: [URL: CanvasDocument] = [:]
-    /// a linked Canvas flattens once per URL — its own edits don't travel
-    private var flattened: [URL: CanvasPixels] = [:]
+    /// Canvases the `.canvas` Annotations embed — Freeze region's frozen pixels
+    var embedded: [String: CanvasDocument] = [:]
+    /// a nested Canvas flattens once per source — its own edits don't travel
+    private var flattened: [NestedCanvas: CanvasPixels] = [:]
 
-    func removeAll() { images = [:]; canvases = [:]; flattened = [:] }
+    func removeAll() { images = [:]; canvases = [:]; embedded = [:]; flattened = [:] }
+
+    /// the document a `.canvas` Annotation resolves to — the link's opened
+    /// package or the embedded one it names
+    func document(for nested: NestedCanvas) -> CanvasDocument? {
+        switch nested {
+        case let .linked(link): canvases[link.url]
+        case let .embedded(name): embedded[name]
+        }
+    }
 
     /// whether the Annotation's real source is still around to recrop in —
     /// a `.canvas` whose link is gone still displays its persisted snapshot,
@@ -22,13 +33,13 @@ final class MarkupAssets {
     func canRecrop(_ a: Annotation) -> Bool {
         switch a.kind {
         case let .image(asset, _): images[asset] != nil
-        case let .canvas(link, _): canvases[link.url] != nil
+        case let .canvas(nested, _): document(for: nested) != nil
         case .line, .path, .censor, .shape, .counter, .magnify, .text, .window: false
         }
     }
 
     /// what the panels draw and recrop within: `.image` → the asset and its
-    /// pixel bounds; `.canvas` → the linked Canvas flattened over its layout,
+    /// pixel bounds; `.canvas` → the nested Canvas flattened over its layout,
     /// whose union is the recrop's bounds, or the persisted snapshot clamped to
     /// the Annotation's own crop; nil when the payload is missing
     func source(for a: Annotation) -> CanvasPixels? {
@@ -37,19 +48,19 @@ final class MarkupAssets {
             guard let image = images[asset] else { return nil }
             return CanvasPixels(image: image,
                                 bounds: CGRect(x: 0, y: 0, width: image.width, height: image.height))
-        case let .canvas(link, placement):
-            if let f = flattened[link.url] { return f }
-            if var doc = canvases[link.url],
+        case let .canvas(nested, placement):
+            if let f = flattened[nested] { return f }
+            if var doc = document(for: nested),
                let union = doc.layout.map(\.frame).reduce(nil, { $0?.union($1) ?? $1 }) {
                 doc.cornerRadius = 0 // the Annotation's own radius rounds it
                 if let image = try? doc.flatten(crop: union,
                     scale: doc.layout.map(\.scaleFactor).max() ?? 1) {
-                    flattened[link.url] = CanvasPixels(image: image, bounds: union)
-                    return flattened[link.url]
+                    flattened[nested] = CanvasPixels(image: image, bounds: union)
+                    return flattened[nested]
                 }
             }
-            // the persisted snapshot displays too; recrop clamps to the crop
-            guard let snapshot = images[a.id] else { return nil }
+            // the persisted snapshot displays too; recrop clamps to the crop — links only
+            guard case .linked = nested, let snapshot = images[a.id] else { return nil }
             return CanvasPixels(image: snapshot, bounds: placement.crop)
         case .line, .path, .censor, .shape, .counter, .magnify, .text, .window:
             return nil

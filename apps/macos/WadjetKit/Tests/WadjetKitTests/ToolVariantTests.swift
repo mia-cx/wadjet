@@ -10,6 +10,7 @@ struct ToolVariantTests {
         (.shapes, ["rectangle", "ellipse", "polygon", "star"]),
         (.censor, ["blackOut", "blur", "pixelate"]),
         (.eraser, ["eraser", "knife"]),
+        (.freezeRegion, ["region", "window"]),
     ])
     func cycling(tool: ToolID, ids: [String]) {
         var markup = WadjetConfig.Markup()
@@ -27,7 +28,7 @@ struct ToolVariantTests {
 
     // Proves the toolbar icon tells variants apart: every variant has a
     // symbol, and no two of a Tool's variants share one.
-    @Test(arguments: [ToolID.draw, .shapes, .censor, .eraser])
+    @Test(arguments: [ToolID.draw, .shapes, .censor, .eraser, .freezeRegion])
     func symbols(tool: ToolID) {
         let symbols = tool.variants.map(\.symbol)
         #expect(symbols.allSatisfy { !$0.isEmpty })

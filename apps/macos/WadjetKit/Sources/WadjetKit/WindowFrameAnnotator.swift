@@ -35,7 +35,7 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
     /// `images`/`canvasPixels` feed image-kind Annotations: pre-flattened link
     /// pixels, since a live flatten per frame would cost a render every time.
     public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer, source: CVPixelBuffer,
-                     images: [UUID: CGImage] = [:], canvasPixels: [URL: CanvasPixels] = [:]) {
+                     images: [UUID: CGImage] = [:], canvasPixels: [NestedCanvas: CanvasPixels] = [:]) {
         guard !annotations.isEmpty else { return }
         let w = CVPixelBufferGetWidth(pixelBuffer), h = CVPixelBufferGetHeight(pixelBuffer)
         // the frame's content under the clip as a CensorSource, only when an

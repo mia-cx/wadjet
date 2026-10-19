@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", eraser = "eraser", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
+    case select = "select", eraser = "eraser", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", freezeRegion = "freezeRegion", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .freezeRegion: "Freeze Region"; case .clearAnnotations: "Clear Annotations"
         case .moreMarkup: "More Markup Tools"
         }
     }
@@ -34,7 +34,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .freezeRegion: "Freeze"; case .clearAnnotations: "Clear"
         case .moreMarkup: "More"
         }
     }
@@ -53,7 +53,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .select: "cursorarrow"; case .eraser: "eraser"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .eraser: "eraser"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .freezeRegion: "snowflake"; case .clearAnnotations: "trash"
         case .moreMarkup: "ellipsis"
         }
     }
@@ -105,7 +105,11 @@ final class AppState: ObservableObject {
         cursor = config.value.capture.cursor
     }
     @Published var bubblesDying = false // set while a recording bubble merges back into the island
-    @Published var tool: Tool? = nil { didSet { MarkupController.shared.syncArmed(); MarkupStyles.shared.syncEyedropper() } }
+    @Published var tool: Tool? = nil { didSet {
+        // Freeze region never arms the panels (it picks on the Freeze Frame), so its didSet counts the use
+        if tool == .freezeRegion, oldValue != tool { MarkupToolbar.shared.armed(.freezeRegion) }
+        MarkupController.shared.syncArmed(); MarkupStyles.shared.syncEyedropper()
+    } }
     @Published var workflowByTool: [Tool: String] = [:]
     /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
     @Published var triggerWorkflow: String? = nil
@@ -852,7 +856,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if !tool.opensFreezeFrame, s.phase == .desktop || s.phase == .frozen { overlayCtrl.showLiveToolbar(armed: tool); return }
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
-        if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup) {
+        if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup && tool != .freezeRegion) {
             if s.tool != tool {
                 guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
                 s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.applyFreezeVisibility(); overlayCtrl.swapFrozenImages(); AppLog.line("tool switched to \(tool.title)")
@@ -951,6 +955,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func didSelectWindow(id: CGWindowID, frame: CGRect, on display: Int) {
         let s = AppState.shared
         guard let tool = s.tool else { return }
+        if tool == .freezeRegion { freezeRegion(frame, on: display, windowID: id); return }
         if tool.kind == .shot {
             captureScreenshot(rect: frame, on: display, windowID: id)
         } else {
@@ -961,6 +966,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func didSelect(_ rect: CGRect, on display: Int) {
         let s = AppState.shared
         guard let tool = s.tool else { return }
+        if tool == .freezeRegion { freezeRegion(rect, on: display); return }
         if tool.kind == .shot {
             captureScreenshot(rect: rect, on: display)
         } else {
@@ -1377,6 +1383,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // not while a drag is in progress
         for p in overlayCtrl.panels {
             if p.contentView?.subviews.compactMap({ $0 as? OverlayNSView }).contains(where: { $0.dragStart != nil }) == true { return }
+        }
+        if t == .freezeRegion { // Space cycles its Region/Window variants instead of Tools
+            t.cycleVariant(by: 1)
+            overlayCtrl.markOverlaysDirty()
+            let title = s.config.value.markup.armedVariant(of: .freezeRegion)?.title ?? t.title
+            for p in overlayCtrl.panels { p.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.setFlash(title) } }
+            return
         }
         let next: Tool? = switch t {
         case .capRegion, .capScreen: .capWindow
@@ -2192,6 +2205,7 @@ enum WadjetCursors {
         case .select: return .arrow
         case .text: return .iBeam
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
+        case .freezeRegion: return symbol("snowflake", centre: true) // its window pick's badge
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
         case .pickColour: return symbol("eyedropper", centre: false)
         case .clearAnnotations, .moreMarkup: return .arrow
@@ -2283,8 +2297,9 @@ final class OverlayNSView: NSView {
     }
     func showConfirmHost() {
         confirmHost?.removeFromSuperview()
-        let label = tool == .capRegion ? "Capture" : "Record"
-        let sym = tool == .capRegion ? "camera.fill" : "record.circle"
+        let freeze = AppState.shared.tool == .freezeRegion
+        let label = freeze ? "Freeze" : tool == .capRegion ? "Capture" : "Record"
+        let sym = freeze ? "snowflake" : tool == .capRegion ? "camera.fill" : "record.circle"
         let v = Button { [weak self] in self?.confirmSel() } label: {
             Image(systemName: sym).font(.system(size: 13, weight: .semibold))
                 .foregroundStyle(.white).frame(width: 30, height: 30)
@@ -2312,11 +2327,13 @@ final class OverlayNSView: NSView {
             y: max(8, s.minY - 38))
     }
     /// manual-confirm bookkeeping for a Tool switch: the pending selection
-    /// belongs to the Tool it was drawn under
-    var lastTool: Tool?
+    /// belongs to the Tool it was drawn under — the real Tool and the pick it
+    /// borrows, so a Freeze Region selection can't come out as a Capture shot
+    var lastOwner: [Tool?] = []
     func syncConfirmTool() {
-        if lastTool != tool {
-            lastTool = tool
+        let owner: [Tool?] = [AppState.shared.tool, tool]
+        if lastOwner != owner {
+            lastOwner = owner
             if confirming {
                 confirming = false; selOp = nil; sel = nil
                 confirmHost?.removeFromSuperview(); confirmHost = nil
@@ -2340,7 +2357,8 @@ final class OverlayNSView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     var fd: FrozenDisplay { Freeze.shared.displays[di] }
-    var tool: Tool { AppState.shared.tool ?? .capRegion }
+    /// the pick this overlay runs — Freeze region borrows its armed variant's
+    var tool: Tool { (AppState.shared.tool ?? .capRegion).pick }
     var measureMode: String { AppState.shared.measureMode }
 
     override var acceptsFirstResponder: Bool { true }
@@ -2546,7 +2564,8 @@ final class OverlayNSView: NSView {
         syncConfirmTool()
         let overUI = ctrl?.pointerOverUI ?? false
         if overUI { NSCursor.arrow.set() }
-        else { WadjetCursors.cursor(for: tool).set() }
+        // a window pick borrows .capWindow's behaviour but keeps the real Tool's badge (Freeze's snowflake)
+        else { WadjetCursors.cursor(for: tool == .capWindow ? AppState.shared.tool ?? tool : tool).set() }
         // event-rate file I/O is silly — only log when the choice changes
         let cur = NSCursor.currentSystem ?? NSCursor.current
         let sig = "\(cur.image.size)x\(cur.hotSpot)x\(tool.rawValue)x\(overUI)"
@@ -2591,6 +2610,10 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
+        case .freezeRegion:
+            t.cycleVariant(by: step)
+            if let v = s.config.value.markup.armedVariant(of: .freezeRegion) { setFlash(v.title) }
+            ctrl?.markOverlaysDirty() // the pick (and dim) follows the armed variant
         case .copyText, .select, .eraser, .draw, .text, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
         }
     }
@@ -3984,6 +4007,8 @@ struct ToolMenuView: View {
                 tileRow(measureTiles)
             case .markup where tool == .moreMarkup:
                 overflowRows()
+            case .markup where tool == .freezeRegion:
+                freezeRegionRows()
             case .markup:
                 if tool == .eraser {
                     eraserRows()

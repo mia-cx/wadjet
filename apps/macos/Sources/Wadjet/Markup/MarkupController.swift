@@ -248,7 +248,9 @@ final class MarkupController {
         syncSession()
         PeerThrough.shared.sync()
         let s = AppState.shared
-        let want: Tool? = s.toolbarOpen && s.tool?.kind == .markup && s.tool?.isAction != true ? s.tool : nil
+        // Freeze region picks on the Freeze Frame, never on the panels — excluding it lets the clicks through
+        let want: Tool? = s.toolbarOpen && s.tool?.kind == .markup && s.tool?.isAction != true
+            && s.tool != .freezeRegion ? s.tool : nil
         guard want != armed else {
             // same Tool but the phase may have changed: sampling Censors swap
             // between the Freeze Frame and the live stream on every render
@@ -496,7 +498,7 @@ final class MarkupController {
         switch content {
         case let .canvas(doc, link):
             assets.canvases[link.url] = doc
-            return Annotation(kind: .canvas(link, ImagePlacement(frame: frame,
+            return Annotation(kind: .canvas(.linked(link), ImagePlacement(frame: frame,
                 crop: doc.crop, cornerRadius: doc.cornerRadius)), style: Self.imageStyle)
         case let .image(image, _):
             let asset = UUID()
@@ -525,6 +527,40 @@ final class MarkupController {
         // a first pin's panels are new, and no selection change renders them
         syncPanels(); render()
         AppLog.line("markup: pinned \(content.label)")
+    }
+
+    /// Freeze region's result: `canvas` embedded beneath every Annotation at exactly its crop — one undo
+    /// step — then selected when Select is armed (Freeze region arms it at confirm; a later Tool choice
+    /// wins, and the frozen region still lands). An open step in flight (a drag, a Counter press, a
+    /// phased scroll, a text session) keeps its own undo step and selection: the region lands at once beneath everything, as the step before it.
+    func freeze(_ canvas: CanvasDocument) {
+        let name = "\(UUID().uuidString).wadjet"
+        assets.embedded[name] = canvas
+        let a = Annotation.frozenRegion(embedding: name, canvas, style: Self.imageStyle)
+        // an open step (drag, Counter press, phased scroll, text session) changes the
+        // stack as it goes: the region joins its baseline and records as the step
+        // before it. A Pen path keeps its nodes off the stack, so between presses its
+        // lingering snapshot may be stale and the stack itself is the baseline.
+        let penIdle = pen != nil && gesture == nil
+        let open = textEditStart ?? (penIdle ? nil : gestureStart)
+        guard let open else {
+            edit { $0.addAtBottom(a) }
+            // a Pen snapshot lingers between presses — keep the region inside it
+            // so its commitGesture can't re-record the region into the path's step
+            gestureStart?.addAtBottom(a)
+            syncPanels()
+            if armed == .select { selection = a.id }
+            AppLog.line("markup: froze region \(canvas.crop.debugDescription) as \(name)")
+            return
+        }
+        var after = open; after.addAtBottom(a)
+        history.record(from: open, to: after) // screen-only: Freeze region never runs in an Editor
+        endHistoryIfClosed()
+        gestureStart?.addAtBottom(a)
+        textEditStart?.addAtBottom(a)
+        stack.addAtBottom(a)
+        syncPanels(); render()
+        AppLog.line("markup: froze region \(canvas.crop.debugDescription) as \(name)")
     }
 
     /// ends recrop mode; true when one was in flight — Escape consumes it first
@@ -1040,10 +1076,10 @@ final class MarkupController {
         Self.onScreen.annotations = shown
         Self.onScreen.images = assets.images
         // the recorded window composites these per frame: cached flattens, not live documents
-        var pixels: [URL: CanvasPixels] = [:]
+        var pixels: [NestedCanvas: CanvasPixels] = [:]
         for a in shown where a.placement != nil {
-            if case let .canvas(link, _) = a.kind, let px = assets.source(for: a) {
-                pixels[link.url] = px // two .canvas Annotations can share one URL
+            if case let .canvas(nested, _) = a.kind, let px = assets.source(for: a) {
+                pixels[nested] = px // two .canvas Annotations can share one source
             }
         }
         Self.onScreen.canvasPixels = pixels

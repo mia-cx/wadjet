@@ -5,8 +5,11 @@ import WadjetKit
 
 extension Tool {
     /// whether this Tool opens on a Freeze Frame right now: during a Recording, Markup draws on the
-    /// live screen so the video keeps moving. #105's Freeze Frame policy replaces this.
-    @MainActor var opensFreezeFrame: Bool { kind != .markup || !AppState.shared.recActive }
+    /// live screen so the video keeps moving — except Freeze region, which always picks on a Freeze
+    /// Frame. #105's Freeze Frame policy replaces this.
+    @MainActor var opensFreezeFrame: Bool {
+        self == .freezeRegion || kind != .markup || !AppState.shared.recActive
+    }
 }
 
 extension OverlayController {

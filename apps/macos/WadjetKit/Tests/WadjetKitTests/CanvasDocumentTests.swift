@@ -589,7 +589,7 @@ struct CanvasDocumentTests {
             layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
             crop: CGRect(x: 0, y: 0, width: 8, height: 8),
             displayImages: [1: try solidImage([0, 1, 0, 1], width: 8, height: 8)])
-        let annotation = Annotation(kind: .canvas(CanvasLink(url: url), ImagePlacement(
+        let annotation = Annotation(kind: .canvas(.linked(CanvasLink(url: url)), ImagePlacement(
             frame: CGRect(x: 0, y: 0, width: 4, height: 4), crop: CGRect(x: 2, y: 2, width: 4, height: 4),
             border: .hidden)), style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
         var document = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 4, height: 4),
@@ -609,7 +609,7 @@ struct CanvasDocumentTests {
         let source = try image(width: 8, height: 8, pixels: (0..<64).flatMap {
             $0 % 8 < 4 ? [UInt8(0), 255, 0, 255] : [UInt8(255), 0, 0, 255]
         })
-        let annotation = Annotation(kind: .canvas(CanvasLink(url: url), ImagePlacement(
+        let annotation = Annotation(kind: .canvas(.linked(CanvasLink(url: url)), ImagePlacement(
             frame: CGRect(x: 0, y: 0, width: 4, height: 4), crop: CGRect(x: 2, y: 2, width: 4, height: 4),
             border: .hidden)), style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
         let context = try #require(CGContext(data: nil, width: 4, height: 4, bitsPerComponent: 16,
@@ -617,7 +617,7 @@ struct CanvasDocumentTests {
             bitmapInfo: CGBitmapInfo.floatComponents.rawValue | CGBitmapInfo.byteOrder16Little.rawValue
                 | CGImageAlphaInfo.premultipliedLast.rawValue))
         context.draw(annotation,
-                     canvasPixels: [url: CanvasPixels(image: source, bounds: CGRect(x: 0, y: 0, width: 8, height: 8))])
+                     canvasPixels: [.linked(CanvasLink(url: url)): CanvasPixels(image: source, bounds: CGRect(x: 0, y: 0, width: 8, height: 8))])
         let px = try linearPixels(try #require(context.makeImage()))
         func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * 4 + x)..<4 * (y * 4 + x) + 4]) }
         // the crop (x 2..6) shows the source's middle: left half green, right red
@@ -692,7 +692,7 @@ struct CanvasDocumentTests {
             layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
             crop: CGRect(x: 0, y: 0, width: 8, height: 8),
             displayImages: [1: try solidImage([0, 1, 0, 1], width: 8, height: 8)])
-        let annotation = Annotation(kind: .canvas(CanvasLink(url: url), ImagePlacement(
+        let annotation = Annotation(kind: .canvas(.linked(CanvasLink(url: url)), ImagePlacement(
             frame: CGRect(x: 0, y: 0, width: 4, height: 4),
             crop: CGRect(x: 2, y: 2, width: 4, height: 4), border: .hidden)),
             style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))

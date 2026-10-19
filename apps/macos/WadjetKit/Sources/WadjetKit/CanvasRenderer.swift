@@ -12,8 +12,8 @@ extension CanvasDocument {
     /// Black out fills opaque black; Blur and Pixelate sample each display's
     /// image beneath the Censor; a Magnify strokes its source outline and
     /// composites its magnified viewport through MagnifyRenderer. `.image` draws
-    /// its asset through its crop, `.canvas` a `linkedDocuments` entry, else its
-    /// persisted snapshot.
+    /// its asset through its crop, `.canvas` its `linkedDocuments` or
+    /// `embeddedCanvases` entry, else its persisted snapshot.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
@@ -79,6 +79,9 @@ extension CanvasDocument {
             if case let .image(asset, _) = annotation.kind, images[asset] == nil {
                 throw CanvasDocumentError.invalidPackage("images/\(asset.uuidString)")
             }
+            if case let .canvas(.embedded(name), _) = annotation.kind, embeddedCanvases[name] == nil {
+                throw CanvasDocumentError.invalidPackage("embedded/\(name)")
+            }
             var sources = displaySources
             if let box = annotation.sampledRect {
                 let below = layerStack.annotations[..<index].filter {
@@ -90,7 +93,8 @@ extension CanvasDocument {
                 }
             }
             context.draw(annotation, sources: sources, images: images,
-                         linkedDocuments: linkedDocuments, scale: scale, format: .RGBAh,
+                         linkedDocuments: linkedDocuments, embeddedCanvases: embeddedCanvases,
+                         scale: scale, format: .RGBAh,
                          colorSpace: CGColorSpace(name: CGColorSpace.extendedLinearSRGB)!)
         }
         context.endTransparencyLayer()
