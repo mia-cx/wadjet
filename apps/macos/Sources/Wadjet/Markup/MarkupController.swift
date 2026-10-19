@@ -153,10 +153,13 @@ final class MarkupController {
     private func endHistoryIfClosed() {
         if !AppState.shared.toolbarOpen { history.end(ifCleared: stack) }
     }
-    /// true while an in-place editor (or a Tool-menu text field) owns typing —
-    /// suspends Markup's command keys so ⌘Z/⌘V/⌘] reach it; a Tool-menu text
-    /// field resumes the keys by calling syncSession() on focus and blur
-    var textHasFocus: Bool { editing != nil || NSApp.keyWindow?.firstResponder is NSText }
+    /// true while typing lives on a Markup surface — the in-place editor or a
+    /// Tool-menu text field — suspending Markup's command keys so ⌘Z/⌘V/⌘]
+    /// reach it; the field's focus/blur re-runs syncSession()
+    var textHasFocus: Bool {
+        editing != nil || (NSApp.keyWindow === AppDelegate.shared?.overlayCtrl.menuPanel
+                           && NSApp.keyWindow?.firstResponder is NSText)
+    }
     /// Carbon command keys and the Layers window track the toolbar; call on
     /// every phase/tool change
     func syncSession() {
@@ -256,6 +259,7 @@ final class MarkupController {
                 AppLog.line("active for markup (was \(oc.prevFrontmost?.localizedName ?? "?"))")
             }
             panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.makeKey()
+            syncSession() // the key window just moved off any suspended field
             WadjetCursors.cursor(for: want).set()
             AppLog.line("markup: armed \(want.title)")
         } else {
