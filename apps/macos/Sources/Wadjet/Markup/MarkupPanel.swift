@@ -31,7 +31,9 @@ final class MarkupView: NSView {
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
     let accent = CGColor(srgbRed: 0.20, green: 0.84, blue: 0.58, alpha: 1)
-    let scale: CGFloat
+    /// the display's backing scale; mixed-scale setups get crisp strokes on
+    /// every panel because each one follows its own window
+    var scale: CGFloat
     init(frame f: NSRect, screen: NSScreen) {
         scale = screen.backingScaleFactor
         super.init(frame: f)
@@ -45,6 +47,13 @@ final class MarkupView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isOpaque: Bool { false }
+    // the window moved to a display with another scale, or the display's own changed
+    override func viewDidChangeBackingProperties() {
+        super.viewDidChangeBackingProperties()
+        guard let s = window?.backingScaleFactor, s != scale else { return }
+        scale = s
+        for l in Array(shapeLayers.values) + [frameLayer, handlesLayer] { l.contentsScale = s }
+    }
 
     /// one CAShapeLayer per Annotation, keyed by id so strokes can persist
     /// and vanish without touching the rest; array order = back to front.
