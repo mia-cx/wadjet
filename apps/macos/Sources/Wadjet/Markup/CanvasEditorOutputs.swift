@@ -42,8 +42,10 @@ extension CanvasEditorDocument {
         guard let view = windowControllers.first?.window?.contentView else { return }
         do {
             let picker = NSSharingServicePicker(items: [try sharedImageURL()])
-            let rect = NSRect(x: view.bounds.maxX - 8, y: view.bounds.maxY - 8, width: 1, height: 1)
-            picker.show(relativeTo: rect, of: view, preferredEdge: .minY)
+            // the hosting view is flipped: its top edge is minY
+            let top = view.isFlipped ? view.bounds.minY + 8 : view.bounds.maxY - 8
+            let rect = NSRect(x: view.bounds.maxX - 8, y: top, width: 1, height: 1)
+            picker.show(relativeTo: rect, of: view, preferredEdge: view.isFlipped ? .maxY : .minY)
         } catch { presentError(error) }
     }
 
