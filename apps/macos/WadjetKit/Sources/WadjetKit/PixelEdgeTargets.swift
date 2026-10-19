@@ -1,5 +1,14 @@
 import CoreGraphics
 
+extension Annotation {
+    /// The perimeter moved/resized by selection grips. A Magnify's drawable path
+    /// describes its separate source and leader; its grips belong to the frame.
+    public var pixelSnapBounds: CGRect {
+        if case .magnify = kind { return kind.bounds }
+        return PathGeometry.path(for: self).boundingBoxOfPath
+    }
+}
+
 extension CanvasDocument {
     /// The visible unannotated backdrop for one display, at its retained bitmap
     /// resolution. Window layers replace/composite the display as in the Editor;

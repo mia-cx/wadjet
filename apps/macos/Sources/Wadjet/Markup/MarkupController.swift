@@ -633,8 +633,7 @@ final class MarkupController {
         case let .moving(start, from):
             let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
             // a Magnify snaps its magnifier frame, not its whole path's box
-            let snapRect = if case .magnify = moved.kind { moved.kind.bounds }
-                else { PathGeometry.path(for: moved).boundingBoxOfPath }
+            let snapRect = moved.pixelSnapBounds
             let snapped = snapper?.offset(rect: snapRect) ?? .zero
             stack.replace(moved.moved(by: snapped))
         case let .movingSource(start, from):

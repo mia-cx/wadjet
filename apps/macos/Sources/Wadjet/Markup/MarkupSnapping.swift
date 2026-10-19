@@ -60,7 +60,7 @@ import WadjetKit
                                       minExtent: MarkupController.handleMinExtent,
                                       rotateOffset: MarkupController.rotateOffset,
                                       targets: [], range: range, skip: true).annotation
-            rect = PathGeometry.path(for: proposed).boundingBoxOfPath
+            rect = proposed.pixelSnapBounds
         }
         let r = a.dragging(h, from: from, to: to,
                            minExtent: MarkupController.handleMinExtent,

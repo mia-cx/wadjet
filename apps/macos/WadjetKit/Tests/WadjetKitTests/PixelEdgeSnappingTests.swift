@@ -3,6 +3,34 @@ import Testing
 import WadjetKit
 
 struct PixelEdgeSnappingTests {
+    // Proves a resized magnifier follows edges beside its frame, never a pixel
+    // edge near the separate source that happens to share its grip's x position.
+    @Test(arguments: [CGFloat(1), CGFloat(2)], [false, true])
+    func magnifierFrame(scale: CGFloat, edgeBySource: Bool) {
+        let side = Int(240 * scale)
+        var bytes = [UInt8](repeating: 255, count: side * side * 4)
+        let band = edgeBySource ? CGRect(x: 197, y: 22, width: 23, height: 16)
+            : CGRect(x: 196, y: 130, width: 24, height: 40)
+        for y in Int((240 - band.maxY) * scale)..<Int((240 - band.minY) * scale) {
+            for x in Int(band.minX * scale)..<Int(band.maxX * scale) {
+                for channel in 1...3 { bytes[(y * side + x) * 4 + channel] = 0 }
+            }
+        }
+        let proposed = Annotation(kind: .magnify(Magnifier(
+            source: CGRect(x: 179, y: 20, width: 20, height: 20),
+            frame: CGRect(x: 100, y: 100, width: 98, height: 100),
+            options: .init(leader: false))),
+            style: .init(colour: .init(red: 0, green: 0, blue: 0, alpha: 1), width: 2))
+        bytes.withUnsafeBufferPointer { buffer in
+            let pixels = PixelBuffer(base: buffer.baseAddress!, width: side, height: side)
+            let grip = CGPoint(x: 198, y: 200)
+            let targets = pixels.snapTargets(rect: proposed.pixelSnapBounds, points: [grip],
+                                             bounds: CGRect(x: 0, y: 0, width: 240, height: 240), range: 3)
+            let result = SnappingEngine.snap(points: [grip], targets: targets, range: 3)
+            #expect(result.offset == CGPoint(x: edgeBySource ? 0 : -2, y: 0))
+        }
+    }
+
     // Proves visible window UI supplies targets instead of occluded display UI,
     // retaining native pixels even when the Canvas crop covers a smaller area.
     @Test func editorWindowBackdrop() throws {
