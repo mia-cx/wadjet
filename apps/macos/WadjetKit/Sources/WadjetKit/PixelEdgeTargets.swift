@@ -18,12 +18,18 @@ extension CanvasDocument {
         guard let image = displayImages[display.id] else {
             throw CanvasDocumentError.invalidPackage(display.imageFileName)
         }
-        guard windowLayers.contains(where: { $0.frame.intersects(display.frame) }) else { return image }
-        var backdrop = self
-        backdrop.layerStack = LayerStack(layerStack.annotations.filter {
+        // windows paint where their Annotations sit now, not where the layers
+        // were captured — either one can keep this display off the fast path
+        let windows = layerStack.annotations.filter {
             if case .window = $0.kind { return !$0.hidden }
             return false
-        })
+        }
+        guard windowLayers.contains(where: { $0.id == nil && $0.frame.intersects(display.frame) })
+                || windows.contains(where: {
+                    PathGeometry.path(for: $0).boundingBox.intersects(display.frame) })
+        else { return image }
+        var backdrop = self
+        backdrop.layerStack = LayerStack(windows)
         backdrop.cornerRadius = 0
         return try backdrop.flatten(crop: display.frame, scale: CGFloat(image.width) / display.frame.width)
     }

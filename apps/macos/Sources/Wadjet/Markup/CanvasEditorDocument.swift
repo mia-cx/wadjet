@@ -61,7 +61,7 @@ final class CanvasEditorDocument: NSDocument {
         m.document = self
         m.snapPixelSources = { [weak self] in
             guard let self else { return [] }
-            let canvas = canvas
+            let canvas = current // the live stack: window Annotations decide each backdrop
             return canvas.layout.map { display in
                 MarkupPixelEdges(bounds: display.frame) {
                     do { return try canvas.snappingImage(for: display) }
