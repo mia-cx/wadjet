@@ -463,36 +463,68 @@ final class MarkupController {
         let limit = isScreen ? (NSScreen.screens.first { NSMouseInRect(p, $0.frame, false) }
             ?? NSScreen.main)?.frame.size
             : snapBounds?.size
-        func fit(_ size: CGSize) -> CGSize {
-            guard let limit, size.width > 0, size.height > 0 else { return size }
-            let k = min(1, limit.width / size.width, limit.height / size.height)
-            return CGSize(width: size.width * k, height: size.height * k)
-        }
-        func frame(_ size: CGSize) -> CGRect {
-            let s = fit(size)
-            return CGRect(x: p.x - s.width / 2, y: p.y - s.height / 2, width: s.width, height: s.height)
-        }
         // a Text or Pen session in flight is its own undo step, before the paste's
         let penDone = finishPen(), textDone = commitEditing()
         if penDone || textDone { separateUndoGroup() }
-        let a: Annotation
+        let size: CGSize
         switch content {
-        case let .canvas(doc, link):
-            assets.canvases[link.url] = doc
-            a = Annotation(kind: .canvas(link, ImagePlacement(frame: frame(doc.crop.size),
-                crop: doc.crop, cornerRadius: doc.cornerRadius)), style: Self.imageStyle)
-        case let .image(image, size):
-            let asset = UUID()
-            assets.images[asset] = image
-            a = Annotation(kind: .image(asset: asset, ImagePlacement(frame: frame(size),
-                crop: CGRect(x: 0, y: 0, width: image.width, height: image.height))), style: Self.imageStyle)
+        case let .canvas(doc, _): size = doc.crop.size
+        case let .image(_, s): size = s
         }
+        let a = imageAnnotation(content, frame: Self.centred(size, at: p, within: limit))
         edit { $0.add(a) }
         syncPanels()
         selection = a.id
         if armed != .select { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
         AppLog.line("markup: pasted \(content.label)")
         return true
+    }
+
+    /// `size` scaled down (never up) to fit `limit`, centred on `p`
+    private static func centred(_ size: CGSize, at p: CGPoint, within limit: CGSize?) -> CGRect {
+        var s = size
+        if let limit, size.width > 0, size.height > 0 {
+            let k = min(1, limit.width / size.width, limit.height / size.height)
+            s = CGSize(width: size.width * k, height: size.height * k)
+        }
+        return CGRect(x: p.x - s.width / 2, y: p.y - s.height / 2, width: s.width, height: s.height)
+    }
+
+    /// the image-kind Annotation showing `content` at `frame`; its pixels or
+    /// Canvas join `assets`
+    private func imageAnnotation(_ content: MarkupPasteboard.Content, frame: CGRect) -> Annotation {
+        switch content {
+        case let .canvas(doc, link):
+            assets.canvases[link.url] = doc
+            return Annotation(kind: .canvas(link, ImagePlacement(frame: frame,
+                crop: doc.crop, cornerRadius: doc.cornerRadius)), style: Self.imageStyle)
+        case let .image(image, _):
+            let asset = UUID()
+            assets.images[asset] = image
+            return Annotation(kind: .image(asset: asset, ImagePlacement(frame: frame,
+                crop: CGRect(x: 0, y: 0, width: image.width, height: image.height))), style: Self.imageStyle)
+        }
+    }
+
+    /// Pin to screen: a Screenshot's Canvas exactly over the crop it was captured
+    /// from while that is on a current display, else (and for an image without a
+    /// Canvas) centred on the main display — on top, not selected, nothing armed,
+    /// so it stays like any Annotation until erased or cleared
+    func pin(_ content: MarkupPasteboard.Content) {
+        var captured: CGRect?
+        let size: CGSize
+        switch content {
+        case let .canvas(doc, _):
+            size = doc.crop.size
+            if NSScreen.screens.contains(where: { $0.frame.intersects(doc.crop) }) { captured = doc.crop }
+        case let .image(_, s): size = s
+        }
+        let screen = NSScreen.main?.frame ?? .zero
+        let frame = captured ?? Self.centred(size, at: CGPoint(x: screen.midX, y: screen.midY), within: screen.size)
+        edit { $0.add(imageAnnotation(content, frame: frame)) }
+        // a first pin's panels are new, and no selection change renders them
+        syncPanels(); render()
+        AppLog.line("markup: pinned \(content.label)")
     }
 
     /// ends recrop mode; true when one was in flight — Escape consumes it first

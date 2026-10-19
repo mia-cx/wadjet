@@ -1399,7 +1399,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func updateEscHotkey() {
         let s = AppState.shared
         let active = s.phase == .frozen || s.phase == .toolbar || s.phase == .countdown
-            || !toastCtrl.items.isEmpty || !pins.isEmpty
+            || !toastCtrl.items.isEmpty
         if active && !escRegistered {
             if !escHandlerInstalled {
                 escHandlerInstalled = true
@@ -1453,7 +1453,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             spaceRef = nil; spaceRegistered = false
         }
     }
-    // priority: overlay > countdown > in-flight toast > idle toast > pin.
+    // priority: overlay > countdown > in-flight toast > idle toast.
     // (Recording is never here; Esc is not registered on its account.)
     func handleEsc() {
         let s = AppState.shared
@@ -1480,36 +1480,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             toastCtrl.dismiss(t); AppLog.line("esc: dismissed idle toast")
             updateEscHotkey(); return
         }
-        if let p = pins.last {
-            p.close(); pins.removeLast(); AppLog.line("esc: closed pin")
-            updateEscHotkey(); return
-        }
-        updateEscHotkey()
-    }
-
-    // MARK: pins
-    var pins: [NSPanel] = []
-    func openPin(image: CGImage) {
-        let w = CGFloat(image.width), h = CGFloat(image.height)
-        let scale = min(1, 400 / max(w, 1))
-        let size = NSSize(width: w * scale, height: h * scale)
-        let f = NSScreen.main!.frame
-        let p = NSPanel(contentRect: NSRect(x: f.midX - size.width / 2 + CGFloat(pins.count) * 30,
-                                            y: f.midY - size.height / 2 + CGFloat(pins.count) * 30,
-                                            width: size.width, height: size.height),
-                        styleMask: [.borderless, .nonactivatingPanel, .resizable], backing: .buffered, defer: false)
-        p.level = .floating; p.collectionBehavior = [.canJoinAllSpaces]
-        p.hasShadow = true; p.isOpaque = false; p.backgroundColor = .clear
-        p.isMovableByWindowBackground = true
-        let v = PinView(frame: NSRect(origin: .zero, size: size), image: image)
-        p.contentView = v; p.orderFront(nil)
-        pins.append(p)
-        NotificationCenter.default.addObserver(forName: NSWindow.willCloseNotification, object: p, queue: .main) { [weak self] _ in
-            Task { @MainActor [weak self] in
-                self?.pins.removeAll { $0 === p }
-                self?.updateEscHotkey()
-            }
-        }
         updateEscHotkey()
     }
 
@@ -1528,40 +1498,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 }
 
 func fmtT(_ t: TimeInterval) -> String { String(format: "%d:%02d", Int(t) / 60, Int(t) % 60) }
-
-// MARK: - Pin view
-
-final class PinView: NSView {
-    let image: CGImage
-    var zoom: CGFloat = 1, offset = CGPoint.zero
-    init(frame f: NSRect, image: CGImage) { self.image = image; super.init(frame: f); wantsLayer = true }
-    required init?(coder: NSCoder) { fatalError() }
-    override func draw(_ r: NSRect) {
-        NSColor.windowBackgroundColor.setFill(); r.fill()
-        let ctx = NSGraphicsContext.current!.cgContext
-        ctx.saveGState(); ctx.translateBy(x: offset.x, y: offset.y); ctx.scaleBy(x: zoom, y: zoom)
-        ctx.draw(image, in: CGRect(origin: .zero, size: bounds.size)); ctx.restoreGState()
-    }
-    override func scrollWheel(with e: NSEvent) {
-        if e.modifierFlags.contains(.control) { return } // ctrl+wheel handled by magnify on trackpads; also zoom here
-        offset.x += e.deltaX * (e.hasPreciseScrollingDeltas ? 1 : 10)
-        offset.y -= e.deltaY * (e.hasPreciseScrollingDeltas ? 1 : 10)
-        needsDisplay = true
-    }
-    override func magnify(with e: NSEvent) {
-        let z0 = zoom; zoom = min(8, max(0.2, zoom * (1 + e.magnification)))
-        let m = convert(e.locationInWindow, from: nil)
-        offset.x = m.x - (m.x - offset.x) * zoom / z0
-        offset.y = m.y - (m.y - offset.y) * zoom / z0
-        needsDisplay = true
-    }
-    override func mouseDown(with e: NSEvent) {
-        if e.clickCount == 2 { window?.close(); return }
-        super.mouseDown(with: e)
-    }
-    override var acceptsFirstResponder: Bool { true }
-    override func keyDown(with e: NSEvent) { if e.keyCode == 53 { window?.close() } }
-}
 
 // MARK: - Overlay controller
 
@@ -4324,11 +4260,20 @@ final class AppWorkflowEffects: WorkflowEffects {
         }
     }
 
-    func pin(_ file: URL, run: UUID) async throws {
-        guard let img = NSImage(contentsOf: file)?.cgImage(forProposedRect: nil, context: nil, hints: nil) else {
-            throw NSError(domain: "wadjet", code: 1, userInfo: [NSLocalizedDescriptionKey: "couldn't read the image"])
+    /// places the run's Canvas linked like a paste, so the next Screenshot's
+    /// Canvas lists it in `linkedCanvases` and retention keeps it; a run
+    /// without a Canvas pins its image file
+    func pin(_ file: URL, canvas: URL?, run: UUID) async throws {
+        if let canvas {
+            MarkupController.shared.pin(.canvas(try CanvasDocument.read(from: canvas), CanvasLink(url: canvas)))
+        } else {
+            guard let src = CGImageSourceCreateWithURL(file as CFURL, nil),
+                  let (image, size) = ImportedImage.decode(src) else {
+                throw NSError(domain: "wadjet", code: 1, userInfo: [NSLocalizedDescriptionKey: "couldn't read the image"])
+            }
+            MarkupController.shared.pin(.image(image, size: size))
         }
-        AppDelegate.shared?.openPin(image: img)
+        AppDelegate.shared?.overlayCtrl.syncDesktopChrome() // the island appears / shows the new count
     }
 
     func showToast(_ file: URL, run: UUID) async throws {

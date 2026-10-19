@@ -15,10 +15,11 @@ private func mkFile(_ dir: URL, _ name: String = "in.png") throws -> URL {
 final class FakeEffects: WorkflowEffects, @unchecked Sendable {
     private(set) var order: [String] = []
     private(set) var files: [URL] = []
+    private(set) var pinnedCanvases: [URL?] = []
     func copyImage(_ file: URL, run: UUID) async throws { order.append("copy"); files.append(file) }
     func copyFile(_ file: URL, run: UUID) async throws { order.append("copyFile"); files.append(file) }
     func open(_ file: URL, app: String?, run: UUID) async throws { order.append("open"); files.append(file) }
-    func pin(_ file: URL, run: UUID) async throws { order.append("pin"); files.append(file) }
+    func pin(_ file: URL, canvas: URL?, run: UUID) async throws { order.append("pin"); files.append(file); pinnedCanvases.append(canvas) }
     func showToast(_ file: URL, run: UUID) async throws { order.append("toast"); files.append(file) }
 }
 
@@ -41,7 +42,7 @@ private final class GatedEffects: WorkflowEffects, @unchecked Sendable {
     func copyImage(_ file: URL, run: UUID) async throws { await gate.wait() }
     func copyFile(_ file: URL, run: UUID) async throws {}
     func open(_ file: URL, app: String?, run: UUID) async throws {}
-    func pin(_ file: URL, run: UUID) async throws {}
+    func pin(_ file: URL, canvas: URL?, run: UUID) async throws {}
     func showToast(_ file: URL, run: UUID) async throws {}
 }
 
@@ -155,6 +156,30 @@ struct WorkflowTests {
         for await _ in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir()) {}
         #expect(fx.order == ["copyFile", "copyFile", "open", "pin"])
         #expect(fx.files == [file, savedURL, savedURL, savedURL])
+    }
+
+    // Proves Pin hands the effect the run's own Canvas package and current image, before and after Save file, and nil without a Canvas.
+    @Test func pinGetsTheRunsCanvasAndCurrentImage() async throws {
+        let dir = tempDir(), a = tempDir(), b = tempDir()
+        let file = try mkFile(dir)
+        let package = tempDir().appendingPathComponent("shot.wadjet")
+        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        let fx = FakeEffects()
+        let wf = Workflow(name: "w", takes: .screenshot, steps: [
+            .pin, .saveFile(folder: a.path), .pin, .saveFile(folder: b.path, format: .canvas), .pin])
+        var last: RunEvent?
+        for await e in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir(), canvas: package) { last = e }
+        #expect(fx.pinnedCanvases.map { $0?.path } == [package.path, package.path, package.path])
+        let saved = a.appendingPathComponent("in.png")
+        #expect(fx.files == [file, saved, saved])
+        guard case .done(let doneSaved, let errors) = last else { Issue.record("no done, got \(last as Any)"); return }
+        #expect(doneSaved.map(\.path) == [saved.path, b.appendingPathComponent("in.wadjet").path])
+        #expect(errors.isEmpty)
+
+        let fx2 = FakeEffects()
+        let wf2 = Workflow(name: "w", takes: .screenshot, steps: [.pin])
+        for await _ in WorkflowRunner(effects: fx2).run(file, through: wf2, defaultFolder: tempDir()) {}
+        #expect(fx2.pinnedCanvases == [nil])
     }
 
     @Test func newStepsRoundTrip() throws {

@@ -135,7 +135,9 @@ public protocol WorkflowEffects: Sendable {
     func copyImage(_ file: URL, run: UUID) async throws
     func copyFile(_ file: URL, run: UUID) async throws
     func open(_ file: URL, app: String?, run: UUID) async throws
-    func pin(_ file: URL, run: UUID) async throws
+    /// Pin gets the run's current image and its Canvas (the package the run
+    /// was started with, never a Save file copy); nil when the run has none.
+    func pin(_ file: URL, canvas: URL?, run: UUID) async throws
     func showToast(_ file: URL, run: UUID) async throws
 }
 
@@ -148,7 +150,8 @@ public protocol WorkflowEffects: Sendable {
 /// later Steps (Copy file, Open in an app) the copy outside
 /// the sandbox container, which other apps can read without a prompt.
 /// Copy image, Pin and Show toast always use the latest image copy, even after
-/// Save Canvas. The Canvas URL travels alongside the image, never replacing it.
+/// Save Canvas. The Canvas URL travels alongside the image, never replacing it;
+/// Pin receives it too.
 public struct WorkflowRunner: Sendable {
     let effects: any WorkflowEffects
     public init(effects: any WorkflowEffects) { self.effects = effects }
@@ -176,7 +179,7 @@ public struct WorkflowRunner: Sendable {
                         case .copyImage: try await effects.copyImage(currentImage, run: id)
                         case .copyFile: try await effects.copyFile(current, run: id)
                         case .openIn(let app): try await effects.open(current, app: app, run: id)
-                        case .pin: try await effects.pin(currentImage, run: id)
+                        case .pin: try await effects.pin(currentImage, canvas: canvas, run: id)
                         case .showToast: try await effects.showToast(currentImage, run: id)
                         }
                         continuation.yield(.finished(i, step))
