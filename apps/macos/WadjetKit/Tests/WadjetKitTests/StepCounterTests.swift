@@ -91,11 +91,16 @@ struct StepCounterTests {
         #expect(bb.width < 28)
     }
 
-    // Proves a corner grip resizes a counter's circle, keeping it circular.
+    // Proves a grip resizes a counter's circle about the anchor — the opposite
+    // edge stays put — with one scale on both axes.
     @Test func resizingACounter() {
         let a = Annotation(kind: .counter(center: .zero, radius: 10, value: 3, format: .letters),
                            style: style)
-        let r = a.dragging(.resize(x: 1, y: 1), from: CGPoint(x: 10, y: 10), to: CGPoint(x: 30, y: 20))
-        #expect(r.kind == .counter(center: CGPoint(x: 10, y: 5), radius: 15, value: 3, format: .letters))
+        // right edge dragged to (30,0): the left edge stays at x = −10
+        let edge = a.dragging(.resize(x: 1, y: 0), from: CGPoint(x: 10, y: 0), to: CGPoint(x: 30, y: 0))
+        #expect(edge.kind == .counter(center: CGPoint(x: 10, y: 0), radius: 20, value: 3, format: .letters))
+        // a corner drag takes the larger scale: (−10,−10) stays put
+        let corner = a.dragging(.resize(x: 1, y: 1), from: CGPoint(x: 10, y: 10), to: CGPoint(x: 30, y: 20))
+        #expect(corner.kind == .counter(center: CGPoint(x: 10, y: 10), radius: 20, value: 3, format: .letters))
     }
 }

@@ -52,6 +52,13 @@ extension AnnotationKind {
                             value: value, format: format)
         }
     }
+    /// resizes with one scale on both axes so it keeps its shape
+    var keepsAspect: Bool {
+        switch self {
+        case .counter: true
+        case .line, .censor, .shape: false
+        }
+    }
     /// an upright box that mapPoints re-standardizes, so a negative resize
     /// scale has to become a flip instead
     var isBox: Bool {
@@ -96,8 +103,15 @@ extension Annotation {
             let anchor = CGPoint(x: b.midX - CGFloat(x) * b.width / 2, y: b.midY - CGFloat(y) * b.height / 2)
             let grip = CGPoint(x: b.midX + CGFloat(x) * b.width / 2, y: b.midY + CGFloat(y) * b.height / 2)
             // a 0 component leaves that axis alone; dragging past the anchor mirrors (negative scale)
-            let sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
-            let sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
+            var sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
+            var sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
+            if kind.keepsAspect {
+                // a counter stays a circle: one scale from the grip's moving
+                // axis, the larger on a corner, so the mapped box stays square
+                let u = x == 0 ? abs(sy) : y == 0 ? abs(sx) : max(abs(sx), abs(sy))
+                sx = x == 0 ? u : (sx < 0 ? -u : u)
+                sy = y == 0 ? u : (sy < 0 ? -u : u)
+            }
             var new = self
             new.kind = kind.mapPoints { CGPoint(x: anchor.x + ($0.x - anchor.x) * sx,
                                                 y: anchor.y + ($0.y - anchor.y) * sy) }
