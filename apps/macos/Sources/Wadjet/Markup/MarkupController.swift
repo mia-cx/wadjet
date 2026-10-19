@@ -36,6 +36,8 @@ final class MarkupController {
     @ObservationIgnored var zoom: CGFloat = 1
     /// an Editor's snap targets end at the Canvas bounds; nil snaps against the live screen
     @ObservationIgnored var snapBounds: CGRect?
+    /// An Editor supplies its Canvas display pixels at gesture start.
+    @ObservationIgnored var snapPixelSources: (() -> [MarkupPixelEdges])?
 
     /// the rect a Magnify places its magnifier against — the Editor's Canvas
     /// bounds when set, else the display under `p`
@@ -483,12 +485,12 @@ final class MarkupController {
                 if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                                       minExtent: Self.handleMinExtent / zoom,
                                       rotateOffset: Self.rotateOffset / zoom) {
-                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds)
+                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
                     gesture = .handle(h, sel, from: p)
                     return
                 }
                 if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
-                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds)
+                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
                     gesture = Self.moveGesture(sel, at: p)
                     return
                 }
@@ -496,7 +498,7 @@ final class MarkupController {
             if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom) {
                 selection = hit.id
                 AppLog.line("markup: selected")
-                snapper = MarkupSnapper(stack: stack, excluding: hit.id, canvasBounds: snapBounds)
+                snapper = MarkupSnapper(stack: stack, excluding: hit.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
                 gesture = Self.moveGesture(hit, at: p)
             } else {
                 selection = nil
@@ -559,7 +561,7 @@ final class MarkupController {
         default:
             return
         }
-        snapper = MarkupSnapper(stack: stack, excluding: nil, canvasBounds: snapBounds)
+        snapper = MarkupSnapper(stack: stack, excluding: nil, canvasBounds: snapBounds, pixelSources: snapPixelSources)
         let so = snapper?.offset(points: [p]) ?? .zero
         gesture = .drawing(a.moved(by: so), from: CGPoint(x: p.x + so.dx, y: p.y + so.dy))
         render()
@@ -631,8 +633,7 @@ final class MarkupController {
         case let .moving(start, from):
             let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
             // a Magnify snaps its magnifier frame, not its whole path's box
-            let snapRect = if case .magnify = moved.kind { moved.kind.bounds }
-                else { PathGeometry.path(for: moved).boundingBoxOfPath }
+            let snapRect = moved.pixelSnapBounds
             let snapped = snapper?.offset(rect: snapRect) ?? .zero
             stack.replace(moved.moved(by: snapped))
         case let .movingSource(start, from):

@@ -57,6 +57,19 @@ final class CanvasEditorDocument: NSDocument {
         let m = MarkupController(editing: canvas.layerStack)
         m.undoManager = undoManager
         m.document = self
+        m.snapPixelSources = { [weak self] in
+            guard let self else { return [] }
+            let canvas = canvas
+            return canvas.layout.map { display in
+                MarkupPixelEdges(bounds: display.frame) {
+                    do { return try canvas.snappingImage(for: display) }
+                    catch {
+                        AppLog.line("markup: pixel snapping backdrop failed: \(error.localizedDescription)")
+                        return nil
+                    }
+                }
+            }
+        }
         m.arm(.select)
         markupCached = m
         return m

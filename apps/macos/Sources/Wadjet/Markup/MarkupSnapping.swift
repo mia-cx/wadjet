@@ -7,16 +7,25 @@ import WadjetKit
 @MainActor struct MarkupSnapper {
     let targets: [SnapTarget]
     let range: CGFloat
+    private let pixels: [MarkupPixelEdges]
     private(set) var guides: [SnapGuide] = []
 
     /// nil while the Snapping setting is off. Target order is the tiebreak:
     /// Annotations, then other apps' windows, then the displays. An Editor
-    /// passes `canvasBounds`: its Canvas is a still — the only targets are its
-    /// Annotations and the bounds Recrop can reach.
-    init?(stack: LayerStack, excluding id: Annotation.ID?, canvasBounds: CGRect? = nil) {
+    /// passes `canvasBounds` for its Annotations and the bounds Recrop can reach.
+    /// Pixel targets are scanned
+    /// lazily from the gesture's still images; the live screen supplies none.
+    init?(stack: LayerStack, excluding id: Annotation.ID?, canvasBounds: CGRect? = nil,
+          pixelSources: (() -> [MarkupPixelEdges])? = nil) {
         let c = AppState.shared.config.value.markup
         guard c.snapping else { return nil }
         range = c.snapRange
+        pixels = pixelSources?() ?? (AppState.shared.phase == .frozen && canvasBounds == nil
+            && AppDelegate.shared?.overlayCtrl.showsFrozen == true
+            ? Freeze.shared.displays.map {
+                let image = AppState.shared.shotWadjet ? $0.clean : $0.bareClean ?? $0.clean
+                return MarkupPixelEdges(image: image, bounds: $0.screen.frame)
+            } : [])
         if let canvasBounds {
             targets = SnapTarget.annotations(stack.annotations, excluding: id)
                 + [.rect(canvasBounds)]
@@ -32,7 +41,7 @@ import WadjetKit
     }
 
     mutating func offset(rect: CGRect? = nil, points: [CGPoint] = []) -> CGVector {
-        let r = SnappingEngine.snap(rect: rect, points: points, targets: targets,
+        let r = SnappingEngine.snap(rect: rect, points: points, targets: targets + pixelTargets(rect: rect, points: points),
                                     range: range, skip: NSEvent.modifierFlags.contains(.control))
         guides = r.guides
         return CGVector(dx: r.offset.x, dy: r.offset.y)
@@ -41,13 +50,30 @@ import WadjetKit
     /// a grip drag through the targets; the WadjetKit function keeps the
     /// press offset and snaps only the axes the grip can move
     mutating func dragging(_ a: Annotation, _ h: SelectionHandle, from: CGPoint, to: CGPoint) -> Annotation {
+        let grip = a.handles(minExtent: MarkupController.handleMinExtent, rotateOffset: MarkupController.rotateOffset)
+            .filter { $0.handle == h }
+            .min { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) }?.at
+        let points = grip.map { [CGPoint(x: $0.x + to.x - from.x, y: $0.y + to.y - from.y)] } ?? []
+        var rect: CGRect?
+        if case .resize = h {
+            let proposed = a.dragging(h, from: from, to: to,
+                                      minExtent: MarkupController.handleMinExtent,
+                                      rotateOffset: MarkupController.rotateOffset,
+                                      targets: [], range: range, skip: true).annotation
+            rect = proposed.pixelSnapBounds
+        }
         let r = a.dragging(h, from: from, to: to,
                            minExtent: MarkupController.handleMinExtent,
                            rotateOffset: MarkupController.rotateOffset,
-                           targets: targets, range: range,
+                           targets: targets + pixelTargets(rect: rect, points: points), range: range,
                            skip: NSEvent.modifierFlags.contains(.control))
         guides = r.guides
         return r.annotation
+    }
+
+    private func pixelTargets(rect: CGRect? = nil, points: [CGPoint] = []) -> [SnapTarget] {
+        guard !NSEvent.modifierFlags.contains(.control) else { return [] }
+        return pixels.flatMap { $0.targets(rect: rect, points: points, range: range) }
     }
 }
 
