@@ -4023,8 +4023,7 @@ struct ToolMenuView: View {
             case .markup:
                 MarkupStyleControls(tool: tool, ctrl: ctrl)
                 selectionRows()
-                divider()
-                clearAfterScreenshotRow()
+                if tool == .select { markupGroupRows() }
             default: EmptyView()
             }
         }
