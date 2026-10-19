@@ -226,6 +226,13 @@ final class MarkupController {
         AppLog.line("markup: transformed selection")
     }
 
+    /// ⌘] / ⌘[ / ⇧⌘] / ⇧⌘[ move the selection through the stack
+    func restackSelection(_ move: LayerStack.Restack) {
+        guard let id = selection else { return }
+        edit { $0.restack(id, move) }
+        AppLog.line("markup: restacked selection \(move)")
+    }
+
     /// true when there was a selection to drop
     @discardableResult
     func deselect() -> Bool {
@@ -340,7 +347,7 @@ final class MarkupController {
     }
 
     func render() {
-        let shown = stack.annotations + [draft].compactMap { $0 }
+        let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
     }

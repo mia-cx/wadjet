@@ -17,7 +17,8 @@ import WadjetKit
         range = c.snapRange
         let infos = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements],
                                                kCGNullWindowID) as? [[String: Any]] ?? []
-        targets = SnapTarget.annotations(stack.annotations, excluding: id)
+        // hidden Annotations don't draw, so they don't pull the pointer either
+        targets = SnapTarget.annotations(stack.annotations.filter { !$0.hidden }, excluding: id)
             + SnapTarget.windows(infos, excludingOwner: getpid(),
                                  primaryHeight: NSScreen.screens[0].frame.height)
             + NSScreen.screens.map { .rect($0.frame) }
