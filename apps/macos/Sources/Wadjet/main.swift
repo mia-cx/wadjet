@@ -827,7 +827,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let cfg = SCScreenshotConfiguration()
         cfg.width = Int((scw.frame.width * sc).rounded())
         cfg.height = Int((scw.frame.height * sc).rounded())
-        cfg.showsCursor = false
+        cfg.showsCursor = cursor
         cfg.dynamicRange = hdr ? .bothSDRAndHDR : .sdr
         do {
             let out = try await SCScreenshotManager.captureScreenshot(
