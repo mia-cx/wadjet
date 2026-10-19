@@ -19,9 +19,13 @@ extension OverlayController {
         refreshToolbars()
     }
     /// a display plugged in or out: the live chrome follows the new screen set,
-    /// keeping whatever Markup Tool is armed on the live toolbar
+    /// keeping whatever Markup Tool is armed on the live toolbar. Display
+    /// indices shift, so an armed Tool re-claims the pointer's display.
     func screensChanged() {
-        guard AppState.shared.phase == .toolbar else { return syncDesktopChrome() }
+        let s = AppState.shared
+        guard s.phase == .toolbar || s.phase == .desktop else { return }
+        s.expandedDisplay = nil
+        guard s.phase == .toolbar else { return syncDesktopChrome() }
         chromeScreens = NSScreen.screens
         refreshToolbars()
     }
