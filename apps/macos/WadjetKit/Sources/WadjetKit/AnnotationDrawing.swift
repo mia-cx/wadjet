@@ -13,8 +13,9 @@ public struct CensorSource: Sendable {
 
 extension CGContext {
     /// draws one Annotation as the Markup panels do; hidden ones not at all. Blur and Pixelate render
-    /// from `sources` in `format` and `colorSpace`, over black where no source covers them.
-    public func draw(_ annotation: Annotation, sources: [CensorSource] = [],
+    /// from `sources` in `format` and `colorSpace`, over black where no source covers them. A Magnify
+    /// composites its viewport through MagnifyRenderer at `scale` pixels per point.
+    public func draw(_ annotation: Annotation, sources: [CensorSource] = [], scale: CGFloat = 1,
                      format: CIFormat = .RGBA8,
                      colorSpace: CGColorSpace = CGColorSpace(name: CGColorSpace.sRGB)!) {
         guard !annotation.hidden else { return }
@@ -87,6 +88,30 @@ extension CGContext {
             setFillColor(RGBAColour(red: 1, green: 1, blue: 1, alpha: 1).cgColor)
             addPath(label)
             fillPath()
+        }
+        if case let .magnify(m) = annotation.kind {
+            // the magnified viewport, masked to the shape — every source it
+            // overlaps feeds MagnifyRenderer, like the Censor branch
+            let covering = sources.filter { $0.frame.intersects(m.viewport) }
+                .map { (CIImage(cgImage: $0.image), $0.frame) }
+            if let content = MagnifyRenderer.content(
+                m, sources: covering, scale: scale, format: format,
+                colorSpace: colorSpace) {
+                let image = m.options.glass
+                    ? MagnifyRenderer.glass(content, shape: m.options.shape, scale: scale) ?? content
+                    : content
+                saveGState()
+                addPath(m.options.shape.path(in: m.frame))
+                clip()
+                draw(image, in: m.frame)
+                restoreGState()
+            }
+            if let border = m.options.border {
+                setStrokeColor(border.cgColor)
+                setLineWidth(annotation.style.width)
+                addPath(m.options.shape.path(in: m.frame))
+                strokePath()
+            }
         }
         endTransparencyLayer()
         restoreGState()

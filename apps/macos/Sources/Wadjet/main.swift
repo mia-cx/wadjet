@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", draw = "draw", shapes = "shapes", counter = "counter", censor = "censor", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
+    case select = "select", draw = "draw", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear Annotations"
         case .moreMarkup: "More Markup Tools"
         }
     }
@@ -34,7 +34,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .clearAnnotations: "Clear"
         case .moreMarkup: "More"
         }
     }
@@ -53,7 +53,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .draw: "line.diagonal"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .clearAnnotations: "trash"
         case .moreMarkup: "ellipsis"
         }
     }
@@ -2238,7 +2238,7 @@ enum WadjetCursors {
     }
     static func make(_ t: Tool) -> NSCursor {
         switch t {
-        case .capRegion, .recRegion, .copyText, .measure, .draw, .shapes, .counter, .censor: return .crosshair
+        case .capRegion, .recRegion, .copyText, .measure, .draw, .shapes, .counter, .censor, .magnify: return .crosshair
         case .select: return .arrow
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
@@ -2652,7 +2652,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText, .select, .draw, .shapes, .counter, .censor, .clearAnnotations, .moreMarkup: break
+        case .copyText, .select, .draw, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -4038,11 +4038,13 @@ struct ToolMenuView: View {
             case .markup:
                 if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                 if tool == .counter { CounterControls(ctrl: ctrl) }
+                if tool == .magnify { MagnifyShapeControls() }
                 if tool == .censor { CensorControls(ctrl: ctrl) } else {
                     if tool == .draw { tileRow(drawTiles) }
                     MarkupStyleControls(tool: tool, ctrl: ctrl)
                 }
                 if tool == .shapes { ShapePaintControls(tool: tool, ctrl: ctrl) }
+                if tool == .magnify { magnifyRows() }
                 selectionRows()
                 if tool == .select, !editor { markupGroupRows() }
             default: EmptyView()

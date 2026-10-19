@@ -33,12 +33,22 @@ final class MarkupController {
     @ObservationIgnored var zoom: CGFloat = 1
     /// an Editor's snap targets end at the Canvas bounds; nil snaps against the live screen
     @ObservationIgnored var snapBounds: CGRect?
+
+    /// the rect a Magnify places its magnifier against — the Editor's Canvas
+    /// bounds when set, else the display under `p`
+    private func placementBounds(around p: CGPoint) -> CGRect {
+        snapBounds ?? NSScreen.screens.first { $0.frame.contains(p) }?.frame
+            ?? NSScreen.main?.frame ?? .zero
+    }
     /// the stack when the drag in flight began — its one undo step
     @ObservationIgnored private var gestureStart: LayerStack?
     enum Gesture {
         case drawing(Annotation, from: CGPoint)
         case pen
         case moving(Annotation, from: CGPoint)
+        /// a Magnify grabbed outside its magnifier box: the source moves, the
+        /// magnifier stays put
+        case movingSource(Annotation, from: CGPoint)
         case handle(SelectionHandle, Annotation, from: CGPoint)
     }
     /// an in-progress Pen path and the pointer's latest position for its preview
@@ -91,7 +101,10 @@ final class MarkupController {
                                                object: nil, queue: .main) { [weak self] _ in
             Task { @MainActor [weak self] in self?.screensChanged() }
         }
+        ScreenSamples.shared.onChange = { [weak self] in self?.syncSampled() }
     }
+    /// a fresh sample or a lost stream: every panel re-syncs its sampled layers
+    private func syncSampled() { for p in panels { p.view.syncSampled() } }
 
     /// an Editor's Markup over one Canvas's stack: it draws on `surface` and
     /// records undo steps in `undoManager` (its document's), never the screen panels
@@ -142,10 +155,12 @@ final class MarkupController {
     }
 
     func undo() {
+        closeScroll()
         guard gesture == nil, let s = history.undo(from: stack) else { return }
         restore(s); AppLog.line("markup: undo")
     }
     func redo() {
+        closeScroll()
         guard gesture == nil, let s = history.redo(from: stack) else { return }
         restore(s); AppLog.line("markup: redo")
     }
@@ -186,6 +201,7 @@ final class MarkupController {
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
+            closeScroll() // an open phased scroll is its own step too
             gesture = nil; selection = nil; cmdHeld = false; snapper = nil; counterNext = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
@@ -244,7 +260,7 @@ final class MarkupController {
     func syncPanels() {
         guard isScreen else { return }
         guard armed != nil || draft != nil || !stack.isEmpty else {
-            panels.forEach { $0.close() }; panels = []; return
+            panels.forEach { $0.close() }; panels = []; ScreenSamples.shared.stop(); return
         }
         guard panels.isEmpty else { return }
         panels = NSScreen.screens.map { sc in
@@ -261,6 +277,7 @@ final class MarkupController {
     /// display hotplug: rebuild the panels on the new screen set
     func screensChanged() {
         panels.forEach { $0.close() }; panels = []
+        ScreenSamples.shared.stop()
         syncPanels()
         for p in panels { p.ignoresMouseEvents = armed == nil }
         render(); raise()
@@ -290,8 +307,14 @@ final class MarkupController {
 
     /// restyles one Annotation by id — the eyedropper's target, whose selection Pick Colour's disarm cleared
     func restyle(_ id: Annotation.ID, _ change: (inout AnnotationStyle) -> Void) {
+        update(id) { change(&$0.style) }
+    }
+
+    /// edits one Annotation by id as a single undo step — for changes that
+    /// touch the kind, like a Magnify's border through the eyedropper
+    func update(_ id: Annotation.ID, _ change: (inout Annotation) -> Void) {
         guard var a = stack.annotations.first(where: { $0.id == id }) else { return }
-        change(&a.style)
+        change(&a)
         edit { $0.replace(a) }
         AppLog.line("markup: restyled selection")
     }
@@ -349,6 +372,7 @@ final class MarkupController {
     // strokes arrive as global screen points from MarkupView; `command` =
     // temporary Select, `constrained` = Shift (45° snaps)
     func begin(at p: CGPoint, command: Bool, constrained: Bool = false) {
+        closeScroll() // an open phased scroll is its own undo step
         gestureStart = stack
         if armed == .select || command {
             if let sel = selected {
@@ -361,7 +385,7 @@ final class MarkupController {
                 }
                 if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
                     snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds)
-                    gesture = .moving(sel, from: p)
+                    gesture = Self.moveGesture(sel, at: p)
                     return
                 }
             }
@@ -369,7 +393,7 @@ final class MarkupController {
                 selection = hit.id
                 AppLog.line("markup: selected")
                 snapper = MarkupSnapper(stack: stack, excluding: hit.id, canvasBounds: snapBounds)
-                gesture = .moving(hit, from: p)
+                gesture = Self.moveGesture(hit, at: p)
             } else {
                 selection = nil
             }
@@ -402,6 +426,11 @@ final class MarkupController {
         case .counter:
             placeCounter(at: p)
             return
+        case .magnify:
+            a = Annotation(kind: .magnify(.placed(source: CGRect(origin: p, size: .zero),
+                                                 options: MarkupMagnify.options,
+                                                 on: placementBounds(around: p))),
+                           style: MarkupStyles.shared.style(for: .magnify))
         default:
             return
         }
@@ -456,6 +485,13 @@ final class MarkupController {
                 a.kind = .censor(rect: CGRect(x: from.x, y: from.y, width: p.x - from.x,
                                               height: p.y - from.y).standardized, method: method)
             case .counter: break // counters place on the click — never a draft
+            case let .magnify(m):
+                // the drag sizes the source; the magnifier re-places beside it
+                let source = CGRect(x: from.x, y: from.y, width: p.x - from.x,
+                                    height: p.y - from.y).standardized
+                let centre = CGPoint(x: source.midX, y: source.midY)
+                a.kind = .magnify(.placed(source: source, options: m.options,
+                                          on: placementBounds(around: centre)))
             }
             gesture = .drawing(a, from: from)
         case .pen:
@@ -463,8 +499,21 @@ final class MarkupController {
             penHover = p // the next hover preview starts from the pointer
         case let .moving(start, from):
             let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
-            let snapped = snapper?.offset(rect: PathGeometry.path(for: moved).boundingBoxOfPath) ?? .zero
+            // a Magnify snaps its magnifier frame, not its whole path's box
+            let snapRect = if case .magnify = moved.kind { moved.kind.bounds }
+                else { PathGeometry.path(for: moved).boundingBoxOfPath }
+            let snapped = snapper?.offset(rect: snapRect) ?? .zero
             stack.replace(moved.moved(by: snapped))
+        case let .movingSource(start, from):
+            // only the source re-aims; the magnifier box stays where it is
+            guard case var .magnify(m) = start.kind else { return }
+            let d = CGVector(dx: p.x - from.x, dy: p.y - from.y)
+            m.source = m.source.offsetBy(dx: d.dx, dy: d.dy)
+            let snapped = snapper?.offset(rect: m.source) ?? .zero
+            m.source = m.source.offsetBy(dx: snapped.dx, dy: snapped.dy)
+            var a = start
+            a.kind = .magnify(m)
+            stack.replace(a)
         case let .handle(h, start, from):
             // Shift's 45° constraint wins on point handles: a point snap
             // would leave the ray — vertex ends and Pen tangents both
@@ -500,6 +549,8 @@ final class MarkupController {
                 rect.width >= Self.minDraftSize && rect.height >= Self.minDraftSize
             case .counter:
                 false // counters place on the click — never a draft
+            case let .magnify(m):
+                m.source.width >= Self.minDraftSize && m.source.height >= Self.minDraftSize
             }
             if drawn { stack.add(d) }
         }
@@ -519,7 +570,7 @@ final class MarkupController {
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen: break
-        case .drawing, .moving, .handle: commitGesture()
+        case .drawing, .moving, .movingSource, .handle: commitGesture()
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
@@ -543,11 +594,81 @@ final class MarkupController {
         render()
     }
 
+    /// a press on a Magnify outside its magnifier box drags the source, not the frame
+    private static func moveGesture(_ a: Annotation, at p: CGPoint) -> Gesture {
+        guard case let .magnify(m) = a.kind,
+              !m.options.shape.path(in: m.frame).contains(p) else { return .moving(a, from: p) }
+        return .movingSource(a, from: p)
+    }
+
+    /// scroll over a selected Magnify's magnifier steps its zoom — a trackpad
+    /// gesture is one undo step, each wheel tick its own. A phased scroll
+    /// stays with the magnifier it began on even when the pointer leaves it
+    /// (Magic Mouse reports events to the view under the resting pointer).
+    /// Returns false when it isn't ours so the view can take the event
+    @ObservationIgnored private var scrollResidual: CGFloat = 0
+    /// the phased scroll in flight, if any — set on `.began`, cleared on end
+    @ObservationIgnored private var scrolling: Annotation.ID?
+    func scroll(_ e: NSEvent, at p: CGPoint) -> Bool {
+        if scrolling != nil, e.phase == .began {
+            // a fresh sequence began while ours was still open: the stale
+            // one closes as its undo step, then the guard below re-qualifies
+            closeScroll()
+        }
+        if let id = scrolling {
+            if e.momentumPhase != [] { return true }
+            if e.phase == .ended || e.phase == .cancelled {
+                scrolling = nil
+                commitGesture()
+                return true
+            }
+            guard let a = stack.annotations.first(where: { $0.id == id }) else {
+                scrolling = nil
+                commitGesture()
+                return true
+            }
+            return applyScroll(e, to: a)
+        }
+        guard gesture == nil, let a = selected, case .magnify(let m) = a.kind,
+              m.options.shape.path(in: m.frame).contains(p) else { return false }
+        if e.momentumPhase != [] { return true } // a trackpad fling isn't input — swallow it
+        if e.phase == .began { gestureStart = stack; scrollResidual = 0; scrolling = a.id }
+        return applyScroll(e, to: a)
+    }
+    /// accumulate to whole steps, then step `a`'s zoom — through the open
+    /// gesture while a phase sequence is in flight, as its own edit otherwise
+    private func applyScroll(_ e: NSEvent, to a: Annotation) -> Bool {
+        scrollResidual += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 8 : e.scrollingDeltaY
+        let steps = Int(scrollResidual)
+        guard steps != 0 else { return true }
+        scrollResidual -= CGFloat(steps)
+        var a = a
+        guard case var .magnify(m) = a.kind else { return true }
+        m.zoom = MagnifyZoom.stepped(m.effectiveZoom, by: steps)
+        a.kind = .magnify(m)
+        if e.phase == [] {
+            edit { $0.replace(a) } // a wheel tick is its own undo step
+        } else {
+            if gestureStart == nil { gestureStart = stack }
+            stack.replace(a)
+            render()
+        }
+        return true
+    }
+    /// an open phased scroll commits as its undo step before anything else
+    /// starts — begin/undo/redo would otherwise overwrite `gestureStart`
+    private func closeScroll() {
+        guard scrolling != nil else { return }
+        scrolling = nil
+        commitGesture()
+    }
+
     func render() {
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         guard isScreen else { surface?.show(shown, selection: selected); surface?.showGuides(guides); return }
         Self.onScreen.annotations = shown
         AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
+        ScreenSamples.shared.watch(shown.compactMap(\.sampledRect))
         for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
     }

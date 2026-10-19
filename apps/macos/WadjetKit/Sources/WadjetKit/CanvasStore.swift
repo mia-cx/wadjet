@@ -136,9 +136,11 @@ public struct CanvasStore: Sendable {
 
     private func dropUnusedDisplays(_ canvas: CanvasDocument, in wrapper: FileWrapper,
                                     manifest: inout CanvasDocument.Manifest) throws {
-        let bounds = canvas.layerStack.annotations.map {
-            PathGeometry.path(for: $0).copy(strokingWithWidth: $0.style.width,
-                lineCap: .round, lineJoin: .round, miterLimit: 10).boundingBoxOfPath
+        // a display stays while it paints the canvas, an Annotation's coverage,
+        // or the source pixels one samples — a Magnify's viewport may sit
+        // wholly on a display its magnifier doesn't touch
+        let bounds = canvas.layerStack.annotations.flatMap {
+            [PathGeometry.coverage(for: $0).boundingBoxOfPath] + ($0.sampledRect.map { [$0] } ?? [])
         }
         manifest.layout.removeAll { display in
             guard !touches(display.frame, canvas.crop),

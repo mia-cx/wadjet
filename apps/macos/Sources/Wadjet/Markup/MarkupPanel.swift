@@ -20,11 +20,6 @@ final class MarkupPanel: NSPanel {
         contentView = view
     }
     override var canBecomeKey: Bool { true }
-    /// closing (hotplug, Markup emptied) stops this display's live sampler
-    override func close() {
-        view.censors?.stop()
-        super.close()
-    }
 }
 
 /// draws the Annotations that fall on its display; Annotation points are
@@ -45,20 +40,27 @@ final class MarkupView: NSView {
     var scale: CGFloat
     /// the Markup engine this view feeds; the panels' is the screen's shared one
     let controller: MarkupController
-    /// Blur/Pixelate Censors on this panel's display
+    /// Blur/Pixelate Censors on this panel's display — screen panels only
     let censors: CensorLayers?
+    /// the Magnifies' content layers and their glass rims — screen panels
+    /// only; the Editor's sampling isn't the live screen
+    let magnifiers: MagnifierLayers?
+    /// the annotations from the last `show`, for syncSampled
+    private var shown: [Annotation] = []
     /// a panel's view: screen frame for its region, its own backing scale
     convenience init(frame f: NSRect, screen: NSScreen) {
         self.init(frame: f, region: screen.frame, scale: screen.backingScaleFactor,
-                  controller: .shared, censors: CensorLayers(screen: screen))
+                  controller: .shared, censors: CensorLayers(screen: screen),
+                  magnifiers: MagnifierLayers(screen: screen))
     }
     /// `region` is the global rect the view shows — canvas sublayers' bounds
     /// origin, so Annotation points (Canvas coordinates) need no offset
     init(frame f: NSRect, region: CGRect, scale: CGFloat, controller: MarkupController,
-         censors: CensorLayers? = nil) {
+         censors: CensorLayers? = nil, magnifiers: MagnifierLayers? = nil) {
         self.scale = scale
         self.controller = controller
         self.censors = censors
+        self.magnifiers = magnifiers
         super.init(frame: f)
         wantsLayer = true
         // the bounds origin makes sublayer coordinates global screen points —
@@ -78,6 +80,13 @@ final class MarkupView: NSView {
         guidesLayer.bounds = region
         guidesLayer.contentsScale = scale
         layer?.addSublayer(guidesLayer)
+        // the magnifiers' Liquid Glass rims live in a pass-through subview
+        // above the canvas layers, outside the peer-through mask
+        if let container = magnifiers?.container {
+            container.frame = bounds
+            container.autoresizingMask = [.width, .height]
+            addSubview(container)
+        }
     }
     required init?(coder: NSCoder) { fatalError() }
     override var isOpaque: Bool { false }
@@ -98,6 +107,7 @@ final class MarkupView: NSView {
     /// and vanish without touching the rest; array order = back to front.
     /// `selection` draws its frame and grips on top.
     func show(_ annotations: [Annotation], selection: Annotation?) {
+        shown = annotations
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for a in annotations {
@@ -150,6 +160,17 @@ final class MarkupView: NSView {
         content.sublayers = annotations.compactMap { shapeLayers[$0.id] }
         canvas.sublayers = [content] + (selection == nil ? [] : [frameLayer, handlesLayer])
         censors?.sync(annotations, layers: shapeLayers)
+        magnifiers?.sync(annotations, layers: shapeLayers, scale: scale)
+        CATransaction.commit()
+    }
+
+    /// a fresh sample or a lost stream: re-run the sampled layers on the last
+    /// shown annotations
+    func syncSampled() {
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        censors?.sync(shown, layers: shapeLayers)
+        magnifiers?.sync(shown, layers: shapeLayers, scale: scale)
         CATransaction.commit()
     }
 
@@ -175,6 +196,10 @@ final class MarkupView: NSView {
         controller.drag(to: canvasPoint(e), constrained: e.modifierFlags.contains(.shift))
     }
     override func mouseUp(with e: NSEvent) { controller.end() }
+    /// scroll over a selected Magnify's magnifier zooms it; anything else passes through
+    override func scrollWheel(with e: NSEvent) {
+        if !controller.scroll(e, at: canvasPoint(e)) { super.scrollWheel(with: e) }
+    }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()

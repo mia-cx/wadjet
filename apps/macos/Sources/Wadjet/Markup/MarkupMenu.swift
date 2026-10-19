@@ -3,9 +3,10 @@ import WadjetKit
 
 extension ToolMenuView {
     /// the Transform rows while an Annotation is selected — its section brings
-    /// its own leading divider
+    /// its own leading divider; a Magnify's frame doesn't rotate or flip
     @ViewBuilder func selectionRows() -> some View {
-        if MarkupController.active.selectedStyle != nil {
+        if MarkupController.active.selectedStyle != nil,
+           MarkupController.active.selected?.kind.transforms == true {
             // these act on the canvas — keep the menu open
             section("Transform") {
                 MenuRow(title: "Rotate Left", icon: "rotate.left", on: false) {

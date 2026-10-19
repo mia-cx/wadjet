@@ -30,7 +30,9 @@ public enum SelectionHandle: Hashable, Sendable {
 
 extension AnnotationKind {
     /// the points that define the geometry — a Censor's, shape's or counter's
-    /// are its rect's min and max corners, so mapping them resizes
+    /// are its rect's min and max corners, so mapping them resizes; a
+    /// Magnify's are its magnifier frame's, so moving/resizing never re-aims
+    /// the source
     var points: [CGPoint] {
         switch self {
         case let .line(start, end, bend): [start, end] + (bend.map { [$0] } ?? [])
@@ -41,6 +43,8 @@ extension AnnotationKind {
         case let .counter(center, radius, _, _):
             [CGPoint(x: center.x - radius, y: center.y - radius),
              CGPoint(x: center.x + radius, y: center.y + radius)]
+        case let .magnify(m):
+            [CGPoint(x: m.frame.minX, y: m.frame.minY), CGPoint(x: m.frame.maxX, y: m.frame.maxY)]
         }
     }
     /// the same kind with every defining point mapped — a counter rebuilds
@@ -62,13 +66,17 @@ extension AnnotationKind {
             return .counter(center: CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2),
                             radius: min(abs(a.x - b.x), abs(a.y - b.y)) / 2,
                             value: value, format: format)
+        case let .magnify(m):
+            var m = m
+            m.frame = m.frame.mapCorners(f)
+            return .magnify(m)
         }
     }
     /// resizes with one scale on both axes so it keeps its shape
     var keepsAspect: Bool {
         switch self {
         case .counter: true
-        case .line, .path, .censor, .shape: false
+        case .line, .path, .censor, .shape, .magnify: false
         }
     }
     /// an upright box that mapPoints re-standardizes, so a negative resize
@@ -76,7 +84,15 @@ extension AnnotationKind {
     var isBox: Bool {
         switch self {
         case .line, .path: false
-        case .censor, .shape, .counter: true
+        case .censor, .shape, .counter, .magnify: true
+        }
+    }
+    /// whether rotation and flips apply — a Magnify's frame only moves and
+    /// resizes, so its transform stays identity and it hides the rotate grip
+    public var transforms: Bool {
+        switch self {
+        case .magnify: false
+        default: true
         }
     }
     /// tight bounds of the untransformed geometry — a bent Line's frame hugs
@@ -97,6 +113,7 @@ extension AnnotationKind {
 extension Annotation {
     /// geometry -> screen: flip about the bounds centre, then rotate about it
     public var affineTransform: CGAffineTransform {
+        guard kind.transforms else { return .identity }
         let c = CGPoint(x: kind.bounds.midX, y: kind.bounds.midY)
         return CGAffineTransform(translationX: -c.x, y: -c.y)
             .concatenating(CGAffineTransform(scaleX: transform.flipHorizontal ? -1 : 1,
@@ -231,7 +248,7 @@ extension Annotation {
             // pin the content that sat on the anchor: after the mirror it
             // lives at the anchor reflected about the NEW bounds centre
             var pin = anchor
-            if kind.isBox {
+            if kind.isBox && kind.transforms {
                 let c = CGPoint(x: new.kind.bounds.midX, y: new.kind.bounds.midY)
                 if sx < 0 { new.transform.flipHorizontal.toggle(); pin.x = 2 * c.x - pin.x }
                 if sy < 0 { new.transform.flipVertical.toggle(); pin.y = 2 * c.y - pin.y }
@@ -331,9 +348,11 @@ extension Annotation {
                 out.append((.resize(x: x, y: y), at(x, y)))
             }
         }
-        let c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
-        out.append((.rotate, CGPoint(x: c.x - v * sin(transform.rotation),
-                                     y: c.y + v * cos(transform.rotation))))
+        if kind.transforms {
+            let c = CGPoint(x: b.midX, y: b.midY), v = b.height / 2 + rotateOffset
+            out.append((.rotate, CGPoint(x: c.x - v * sin(transform.rotation),
+                                         y: c.y + v * cos(transform.rotation))))
+        }
         return out
     }
 

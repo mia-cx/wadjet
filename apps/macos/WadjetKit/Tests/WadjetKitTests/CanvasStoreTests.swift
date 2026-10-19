@@ -98,6 +98,37 @@ struct CanvasStoreTests {
         #expect(try history.recent().map(\.id) == [entry.id])
     }
 
+    // Proves the stage that drops unused displays keeps the display a Magnify
+    // samples: its viewport reaches display 2 though every painted part —
+    // source outline, leader, magnifier — stays on display 1.
+    @Test @MainActor func magnifyViewportKeepsItsDisplay() throws {
+        let directory = temporaryCanvasDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let created = Date(timeIntervalSince1970: 1_000_000)
+        let clock = Mutex(created)
+        let store = CanvasStore(directory: directory, now: { clock.withLock { $0 } })
+        let history = try HistoryStore.inMemory()
+        let entry = try history.record(kind: .screenshot, createdAt: created, file: nil)
+        var canvas = try fixtureCanvas() // display 1 (0,0,64,64), crop (4,4,24,24)
+        canvas.layout += [.init(id: 2, frame: CGRect(x: 64, y: 0, width: 64, height: 64), scaleFactor: 1)]
+        canvas.displayImages[2] = canvas.displayImages[1]
+        // the stroked source outline stays under x = 63; the 24 pt viewport
+        // around its centre reaches x = 72, 8 pt onto display 2
+        let m = Magnifier(source: CGRect(x: 58, y: 28, width: 4, height: 4),
+                          frame: CGRect(x: 10, y: 4, width: 48, height: 48), zoom: 2,
+                          options: .init(glass: false))
+        canvas.layerStack = LayerStack([Annotation(kind: .magnify(m),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))])
+        let package = try store.add(canvas, for: entry.id, createdAt: entry.createdAt)
+        let settings = CanvasRetentionSettings(daysUntilSDRAndLossyHEIC: 10,
+            daysUntilDroppingUnusedDisplays: 4, daysUntilDeletion: 20)
+        clock.withLock { $0 = created.addingTimeInterval(4 * 86_400) }
+        #expect(try store.sweep(settings: settings).flatMap(\.actions) == [.dropUnusedDisplays])
+        #expect(try store.canvas(for: entry.id)?.layout.map(\.id) == [1, 2])
+        #expect(FileManager.default.fileExists(atPath:
+            package.appendingPathComponent("display-2.heic").path))
+    }
+
     // Proves root and nested links use the newest root host's age and protect the
     // target through that host's deletion sweep; the next sweep deletes the orphan.
     @Test(arguments: [0, 1, 2]) func newestLinkControlsLifetimeAndDegradation(depth: Int) throws {

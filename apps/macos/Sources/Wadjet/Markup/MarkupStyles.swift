@@ -44,11 +44,22 @@ final class MarkupStyles {
         }
     }
 
+    /// the colour a row shows — a Magnify's border lives in the kind's
+    /// options, so it reads through MarkupMagnify rather than the style
+    func colour(for tool: Tool, target: ColourTarget) -> RGBAColour {
+        if target == .border { return MarkupMagnify.options.border ?? style(for: tool).colour }
+        return style(for: tool).colour(for: target)
+    }
+
     /// restyles a colour (opaque: transparency is the opacity slider's) on
     /// the selection or Tool default, and always records it in the ranking
     func useColour(_ c: RGBAColour, for tool: Tool, target: ColourTarget = .stroke) {
         let colour = RGBAColour(red: c.red, green: c.green, blue: c.blue, alpha: 1)
-        restyle(tool) { $0.setColour(colour, for: target) }
+        if target == .border {
+            MarkupMagnify.setOptions { $0.border = colour }
+        } else {
+            restyle(tool) { $0.setColour(colour, for: target) }
+        }
         config.update { $0.markup.recordColour(colour.hex) }
     }
 
@@ -100,7 +111,11 @@ final class MarkupStyles {
         guard let e = eyedropper else { return false }
         let colour = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
         if let id = e.annotation {
-            MarkupController.active.restyle(id) { $0.setColour(colour, for: e.target) }
+            if e.target == .border {
+                MarkupMagnify.setOptions(of: id) { $0.border = colour }
+            } else {
+                MarkupController.active.restyle(id) { $0.setColour(colour, for: e.target) }
+            }
             config.update { $0.markup.recordColour(colour.hex) }
         } else {
             useColour(colour, for: e.tool, target: e.target)
@@ -147,19 +162,28 @@ final class MarkupStyles {
 }
 
 /// which colour a Markup colour control edits: `stroke` is `style.colour`,
-/// the main colour every Tool has; `fill` is a shape's `style.fill`
+/// the main colour every Tool has; `fill` is a shape's `style.fill`; `border`
+/// is a Magnify's `options.border`, which lives in the kind, not the style
 enum ColourTarget {
-    case stroke, fill
+    case stroke, fill, border
 }
 
 extension AnnotationStyle {
     /// the colour `target` edits — an unfilled shape's fill reads as the
     /// stroke colour, so the wheel opens somewhere sensible
     func colour(for target: ColourTarget) -> RGBAColour {
-        switch target { case .stroke: colour; case .fill: fill ?? colour }
+        switch target {
+        case .stroke: colour
+        case .fill: fill ?? colour
+        case .border: preconditionFailure("a Magnify border lives in its options, not the style")
+        }
     }
     mutating func setColour(_ c: RGBAColour, for target: ColourTarget) {
-        switch target { case .stroke: colour = c; case .fill: fill = c }
+        switch target {
+        case .stroke: colour = c
+        case .fill: fill = c
+        case .border: preconditionFailure("a Magnify border lives in its options, not the style")
+        }
     }
 }
 
@@ -174,10 +198,11 @@ extension Tool {
         }
     }
 
-    /// the built-in style a Markup Tool uses until the user restyles it
+    /// the built-in style a Markup Tool uses until the user restyles it —
+    /// Magnify's outline is thinner than the other Tools' 4 pt
     @MainActor var defaultStyle: AnnotationStyle {
         if self == .draw { return MarkupStyles.shared.drawVariant.defaultStyle }
-        // every other Markup Tool so far: opaque red, 4 pt
-        return AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        return AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1),
+                               width: self == .magnify ? 2 : 4)
     }
 }
