@@ -1440,13 +1440,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("esc hotkey unregistered")
         }
         // Space is claimed only while the overlay is actually frozen — it must
-        // drop as soon as we leave .frozen (e.g. a countdown starts)
-        if s.phase == .frozen && !spaceRegistered {
+        // drop as soon as we leave .frozen (e.g. a countdown starts), and it
+        // belongs to the text editor while a Markup Text is being typed
+        let spaceWanted = s.phase == .frozen && MarkupController.shared.editing == nil
+        if spaceWanted && !spaceRegistered {
             var ref: EventHotKeyRef?
             let err = RegisterEventHotKey(UInt32(kVK_Space), 0, EventHotKeyID(signature: OSType(0x77646A74), id: 30),
                                           GetApplicationEventTarget(), 0, &ref)
             spaceRef = ref; spaceRegistered = (err == noErr && ref != nil)
-        } else if s.phase != .frozen && spaceRegistered {
+        } else if !spaceWanted && spaceRegistered {
             if let r = spaceRef { UnregisterEventHotKey(r) }
             spaceRef = nil; spaceRegistered = false
         }
@@ -1458,6 +1460,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
         if MarkupStyles.shared.cancelEyedropper() { AppLog.line("esc: cancelled eyedropper"); updateEscHotkey(); return }
         if MarkupController.shared.finishPen() { AppLog.line("esc: finished pen path"); return }
+        if MarkupController.shared.commitEditing() { AppLog.line("esc: committed text"); return }
         if MarkupController.shared.deselect() { AppLog.line("esc: deselected"); return }
         if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
             if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
@@ -2745,6 +2748,12 @@ final class OverlayNSView: NSView {
     // called from the local key monitor (nonactivating panels don't get keyDown)
     @discardableResult
     func handleKey(_ e: NSEvent) -> Bool {
+        // while a Markup Text is being edited the NSTextView owns the keys;
+        // only Escape still routes here so it can commit
+        if MarkupController.shared.editing != nil {
+            if e.keyCode == 53 { app?.handleEsc(); return true }
+            return false
+        }
         if e.keyCode == 36, confirming { confirmSel(); return true } // Return
         if e.keyCode == 53 { app?.handleEsc(); return true }
         if e.keyCode == 49 { app?.toggleRegionWindow(); return true } // Space

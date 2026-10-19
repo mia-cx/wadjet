@@ -28,7 +28,8 @@ final class MarkupView: NSView {
     let canvas = CALayer()
     /// the Annotation layers, below the selection chrome; an Editor masks it to the crop
     let content = CALayer()
-    var shapeLayers: [Annotation.ID: AnnotationLayer] = [:]
+    /// AnnotationLayer for stroked kinds, TextAnnotationLayer for texts
+    var shapeLayers: [Annotation.ID: CALayer] = [:]
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
@@ -101,23 +102,31 @@ final class MarkupView: NSView {
             l.contentsScale = s
             l.sublayers?.forEach { $0.contentsScale = s }
         }
+        for l in shapeLayers.values { (l as? TextAnnotationLayer)?.needsDisplay() }
     }
 
-    /// one CAShapeLayer per Annotation, keyed by id so strokes can persist
+    /// one layer per Annotation, keyed by id so strokes can persist
     /// and vanish without touching the rest; array order = back to front.
-    /// `selection` draws its frame and grips on top.
-    func show(_ annotations: [Annotation], selection: Annotation?) {
+    /// `selection` draws its frame and grips on top — except while the
+    /// selection is the text being edited.
+    func show(_ annotations: [Annotation], selection: Annotation?, editing: Annotation.ID? = nil) {
         shown = annotations
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         for a in annotations {
-            let l = shapeLayers[a.id] ?? AnnotationLayer()
+            if case .text = a.kind {
+                let l = (shapeLayers[a.id] as? TextAnnotationLayer) ?? TextAnnotationLayer()
+                shapeLayers[a.id] = l
+                l.show(a, editing: a.id == editing, scale: scale)
+                continue
+            }
+            let l = (shapeLayers[a.id] as? AnnotationLayer) ?? AnnotationLayer()
             shapeLayers[a.id] = l
             l.update(a, scale: scale)
         }
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }
-        if let selection {
+        if let selection, selection.id != editing {
             let frame = CGMutablePath()
             frame.addLines(between: selection.frameCorners)
             frame.closeSubpath()
@@ -157,10 +166,14 @@ final class MarkupView: NSView {
             handlesLayer.shadowRadius = 1 / controller.zoom
             handlesLayer.shadowOffset = CGSize(width: 0, height: -0.5 / controller.zoom)
         }
+        let chrome = selection != nil && selection?.id != editing ? [frameLayer, handlesLayer] : []
         content.sublayers = annotations.compactMap { shapeLayers[$0.id] }
-        canvas.sublayers = [content] + (selection == nil ? [] : [frameLayer, handlesLayer])
-        censors?.sync(annotations, layers: shapeLayers)
-        magnifiers?.sync(annotations, layers: shapeLayers, scale: scale)
+        canvas.sublayers = [content] + chrome
+        // text entries are TextAnnotationLayers; the samplers only write back
+        // into their own AnnotationLayers
+        let layers = shapeLayers.compactMapValues { $0 as? AnnotationLayer }
+        censors?.sync(annotations, layers: layers)
+        magnifiers?.sync(annotations, layers: layers, scale: scale)
         CATransaction.commit()
     }
 
@@ -169,8 +182,9 @@ final class MarkupView: NSView {
     func syncSampled() {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
-        censors?.sync(shown, layers: shapeLayers)
-        magnifiers?.sync(shown, layers: shapeLayers, scale: scale)
+        let layers = shapeLayers.compactMapValues { $0 as? AnnotationLayer }
+        censors?.sync(shown, layers: layers)
+        magnifiers?.sync(shown, layers: layers, scale: scale)
         CATransaction.commit()
     }
 
@@ -189,7 +203,8 @@ final class MarkupView: NSView {
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
     override func mouseDown(with e: NSEvent) {
         controller.begin(at: canvasPoint(e), command: e.modifierFlags.contains(.command),
-                         constrained: e.modifierFlags.contains(.shift))
+                         constrained: e.modifierFlags.contains(.shift),
+                         clickCount: e.clickCount)
     }
     // drags keep coming to this view across displays
     override func mouseDragged(with e: NSEvent) {

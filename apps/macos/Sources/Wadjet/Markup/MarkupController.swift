@@ -17,7 +17,7 @@ final class MarkupController {
     static let hitTolerance: CGFloat = 4
 
     /// true for the screen's shared Markup; an Editor's draws on its own surface
-    private let isScreen: Bool
+    let isScreen: Bool
     private(set) var stack = LayerStack()
     private(set) var armed: Tool?
     /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
@@ -81,6 +81,10 @@ final class MarkupController {
         }
     }
     var selected: Annotation? { selection.flatMap { id in stack.annotations.first { $0.id == id } } }
+    /// the text Annotation being edited in place, if any — the editor logic
+    /// lives in MarkupTextEditor.swift; the menu reads this
+    private(set) var editing: Annotation.ID?
+    @ObservationIgnored var editor: TextEditorView?
     /// ⌘ held turns any armed Markup Tool into Select until release
     @ObservationIgnored var cmdHeld = false
     var selecting: Bool { armed == .select || cmdHeld }
@@ -89,7 +93,7 @@ final class MarkupController {
     @ObservationIgnored private var snapper: MarkupSnapper?
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
-    @ObservationIgnored private var panels: [MarkupPanel] = []
+    @ObservationIgnored private(set) var panels: [MarkupPanel] = []
     @ObservationIgnored private var flagsMon: Any?
     @ObservationIgnored private var keyMon: Any?
     var windowNumbers: [Int] {
@@ -159,11 +163,14 @@ final class MarkupController {
 
     func undo() {
         closeScroll()
+        // while a text is being typed ⌘Z is the editor's own undo
+        if editing != nil { editor?.undoManager?.undo(); return }
         guard gesture == nil, let s = history.undo(from: stack) else { return }
         restore(s); AppLog.line("markup: undo")
     }
     func redo() {
         closeScroll()
+        if editing != nil { editor?.undoManager?.redo(); return }
         guard gesture == nil, let s = history.redo(from: stack) else { return }
         restore(s); AppLog.line("markup: redo")
     }
@@ -199,6 +206,7 @@ final class MarkupController {
             return
         }
         finishPen() // a Tool switch commits any Pen path in progress
+        commitEditing()
         let was = armed
         armed = want
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
@@ -225,7 +233,7 @@ final class MarkupController {
                 guard let self else { return e }
                 // Return finishes a Pen path in progress (and only then eats the key)
                 if e.keyCode == 36 || e.keyCode == 76, self.finishPen() { return nil }
-                guard e.keyCode == 51 || e.keyCode == 117, self.selection != nil else { return e }
+                guard e.keyCode == 51 || e.keyCode == 117, self.selection != nil, self.editing == nil else { return e }
                 self.deleteSelection()
                 return nil
             }
@@ -279,6 +287,7 @@ final class MarkupController {
 
     /// display hotplug: rebuild the panels on the new screen set
     func screensChanged() {
+        commitEditing()
         panels.forEach { $0.close() }; panels = []
         ScreenSamples.shared.stop()
         syncPanels()
@@ -287,6 +296,8 @@ final class MarkupController {
     }
 
     func clear() {
+        // drops the editor without committing — the Annotation is cleared anyway
+        editor?.removeFromSuperview(); editor = nil; editing = nil; textEditStart = nil
         commitGesture()
         gesture = nil; snapper = nil; selection = nil; counterNext = nil
         // the Pen preview dies with the stack it wasn't part of — clear it
@@ -379,12 +390,48 @@ final class MarkupController {
         AppLog.line("markup: deleted selection")
     }
 
-    // strokes arrive as global screen points from MarkupView; `command` =
-    // temporary Select, `constrained` = Shift (45° snaps)
-    func begin(at p: CGPoint, command: Bool, constrained: Bool = false) {
+    // MARK: text-editor write hooks — the logic lives in MarkupTextEditor.swift
+
+    /// the stack when the in-place text session began — the session's one
+    /// undo step is recorded from it on commit (keystrokes aren't steps)
+    @ObservationIgnored var textEditStart: LayerStack?
+    /// changes the stack without a history step — only the in-place text
+    /// editor uses it; its session's one step is recorded by recordTextEdit()
+    func mutateUnrecorded(_ change: (inout LayerStack) -> Void) {
+        change(&stack)
+        render()
+    }
+    /// records the whole text session's net change as one undo step — a
+    /// discarded empty box records nothing (LayerHistory skips no-ops)
+    func recordTextEdit() {
+        guard let before = textEditStart else { return }
+        record(from: before)
+        textEditStart = nil
+    }
+    func setEditing(_ id: Annotation.ID?) { editing = id }
+    func setSelection(_ id: Annotation.ID?) { selection = id }
+    /// the panel whose screen holds `p`
+    func panel(containing p: CGPoint) -> MarkupPanel? {
+        panels.first { $0.screen?.frame.contains(p) == true }
+    }
+
+    // strokes arrive as Canvas (global screen) points from MarkupView;
+    // `command` = temporary Select, `constrained` = Shift (45° snaps),
+    // `clickCount` for a double-click's re-edit
+    func begin(at p: CGPoint, command: Bool, constrained: Bool = false, clickCount: Int = 1) {
         closeScroll() // an open phased scroll is its own undo step
+        // a click anywhere commits the open text editor and places nothing
+        if editing != nil {
+            commitEditing()
+            return
+        }
         gestureStart = stack
         if armed == .select || command {
+            if clickCount == 2, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
+               case .text = hit.kind {
+                startEditing(hit.id)
+                return
+            }
             if let sel = selected {
                 if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                                       minExtent: Self.handleMinExtent / zoom,
@@ -432,6 +479,16 @@ final class MarkupController {
             return
         }
         selection = nil // a new Annotation takes the Tool's style and options, not the selection's
+        if armed == .text {
+            textEditStart = stack
+            let a = Annotation(
+                kind: .text(TextData(string: "", origin: p,
+                                     format: AppState.shared.config.value.markup.textFormat)),
+                style: MarkupStyles.shared.style(for: .text))
+            mutateUnrecorded { $0.add(a) }
+            startEditing(a.id)
+            return
+        }
         let a: Annotation
         switch armed {
         case .draw:
@@ -512,6 +569,7 @@ final class MarkupController {
                 let centre = CGPoint(x: source.midX, y: source.midY)
                 a.kind = .magnify(.placed(source: source, options: m.options,
                                           on: placementBounds(around: centre)))
+            case .text: break // Text edits in place, never a draft
             }
             gesture = .drawing(a, from: from)
         case .pen:
@@ -588,6 +646,8 @@ final class MarkupController {
                 false // counters place on the click — never a draft
             case let .magnify(m):
                 m.source.width >= Self.minDraftSize && m.source.height >= Self.minDraftSize
+            case .text:
+                false
             }
             if drawn { stack.add(d) }
         }
@@ -709,12 +769,18 @@ final class MarkupController {
 
     func render() {
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
-        guard isScreen else { surface?.show(shown, selection: selected); surface?.showGuides(guides); return }
+        guard isScreen else {
+            surface?.show(shown, selection: selected, editing: editing)
+            surface?.showGuides(guides)
+            syncEditor()
+            return
+        }
         Self.onScreen.annotations = shown
         AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
         ScreenSamples.shared.watch(shown.compactMap(\.sampledRect))
-        for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
+        for p in panels { p.view.show(shown, selection: selected, editing: editing); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
+        syncEditor()
     }
 
     /// the feathered peer-through hole under the pointer, per panel
