@@ -56,6 +56,7 @@ final class CanvasEditorDocument: NSDocument {
         if let markupCached { return markupCached }
         let m = MarkupController(editing: canvas.layerStack)
         m.undoManager = undoManager
+        m.document = self
         m.arm(.select)
         markupCached = m
         return m

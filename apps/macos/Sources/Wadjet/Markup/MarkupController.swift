@@ -28,6 +28,9 @@ final class MarkupController {
     @ObservationIgnored weak var surface: MarkupView?
     /// an Editor's undo steps go to its document; the screen keeps LayerHistory
     @ObservationIgnored weak var undoManager: UndoManager?
+    /// the Editor document this controller feeds — set with `undoManager`;
+    /// lets unrecorded text edits dirty it so an unsaved close can't lose them
+    @ObservationIgnored weak var document: NSDocument?
     /// on-screen points per Annotation point — the Editor's zoom; grips and hit
     /// slop divide by it so they keep their on-screen size
     @ObservationIgnored var zoom: CGFloat = 1
@@ -408,9 +411,16 @@ final class MarkupController {
     /// the stack when the in-place text session began — the session's one
     /// undo step is recorded from it on commit (keystrokes aren't steps)
     @ObservationIgnored var textEditStart: LayerStack?
+    /// this session's unrecorded edits already dirtied the document — the
+    /// recorded step then marks it the normal way, so commit balances it
+    @ObservationIgnored private var textDirtyMarked = false
     /// changes the stack without a history step — only the in-place text
     /// editor uses it; its session's one step is recorded by recordTextEdit()
     func mutateUnrecorded(_ change: (inout LayerStack) -> Void) {
+        if !isScreen, !textDirtyMarked, textEditStart != nil {
+            document?.updateChangeCount(.changeDone)
+            textDirtyMarked = true
+        }
         change(&stack)
         render()
     }
@@ -418,6 +428,7 @@ final class MarkupController {
     /// discarded empty box records nothing (LayerHistory skips no-ops)
     func recordTextEdit() {
         guard let before = textEditStart else { return }
+        if textDirtyMarked { document?.updateChangeCount(.changeUndone); textDirtyMarked = false }
         record(from: before)
         textEditStart = nil
     }

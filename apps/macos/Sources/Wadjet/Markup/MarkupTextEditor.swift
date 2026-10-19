@@ -154,6 +154,17 @@ extension MarkupController {
                                 width: box.width, height: box.height))
     }
 
+    /// the box in the editor's own host coordinates — the panel (or surface)
+    /// the view already sits in, so a box growing across a display can't jump
+    /// to a different panel
+    private func editorFrame(_ box: CGRect) -> NSRect? {
+        if isScreen { return editor?.window?.convertFromScreen(box) }
+        guard let surface else { return nil }
+        let o = surface.canvas.bounds.origin
+        return NSRect(x: box.minX - o.x, y: box.minY - o.y,
+                      width: box.width, height: box.height)
+    }
+
     /// puts the editor over the Annotation's box on the host whose region
     /// holds the box's origin, and takes key focus for it
     func startEditing(_ id: Annotation.ID) {
@@ -230,7 +241,7 @@ extension MarkupController {
         tv.frameCenterRotation = 0
         var frame = layout.box
         frame.size.width += 1 // the container's slack, in the frame likewise
-        tv.frame = editorHost(for: frame)?.frame ?? frame
+        tv.frame = editorFrame(frame) ?? frame
         // flips are ignored while editing
         tv.frameCenterRotation = a.transform.rotation * 180 / .pi
     }

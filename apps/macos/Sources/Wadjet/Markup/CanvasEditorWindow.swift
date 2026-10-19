@@ -345,6 +345,8 @@ final class EditorCanvasView: NSView {
     /// ⌘-modified keys travel the responder chain via performKeyEquivalent —
     /// menus take theirs first, the rest land here (keyDown never sees ⌘)
     override func performKeyEquivalent(with e: NSEvent) -> Bool {
+        // the in-place text editor owns ⌘-keys while it's typing — no restack
+        if doc.markup.editing != nil { return super.performKeyEquivalent(with: e) }
         if e.modifierFlags.contains(.command) {
             let shift = e.modifierFlags.contains(.shift)
             switch e.charactersIgnoringModifiers ?? "" {
