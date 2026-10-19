@@ -111,24 +111,13 @@ public struct CanvasStore: Sendable {
                 quality: lossy || metadata.state.contains(.lossyHEIC) ? Self.lossyHEICQuality : 1)
         }
         if actions.contains(.dropUnusedDisplays) {
-            let bounds = canvas.layerStack.annotations.map {
-                PathGeometry.path(for: $0).copy(strokingWithWidth: $0.style.width,
-                    lineCap: .round, lineJoin: .round, miterLimit: 10).boundingBoxOfPath
-            }
-            manifest.layout.removeAll { display in
-                guard !touches(display.frame, canvas.crop),
-                      !bounds.contains(where: { touches(display.frame, $0) }) else { return false }
-                wrapper.removeFileWrapper(wrapper.fileWrappers![display.imageFileName]!)
-                return true
-            }
+            try dropUnusedDisplays(canvas, in: wrapper, manifest: &manifest)
             metadata.state.insert(.unusedDisplaysDropped)
         }
         if sdr { metadata.state.insert(.sdr) }
         if lossy { metadata.state.insert(.lossyHEIC) }
         manifest.store = metadata
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
-        replace("canvas.json", with: try encoder.encode(manifest), in: wrapper)
+        try replaceManifest(manifest, in: wrapper)
         // Image bytes and stage markers commit together; a failed write can be retried.
         try wrapper.write(to: url, options: .atomic, originalContentsURL: nil)
     }
@@ -143,6 +132,33 @@ public struct CanvasStore: Sendable {
         for (name, child) in canvas.embeddedCanvases {
             try degrade(child, in: wrapper.fileWrappers!["embedded"]!.fileWrappers![name]!, sdr: sdr, quality: quality)
         }
+    }
+
+    private func dropUnusedDisplays(_ canvas: CanvasDocument, in wrapper: FileWrapper,
+                                    manifest: inout CanvasDocument.Manifest) throws {
+        let bounds = canvas.layerStack.annotations.map {
+            PathGeometry.path(for: $0).copy(strokingWithWidth: $0.style.width,
+                lineCap: .round, lineJoin: .round, miterLimit: 10).boundingBoxOfPath
+        }
+        manifest.layout.removeAll { display in
+            guard !touches(display.frame, canvas.crop),
+                  !bounds.contains(where: { touches(display.frame, $0) }) else { return false }
+            wrapper.removeFileWrapper(wrapper.fileWrappers![display.imageFileName]!)
+            return true
+        }
+        for (name, child) in canvas.embeddedCanvases {
+            let childWrapper = wrapper.fileWrappers!["embedded"]!.fileWrappers![name]!
+            var childManifest = try JSONDecoder().decode(CanvasDocument.Manifest.self,
+                from: childWrapper.fileWrappers!["canvas.json"]!.regularFileContents!)
+            try dropUnusedDisplays(child, in: childWrapper, manifest: &childManifest)
+            try replaceManifest(childManifest, in: childWrapper)
+        }
+    }
+
+    private func replaceManifest(_ manifest: CanvasDocument.Manifest, in wrapper: FileWrapper) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        replace("canvas.json", with: try encoder.encode(manifest), in: wrapper)
     }
 
     private func manifest(at url: URL) throws -> CanvasDocument.Manifest {

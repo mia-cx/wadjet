@@ -7,7 +7,7 @@ import WadjetKit
 
 struct CanvasStoreTests {
     // Proves persisted, configurable deadlines change real pixels/files exactly once,
-    // retain displays touched by a stroked Annotation, and leave History intact.
+    // prune each nested Canvas by its own crop/stroked Annotations, and leave History intact.
     @Test @MainActor func retentionStages() throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
@@ -28,7 +28,18 @@ struct CanvasStoreTests {
         canvas.layerStack = LayerStack([stroke])
         canvas.windowLayers = [.init(frame: canvas.crop, zOrder: 0, imageFileName: "window.heic",
             image: try rasterFixture(hdr: false))]
-        canvas.embeddedCanvases = ["child.wadjet": try fixtureCanvas()]
+        var child = canvas
+        child.crop.origin.x = 104
+        var childStroke = stroke
+        childStroke.kind = .line(start: CGPoint(x: 196, y: 10), end: CGPoint(x: 196, y: 40))
+        child.layerStack = LayerStack([childStroke])
+        var grandchild = canvas
+        grandchild.crop.origin.x = 204
+        var grandchildStroke = stroke
+        grandchildStroke.kind = .line(start: CGPoint(x: 68, y: 10), end: CGPoint(x: 68, y: 40))
+        grandchild.layerStack = LayerStack([grandchildStroke])
+        child.embeddedCanvases = ["grandchild.wadjet": grandchild]
+        canvas.embeddedCanvases = ["child.wadjet": child]
         let package = try store.add(canvas, for: entry.id, createdAt: entry.createdAt)
         #expect(try store.url(for: entry.id) == package)
         #expect(try store.canvas(for: entry.id)?.layerStack == canvas.layerStack)
@@ -66,8 +77,16 @@ struct CanvasStoreTests {
         #expect(try reopenedStore.sweep(settings: settings).flatMap(\.actions) == [.dropUnusedDisplays])
         #expect(try reopenedStore.canvas(for: entry.id)?.layout.map(\.id) == [1, 2])
         #expect(!FileManager.default.fileExists(atPath: package.appendingPathComponent("display-3.heic").path))
+        let pruned = try #require(try reopenedStore.canvas(for: entry.id))
+        let prunedChild = try #require(pruned.embeddedCanvases["child.wadjet"])
+        #expect(prunedChild.layout.map(\.id) == [2, 3])
+        #expect(prunedChild.embeddedCanvases["grandchild.wadjet"]?.layout.map(\.id) == [1, 3])
+        #expect(!FileManager.default.fileExists(atPath: package.appendingPathComponent("embedded/child.wadjet/display-1.heic").path))
+        #expect(!FileManager.default.fileExists(atPath: package.appendingPathComponent("embedded/child.wadjet/embedded/grandchild.wadjet/display-2.heic").path))
         #expect(try Data(contentsOf: displayURL) == once)
+        let prunedBytes = try packageBytes(at: package)
         #expect(try reopenedStore.sweep(settings: settings).isEmpty)
+        #expect(try packageBytes(at: package) == prunedBytes)
         clock.withLock { $0 = created.addingTimeInterval(6 * 86_400 - 1) }
         #expect(try reopenedStore.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(6 * 86_400) }
