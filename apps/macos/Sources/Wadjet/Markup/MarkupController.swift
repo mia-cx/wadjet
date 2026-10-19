@@ -57,6 +57,8 @@ final class MarkupController {
     var windowNumbers: [Int] {
         panels.map(\.windowNumber) + (LayersWindow.shared.windowNumber.map { [$0] } ?? [])
     }
+    /// what the panels drew last — the Recording reads it off the main actor for window-frame compositing
+    nonisolated static let onScreen = AnnotationSnapshot()
 
     init() {
         NotificationCenter.default.addObserver(forName: NSApplication.didChangeScreenParametersNotification,
@@ -412,6 +414,7 @@ final class MarkupController {
 
     func render() {
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
+        Self.onScreen.annotations = shown
         for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
     }

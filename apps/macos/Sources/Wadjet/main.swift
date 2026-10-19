@@ -1040,10 +1040,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// its own queue; the timeline drops paused frames.
     final class RecOutput: NSObject, SCStreamOutput, @unchecked Sendable {
         let writer: MP4Writer
-        init(writer: MP4Writer) { self.writer = writer }
+        let overlay: WindowAnnotationOverlay? // Record Window only: the Markup panels never reach its frames
+        init(writer: MP4Writer, overlay: WindowAnnotationOverlay? = nil) {
+            self.writer = writer; self.overlay = overlay
+        }
         func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
             guard type == .screen, isCompleteScreenFrame(sb),
                   let pb = CMSampleBufferGetImageBuffer(sb) else { return }
+            overlay?.draw(on: sb, pixels: pb)
             writer.append(pb, at: CMSampleBufferGetPresentationTimeStamp(sb))
         }
     }
@@ -1226,7 +1230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         do {
             let writer = try MP4Writer(url: file, width: conf.width, height: conf.height, fps: cfg.recording.fps)
             let stream = SCStream(filter: filter, configuration: conf, delegate: recDelegate)
-            let output = RecOutput(writer: writer)
+            let output = RecOutput(writer: writer,
+                                   overlay: s.tool == .recWindow ? recordingWindowID.map(WindowAnnotationOverlay.init) : nil)
             try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: recQueue)
             try await stream.startCapture()
             // An Esc during startup cancelled this attempt; don't start recording.
