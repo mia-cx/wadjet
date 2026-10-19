@@ -30,6 +30,14 @@ extension CanvasDocument {
             displayImages: Dictionary(uniqueKeysWithValues: capturedDisplays.map { ($0.display.id, $0.image) }))
     }
 
+    /// Completes a standalone window capture at the crop. Only a measured corner
+    /// radius may clip pixels; an unmeasured window keeps its own alpha and corners.
+    public mutating func setCapturedWindow(_ image: CGImage, cornerRadius: CGFloat? = nil) {
+        self.cornerRadius = cornerRadius ?? 0
+        windowLayers = [.init(frame: crop, zOrder: 0, imageFileName: "captured-window.heic",
+            image: image, isolatesBackground: true)]
+    }
+
     /// The private pasteboard representation contains the entire package, not a
     /// path into History that may expire before the user pastes it.
     public func serializedPackage() throws -> Data {

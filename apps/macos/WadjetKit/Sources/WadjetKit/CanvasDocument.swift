@@ -23,12 +23,16 @@ public struct CanvasWindowLayer {
     public var zOrder: Int
     public var imageFileName: String
     public var image: CGImage
+    /// A standalone window Screenshot replaces the desktop beneath its frame,
+    /// preserving window alpha while retaining the displays for recropping.
+    public var isolatesBackground: Bool
 
-    public init(frame: CGRect, zOrder: Int, imageFileName: String, image: CGImage) {
+    public init(frame: CGRect, zOrder: Int, imageFileName: String, image: CGImage, isolatesBackground: Bool = false) {
         self.frame = frame
         self.zOrder = zOrder
         self.imageFileName = imageFileName
         self.image = image
+        self.isolatesBackground = isolatesBackground
     }
 }
 
@@ -105,7 +109,8 @@ public struct CanvasDocument {
         for window in manifest.windowLayers {
             guard Self.validRect(window.frame) else { throw CanvasDocumentError.invalidGeometry }
             windowLayers.append(CanvasWindowLayer(frame: window.frame, zOrder: window.zOrder,
-                imageFileName: window.imageFileName, image: try readImage(window.imageFileName, in: fileWrapper)))
+                imageFileName: window.imageFileName, image: try readImage(window.imageFileName, in: fileWrapper),
+                isolatesBackground: window.isolatesBackground ?? false))
         }
         for path in manifest.embeddedCanvases {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
@@ -141,7 +146,8 @@ public struct CanvasDocument {
         }
         files["embedded"] = FileWrapper(directoryWithFileWrappers: embedded)
         let manifest = Manifest(version: Self.version, layout: layout, crop: crop, cornerRadius: cornerRadius,
-            windowLayers: windowLayers.map { WindowMetadata(frame: $0.frame, zOrder: $0.zOrder, imageFileName: $0.imageFileName) },
+            windowLayers: windowLayers.map { WindowMetadata(frame: $0.frame, zOrder: $0.zOrder,
+                imageFileName: $0.imageFileName, isolatesBackground: $0.isolatesBackground ? true : nil) },
             embeddedCanvases: embedded.keys.sorted().map { "embedded/\($0)" }, linkedCanvases: linkedCanvases,
             store: storeMetadata)
         let encoder = JSONEncoder()
@@ -150,7 +156,7 @@ public struct CanvasDocument {
         files["annotations.json"] = FileWrapper(regularFileWithContents: try layerStack.json())
         let thumbnailScale = min(1, 256 / max(crop.width, crop.height))
         let thumbnail = try flatten(scale: thumbnailScale)
-        files["thumbnail.png"] = FileWrapper(regularFileWithContents: try CanvasImageCodec.png(thumbnail))
+        files["thumbnail.png"] = FileWrapper(regularFileWithContents: try CanvasImageCodec.png(thumbnail, colourSpace: CGColorSpace.sRGB))
         return FileWrapper(directoryWithFileWrappers: files)
     }
 
@@ -214,6 +220,7 @@ public struct CanvasDocument {
         var frame: CGRect
         var zOrder: Int
         var imageFileName: String
+        var isolatesBackground: Bool?
     }
 }
 

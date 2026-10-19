@@ -32,14 +32,14 @@ public enum CanvasImageCodec {
         return image
     }
 
-    /// Encodes an SDR PNG suitable for normal image consumers.
-    public static func png(_ image: CGImage) throws -> Data {
-        // Package thumbnails and normal PNG exports are SDR; HEIC carries HDR.
-        try encode(sdr(image), type: .png, options: [:])
+    /// Encodes an SDR PNG in Display P3 so wide-gamut Screenshots retain their
+    /// colours. Thumbnails can request sRGB; HEIC carries HDR.
+    public static func png(_ image: CGImage, colourSpace: CFString = CGColorSpace.displayP3) throws -> Data {
+        try encode(sdr(image, colourSpace: colourSpace), type: .png, options: [:])
     }
 
-    static func sdr(_ image: CGImage) throws -> CGImage {
-        guard let space = CGColorSpace(name: CGColorSpace.sRGB),
+    static func sdr(_ image: CGImage, colourSpace: CFString = CGColorSpace.sRGB) throws -> CGImage {
+        guard let space = CGColorSpace(name: colourSpace),
               let context = CGContext(data: nil, width: image.width, height: image.height, bitsPerComponent: 8,
                 bytesPerRow: 0, space: space, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue) else {
             throw CanvasDocumentError.renderFailed

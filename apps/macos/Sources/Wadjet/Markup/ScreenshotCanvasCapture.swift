@@ -11,7 +11,7 @@ extension AppDelegate {
         guard let tool = state.tool, display < frozen.count else { return }
         let screen = frozen[display].screen
         let crop = rect.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
-        let radius = windowID.map { overlayCtrl.cornerRadii[$0] ?? fallbackWindowRadius } ?? 0
+        let radius = windowID.flatMap { overlayCtrl.cornerRadii[$0] }
         let scale = screen.backingScaleFactor
         let annotations = MarkupController.shared.stack
         let workflow = takeShotWorkflow()
@@ -37,13 +37,13 @@ extension AppDelegate {
                 let displays = live
                     ? try await overlayCtrl.captureCanvasDisplays(screens, excluding: excluded, cursor: cursor, wadjet: wadjet)
                     : displays
-                var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius,
+                var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius ?? 0,
                     annotations: annotations, windowCapture: windowID != nil)
                 if let windowID {
                     if let image = await captureWindow(id: windowID, screen: screen, cursor: cursor) {
                         // A window capture keeps its unobscured contents, including
                         // portions offscreen. The clean displays remain available for recropping.
-                        canvas.windowLayers = [.init(frame: crop, zOrder: 0, imageFileName: "captured-window.heic", image: image)]
+                        canvas.setCapturedWindow(image, cornerRadius: radius)
                     } else {
                         AppLog.line("window \(windowID) not capturable; falling back to clean display crop")
                     }

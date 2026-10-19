@@ -35,7 +35,12 @@ extension CanvasDocument {
             context.draw(image, in: display.frame)
         }
         for window in windowLayers.sorted(by: { $0.zOrder < $1.zOrder }) where window.frame.intersects(crop) {
+            context.saveGState()
+            // Standalone window captures must not reveal the desktop through
+            // their transparent pixels. Other window layers composite normally.
+            if window.isolatesBackground { context.setBlendMode(.copy) }
             context.draw(window.image, in: window.frame)
+            context.restoreGState()
         }
         for annotation in layerStack.annotations {
             context.saveGState()
