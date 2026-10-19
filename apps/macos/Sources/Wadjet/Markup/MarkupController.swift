@@ -33,6 +33,13 @@ final class MarkupController {
     @ObservationIgnored var zoom: CGFloat = 1
     /// an Editor's snap targets end at the Canvas bounds; nil snaps against the live screen
     @ObservationIgnored var snapBounds: CGRect?
+
+    /// the rect a Magnify places its magnifier against — the Editor's Canvas
+    /// bounds when set, else the display under `p`
+    private func placementBounds(around p: CGPoint) -> CGRect {
+        snapBounds ?? NSScreen.screens.first { $0.frame.contains(p) }?.frame
+            ?? NSScreen.main?.frame ?? .zero
+    }
     /// the stack when the drag in flight began — its one undo step
     @ObservationIgnored private var gestureStart: LayerStack?
     enum Gesture {
@@ -420,12 +427,9 @@ final class MarkupController {
             placeCounter(at: p)
             return
         case .magnify:
-            // the Editor's "display" is its Canvas; on screen it's the NSScreen under the point
-            let display = snapBounds
-                ?? NSScreen.screens.first { $0.frame.contains(p) }?.frame
-                ?? NSScreen.main?.frame ?? .zero
             a = Annotation(kind: .magnify(.placed(source: CGRect(origin: p, size: .zero),
-                                                 options: MarkupMagnify.options, on: display)),
+                                                 options: MarkupMagnify.options,
+                                                 on: placementBounds(around: p))),
                            style: MarkupStyles.shared.style(for: .magnify))
         default:
             return
@@ -486,9 +490,8 @@ final class MarkupController {
                 let source = CGRect(x: from.x, y: from.y, width: p.x - from.x,
                                     height: p.y - from.y).standardized
                 let centre = CGPoint(x: source.midX, y: source.midY)
-                let display = NSScreen.screens.first { $0.frame.contains(centre) }?.frame
-                    ?? NSScreen.main?.frame ?? .zero
-                a.kind = .magnify(.placed(source: source, options: m.options, on: display))
+                a.kind = .magnify(.placed(source: source, options: m.options,
+                                          on: placementBounds(around: centre)))
             }
             gesture = .drawing(a, from: from)
         case .pen:
