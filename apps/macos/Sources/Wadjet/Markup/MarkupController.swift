@@ -415,6 +415,7 @@ final class MarkupController {
     func render() {
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         Self.onScreen.annotations = shown
+        AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
         for p in panels { p.view.show(shown, selection: selected); p.view.showGuides(guides) }
         PeerThrough.shared.sync()
     }

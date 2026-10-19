@@ -1047,8 +1047,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         func stream(_ s: SCStream, didOutputSampleBuffer sb: CMSampleBuffer, of type: SCStreamOutputType) {
             guard type == .screen, isCompleteScreenFrame(sb),
                   let pb = CMSampleBufferGetImageBuffer(sb) else { return }
-            overlay?.draw(on: sb, pixels: pb)
-            writer.append(pb, at: CMSampleBufferGetPresentationTimeStamp(sb))
+            if let overlay { overlay.write(sb, pixels: pb) }
+            else { writer.append(pb, at: CMSampleBufferGetPresentationTimeStamp(sb)) }
         }
     }
 
@@ -1231,7 +1231,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             let writer = try MP4Writer(url: file, width: conf.width, height: conf.height, fps: cfg.recording.fps)
             let stream = SCStream(filter: filter, configuration: conf, delegate: recDelegate)
             let output = RecOutput(writer: writer,
-                                   overlay: s.tool == .recWindow ? recordingWindowID.map(WindowAnnotationOverlay.init) : nil)
+                                   overlay: s.tool == .recWindow ? recordingWindowID.map {
+                                       WindowAnnotationOverlay(windowID: $0, writer: writer,
+                                                               queue: recQueue, fps: cfg.recording.fps)
+                                   } : nil)
             try stream.addStreamOutput(output, type: .screen, sampleHandlerQueue: recQueue)
             try await stream.startCapture()
             // An Esc during startup cancelled this attempt; don't start recording.
@@ -1263,6 +1266,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             pauseAcc += Date().timeIntervalSince(pauseStart!)
             s.recordingPaused = false
             recWriter?.resume(at: hostNow())
+            recOutput?.overlay?.refresh() // catch up Annotations edited while paused
         } else {
             s.recordingPaused = true; pauseStart = Date()
             recWriter?.pause(at: hostNow())
