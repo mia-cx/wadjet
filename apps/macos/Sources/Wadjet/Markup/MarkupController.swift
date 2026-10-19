@@ -45,6 +45,8 @@ final class MarkupController {
     enum Gesture {
         case drawing(Annotation, from: CGPoint)
         case pen
+        /// a Brush stroke collecting samples; the Annotation is its live preview
+        case brush(Annotation, raw: [CGPoint])
         case moving(Annotation, from: CGPoint)
         /// a Magnify grabbed outside its magnifier box: the source moves, the
         /// magnifier stays put
@@ -57,6 +59,7 @@ final class MarkupController {
     /// the in-progress stroke or Pen path, for syncPanels/render
     var draft: Annotation? {
         if case let .drawing(a, _) = gesture { return a }
+        if case let .brush(a, _) = gesture { return a }
         guard let pen else { return nil }
         // mid-press the handles are being pulled — a stale hover node would
         // draw a phantom segment; the hover preview only matters between presses
@@ -406,14 +409,24 @@ final class MarkupController {
             }
             return
         }
+        if armed == .draw, MarkupStyles.shared.drawVariant.isBrush {
+            // Brush: collect samples while the pointer is down; the preview
+            // draws them as an open polyline of corner nodes
+            selection = nil // the new stroke takes the Tool's style, not the selection's
+            let style = MarkupStyles.shared.style(for: .draw)
+            let a = Annotation(kind: .path(PathData(nodes: [PathNode(anchor: p)])), style: style)
+            gesture = .brush(a, raw: [p])
+            render()
+            return
+        }
         if armed == .draw, MarkupStyles.shared.drawVariant == .pen {
             // Pen: a press adds a node (or closes on the first), a press-drag
             // pulls its handles — the path lives in `pen` until finishPen
+            selection = nil
             if pen == nil {
                 pen = (PenBuilder(), Annotation.ID(), MarkupStyles.shared.style(for: .draw))
             }
             _ = pen?.builder.press(at: p, closeRadius: Self.handleHitRadius, constrained: constrained)
-            selection = nil
             gesture = .pen
             render()
             return
@@ -504,6 +517,11 @@ final class MarkupController {
         case .pen:
             pen?.builder.drag(to: p, constrained: constrained)
             penHover = p // the next hover preview starts from the pointer
+        case let .brush(d, raw):
+            var a = d, raw = raw
+            raw.append(p)
+            a.kind = .path(PathData(nodes: raw.map { PathNode(anchor: $0) }))
+            gesture = .brush(a, raw: raw)
         case let .moving(start, from):
             let moved = start.moved(by: CGVector(dx: p.x - from.x, dy: p.y - from.y))
             // a Magnify snaps its magnifier frame, not its whole path's box
@@ -539,8 +557,20 @@ final class MarkupController {
         }
         render()
     }
-    /// commits a Pen path that just closed; other paths wait for Return/Escape
+    /// commits a Pen path that just closed, or fits a Brush stroke — other
+    /// paths wait for Return/Escape, a click without movement draws nothing
     func end() {
+        if case let .brush(d, raw) = gesture {
+            gesture = nil
+            if let fitted = PathData.fitted(raw, smoothing: CGFloat(MarkupStyles.shared.smoothing(for: .draw))) {
+                var a = d
+                a.kind = .path(fitted)
+                stack.add(a)
+            }
+            commitGesture() // the stroke's whole drag is its one undo step
+            render()
+            return
+        }
         if case .pen = gesture {
             gesture = nil
             if pen?.builder.path.closed == true { finishPen() } else { render() }
@@ -576,7 +606,7 @@ final class MarkupController {
         // a temporary-Select drag may still be in flight — commit it first so
         // it stays its own undo step and the path inserts above it
         switch gesture {
-        case nil, .pen: break
+        case nil, .pen, .brush: break
         case .drawing, .moving, .movingSource, .handle: commitGesture()
         }
         if let data = pen.builder.finished {
@@ -592,6 +622,13 @@ final class MarkupController {
         syncPanels()
         render()
         return true
+    }
+
+    /// the Smoothing slider's selection seam: refits a selected Brush stroke
+    /// from its kept samples, in place
+    func refitSelection(smoothing: CGFloat) {
+        guard let a = selected, case let .path(d) = a.kind, d.rawPoints != nil else { return }
+        edit { $0.replace(a.refitted(smoothing: smoothing)) }
     }
 
     /// the pointer moved: only the Pen rubber-band preview cares

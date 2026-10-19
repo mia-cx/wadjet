@@ -143,7 +143,9 @@ import WadjetKit
                         ctx.fillPath()
                         ctx.setBlendMode(.destinationOut)
                         for later in occluders {
-                            ctx.draw(later, sources: [], scale: scale)
+                            // the rim's mask keeps the caller's blend mode —
+                            // a multiply Highlighter would keep it visible
+                            ctx.draw(later, sources: [], scale: scale, blending: false)
                             // a later Magnify's content can't draw without
                             // sources — its silhouette occludes this rim at
                             // its own opacity (ctx.draw left state restored)

@@ -51,6 +51,26 @@ final class MarkupStyles {
         return style(for: tool).colour(for: target)
     }
 
+    /// the selected Brush stroke's Smoothing if one is selected, else the
+    /// variant's configured default
+    func smoothing(for tool: Tool) -> Double {
+        if let a = MarkupController.active.selected, case let .path(d) = a.kind,
+           let s = d.smoothing { return Double(s) }
+        return config.value.markup.tools[tool.styleKey]?.smoothing ?? DrawVariant.defaultSmoothing
+    }
+
+    /// with a Brush stroke selected the slider refits it; otherwise it sets
+    /// the variant's default for new strokes
+    func setSmoothing(_ s: Double, for tool: Tool) {
+        if let a = MarkupController.active.selected, case let .path(d) = a.kind, d.rawPoints != nil {
+            MarkupController.active.refitSelection(smoothing: CGFloat(s))
+            return
+        }
+        config.update {
+            $0.markup.tools[tool.styleKey, default: WadjetConfig.MarkupTool()].smoothing = s
+        }
+    }
+
     /// restyles a colour (opaque: transparency is the opacity slider's) on
     /// the selection or Tool default, and always records it in the ranking
     func useColour(_ c: RGBAColour, for tool: Tool, target: ColourTarget = .stroke) {

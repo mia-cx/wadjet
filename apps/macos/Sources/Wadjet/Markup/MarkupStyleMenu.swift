@@ -42,6 +42,7 @@ struct MarkupStyleControls: View {
     var styles: MarkupStyles { .shared }
     @State var width: Double = 0
     @State var opacity: Double = 0
+    @State var smoothing: Double = DrawVariant.defaultSmoothing
     /// a slider is mid-drag — re-seeding then would fight the user's thumb
     @State var editing = false
 
@@ -61,6 +62,13 @@ struct MarkupStyleControls: View {
                           text: "\(Int((opacity * 100).rounded()))%",
                           value: $opacity, range: 0.1...1, step: 0.05, editing: $editing) {
                 styles.restyle(tool) { $0.opacity = opacity }
+            }
+            if brushControls {
+                MenuSliderRow(icon: "scribble.variable", label: "Smoothing",
+                              text: "\(Int((smoothing * 100).rounded()))%",
+                              value: $smoothing, range: 0...1, step: 0.05, editing: $editing) {
+                    styles.setSmoothing(smoothing, for: tool)
+                }
             }
             if lineControls {
                 divider()
@@ -89,6 +97,7 @@ struct MarkupStyleControls: View {
             styles.refreshSwatches()
             width = Double(style.width)
             opacity = style.opacity
+            smoothing = styles.smoothing(for: tool)
         }
         // the selection can change under an open menu — follow it unless a
         // slider is mid-drag
@@ -96,6 +105,7 @@ struct MarkupStyleControls: View {
             guard !editing else { return }
             width = Double(st.width)
             opacity = st.opacity
+            smoothing = styles.smoothing(for: tool)
         }
     }
 
@@ -116,6 +126,13 @@ struct MarkupStyleControls: View {
         case .path: return !k.isClosed
         default: return false
         }
+    }
+
+    /// the Smoothing slider shows while a brush variant is armed or a Brush
+    /// stroke (a fitted path that kept its samples) is selected
+    var brushControls: Bool {
+        if let a = MarkupController.active.selected, case let .path(d) = a.kind, d.rawPoints != nil { return true }
+        return tool == .draw && styles.drawVariant.isBrush
     }
 
     /// the Fill toggle shows while the Pen variant is armed or a closed path

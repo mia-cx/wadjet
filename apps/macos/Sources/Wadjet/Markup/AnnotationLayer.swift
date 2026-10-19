@@ -60,6 +60,10 @@ final class AnnotationLayer: CALayer {
         label.path = PathGeometry.labelPath(for: a)
         label.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
         label.strokeColor = nil
+        // a multiply Annotation blends with the ones beneath it in the same
+        // panel; the window server still composites the panel over other apps
+        // with normal alpha
+        compositingFilter = a.style.blend == .multiply ? "multiplyBlendMode" : nil
         for l in [self, fill, stroke, ends, label] as [CALayer] { l.contentsScale = scale }
     }
 
