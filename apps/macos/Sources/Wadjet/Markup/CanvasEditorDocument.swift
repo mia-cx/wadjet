@@ -110,8 +110,8 @@ final class CanvasEditorDocument: NSDocument {
     }
 
     /// the package's image payloads and the linked Canvases its `linkedCanvases`
-    /// lists, preferring archived full sources in saved copies over external
-    /// History links, so the document's image kinds can still recrop after expiry.
+    /// lists, plus its embedded full sources, so saved copies can still recrop
+    /// after History expiry.
     private func seedAssets(into m: MarkupController) {
         m.assets.removeAll() // the reload's payload replaces everything, cached flattens too
         m.assets.images = canvas.images
@@ -149,6 +149,8 @@ final class CanvasEditorDocument: NSDocument {
             // Cache archived sources without reloading Markup or its undo stack.
             // A later autosave must not need the History files archived here.
             canvas = writing
+            markupCached?.assets.canvases.merge(writing.linkedDocuments) { _, archived in archived }
+            markupCached?.assets.embedded.merge(writing.embeddedCanvases) { _, archived in archived }
             return UnsafeSendable(value: wrapper)
         }.value
     }

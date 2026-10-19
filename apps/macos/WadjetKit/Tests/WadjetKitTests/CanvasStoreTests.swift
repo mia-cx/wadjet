@@ -40,7 +40,7 @@ struct CanvasStoreTests {
         let link = CanvasLink(url: targetURL)
         host.linkedCanvases = [link]
         host.linkedDocuments = [targetURL: target]
-        host.layerStack = LayerStack([Annotation(kind: .canvas(link,
+        host.layerStack = LayerStack([Annotation(kind: .canvas(.linked(link),
             .init(frame: host.crop, crop: CGRect(x: 8, y: 8, width: 8, height: 8))),
             style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))])
         if embedded {
@@ -74,14 +74,18 @@ struct CanvasStoreTests {
         #expect(try CanvasDocument(fileWrapper: nextSave).cornerRadius == 2)
         var reopened = try CanvasDocument.read(from: savedURL)
         let savedHost = embedded ? try #require(reopened.embeddedCanvases["child.wadjet"]) : reopened
-        let source = try #require(savedHost.linkedDocuments[targetURL])
+        guard case let .canvas(.embedded(name), _) = savedHost.layerStack.annotations[0].kind else {
+            Issue.record("saved sources must use NestedCanvas.embedded"); return
+        }
+        #expect(savedHost.linkedCanvases.isEmpty)
+        let source = try #require(savedHost.embeddedCanvases[name])
         #expect(source.layout == target.layout)
         #expect(source.displayImages[1]?.width == target.displayImages[1]?.width)
         #expect(try source.flatten(crop: CGRect(x: 32, y: 32, width: 16, height: 16)).width > 0)
         // The Editor can save the archived dependency again after History is gone.
         try reopened.archiveLinkedCanvases().write(to: savedURL, options: .atomic, originalContentsURL: nil)
         let edited = try CanvasDocument.read(from: savedURL)
-        #expect((embedded ? edited.embeddedCanvases["child.wadjet"] : edited)?.linkedDocuments[targetURL] != nil)
+        #expect((embedded ? edited.embeddedCanvases["child.wadjet"] : edited)?.embeddedCanvases[name] != nil)
     }
 
     // Proves an Editor's pending save is flushed before retention reads its
@@ -109,7 +113,8 @@ struct CanvasStoreTests {
 
     // Proves root and embedded linking Annotations preserve whole displays for
     // recropping, even when those displays are outside the target's own crop.
-    @Test(arguments: [false, true]) func linkedRecropKeepsItsDisplays(embedded: Bool) throws {
+    @Test(arguments: [false, true], [false, true])
+    func linkedRecropKeepsItsDisplays(embedded: Bool, embeddedTarget: Bool) throws {
         let directory = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: directory) }
         let created = Date(timeIntervalSince1970: 1_000_000)
@@ -122,11 +127,19 @@ struct CanvasStoreTests {
             target.displayImages[id] = target.displayImages[1]
         }
         let id = UUID()
-        let url = try store.add(target, for: id, createdAt: created)
+        let url = directory.appendingPathComponent("\(id).wadjet")
+        if !embeddedTarget { try store.add(target, for: id, createdAt: created) }
         var host = try fixtureCanvas()
-        host.linkedCanvases = [CanvasLink(url: url)]
+        let source: NestedCanvas
+        if embeddedTarget {
+            host.embeddedCanvases["target.wadjet"] = target
+            source = .embedded("target.wadjet")
+        } else {
+            host.linkedCanvases = [CanvasLink(url: url)]
+            source = .linked(CanvasLink(url: url))
+        }
         host.layerStack = LayerStack([100, 200].map { x in
-            Annotation(kind: .canvas(CanvasLink(url: url),
+            Annotation(kind: .canvas(source,
                 ImagePlacement(frame: host.crop, crop: CGRect(x: x + 4, y: 4, width: 8, height: 8))),
                 style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
         })
@@ -135,12 +148,24 @@ struct CanvasStoreTests {
             root.embeddedCanvases = ["child.wadjet": host]
             host = root
         }
-        try store.add(host, for: UUID(), createdAt: created)
+        let hostURL = try store.add(host, for: UUID(), createdAt: created)
+        let targetURL = embeddedTarget
+            ? hostURL.appendingPathComponent(embedded ? "embedded/child.wadjet/embedded/target.wadjet" : "embedded/target.wadjet")
+            : url
+        let settings = CanvasRetentionSettings(daysUntilDeletion: 0)
+        clock.withLock { $0 = created.addingTimeInterval(6 * 86_400) }
+        #expect(try store.sweep(settings: settings).isEmpty)
+        #expect(try hasGainMap(at: targetURL.appendingPathComponent("display-1.heic")))
+        clock.withLock { $0 = created.addingTimeInterval(7 * 86_400) }
+        try store.sweep(settings: settings)
+        #expect(try !hasGainMap(at: targetURL.appendingPathComponent("display-1.heic")))
+        clock.withLock { $0 = created.addingTimeInterval(29 * 86_400) }
+        #expect(try store.sweep(settings: settings).isEmpty)
         clock.withLock { $0 = created.addingTimeInterval(30 * 86_400) }
-        try store.sweep(settings: .init(daysUntilSDRAndLossyHEIC: 60, daysUntilDeletion: 0))
-        #expect(try store.canvas(for: id)?.layout.map(\.id) == [1, 2, 3])
-        #expect(FileManager.default.fileExists(atPath: url.appendingPathComponent("display-2.heic").path))
-        #expect(FileManager.default.fileExists(atPath: url.appendingPathComponent("display-3.heic").path))
+        try store.sweep(settings: settings)
+        #expect(try CanvasDocument.read(from: targetURL).layout.map(\.id) == [1, 2, 3])
+        #expect(FileManager.default.fileExists(atPath: targetURL.appendingPathComponent("display-2.heic").path))
+        #expect(FileManager.default.fileExists(atPath: targetURL.appendingPathComponent("display-3.heic").path))
     }
 
     // Proves persisted, configurable deadlines change real pixels/files exactly once,

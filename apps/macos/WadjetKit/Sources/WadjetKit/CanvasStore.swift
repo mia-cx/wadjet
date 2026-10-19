@@ -1,6 +1,5 @@
 import CoreGraphics
 import Foundation
-import Synchronization
 
 /// Persisted in canvas.json, independently of filesystem creation/modification dates.
 struct CanvasStoreMetadata: Codable {
@@ -61,37 +60,37 @@ public struct CanvasStore: Sendable {
     @discardableResult
     public func sweep(settings: CanvasRetentionSettings = .init()) throws -> [CanvasRetentionDecision] {
         guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
-        // A plain directory writer does not lock its children. Acquire the
-        // directory (for additions) and every actual package in one batch, so
-        // Editor saves finish before link planning and cannot race its commits.
+        // A plain directory writer does not lock its children. Hold the
+        // directory (for additions) and every actual package before planning.
+        // Use synchronous coordination throughout: waiting on an async accessor
+        // can starve the cooperative executor when several callers sweep at once.
         while true {
             let urls = try packageURLs()
-            let intents = [NSFileAccessIntent.writingIntent(with: directory, options: [])]
-                + urls.map { NSFileAccessIntent.writingIntent(with: $0, options: .forMerging) }
-            let result = Mutex<Result<[CanvasRetentionDecision]?, Error>?>(nil)
-            let finished = DispatchSemaphore(value: 0)
-            // The accessor exclusively uses this coordinator after the batch
-            // is granted; no other thread calls it during the operation.
-            nonisolated(unsafe) let coordinator = NSFileCoordinator()
-            let queue = OperationQueue()
-            coordinator.coordinate(with: intents, queue: queue) { error in
-                defer { finished.signal() }
-                let outcome = Result<[CanvasRetentionDecision]?, Error> {
-                    if let error { throw error }
-                    let granted = intents.dropFirst().map(\.url)
-                    // An add may have won the directory before the batch was
-                    // granted. Retry with that new package included in the lock.
-                    func paths(_ urls: [URL]) -> Set<String> {
-                        Set(urls.map { $0.resolvingSymlinksInPath().standardizedFileURL.path })
-                    }
-                    guard try paths(packageURLs()) == paths(Array(granted)) else { return nil }
-                    return try sweepCoordinated(settings: settings, coordinator: coordinator)
-                }
-                result.withLock { $0 = outcome }
+            guard !urls.isEmpty else { return [] }
+            let coordinator = NSFileCoordinator()
+            let decisions = try coordinatePackages(urls[...], using: coordinator) { () -> [CanvasRetentionDecision]? in
+                // An add may have won the directory before access was granted.
+                // Retry with that new package included in the lock.
+                guard try packageURLs().map(\.path) == urls.map(\.path) else { return nil }
+                return try sweepCoordinated(settings: settings, coordinator: coordinator)
             }
-            withExtendedLifetime(queue) { finished.wait() }
-            if let decisions = try result.withLock({ try $0!.get() }) { return decisions }
+            if let decisions { return decisions }
         }
+    }
+
+    // The two-item API explicitly permits nested coordinated writes. All store
+    // mutations take the directory first; package locks use a stable path order.
+    private func coordinatePackages<T>(_ urls: ArraySlice<URL>, using coordinator: NSFileCoordinator,
+                                       operation: () throws -> T) throws -> T {
+        guard let package = urls.first else { return try operation() }
+        var result: Result<T, Error>?
+        var error: NSError?
+        coordinator.coordinate(writingItemAt: directory, options: [],
+            writingItemAt: package, options: .forMerging, error: &error) { _, _ in
+            result = Result { try coordinatePackages(urls.dropFirst(), using: coordinator, operation: operation) }
+        }
+        if let error { throw error }
+        return try result!.get()
     }
 
     private func packageURLs() throws -> [URL] {
@@ -251,19 +250,17 @@ public struct CanvasStore: Sendable {
     // Read all required metadata before planning any destructive action.
     private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL,
                                 crops: inout [String: [CGRect]]) throws -> [CanvasLink] {
-        let preserved = manifest.preservedLinks ?? [:]
-        var links = manifest.linkedCanvases.filter { link in
-            !preserved.values.contains(where: { $0.url == link.url })
-        }
+        var links = manifest.linkedCanvases
         let stack = try LayerStack(json: Data(contentsOf: url.appendingPathComponent("annotations.json")))
         for annotation in stack.annotations {
-            guard case let .canvas(link, placement) = annotation.kind else { continue }
-            if let name = preserved.first(where: { $0.value.url == link.url })?.key {
+            switch annotation.kind {
+            case let .canvas(.embedded(name), placement):
                 crops[url.appendingPathComponent("embedded/\(name)").standardizedFileURL.path, default: []]
                     .append(placement.crop)
-            } else {
+            case let .canvas(.linked(link), placement):
                 links.append(link)
                 crops[link.url.standardizedFileURL.path, default: []].append(placement.crop)
+            default: break
             }
         }
         for path in manifest.embeddedCanvases {

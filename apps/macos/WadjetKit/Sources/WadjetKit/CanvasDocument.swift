@@ -78,8 +78,6 @@ public struct CanvasDocument {
     /// Keys are package filenames such as `detail.wadjet`, stored beneath `embedded/`.
     public var embeddedCanvases: [String: CanvasDocument]
     public var linkedCanvases: [CanvasLink]
-    /// Full sources archived inside a saved copy, keyed by embedded package name.
-    var preservedLinks: [String: CanvasLink] = [:]
     /// Caller-opened or archived sources, keyed by link URL, so flatten draws
     /// `.canvas` Annotations live. fileWrapper writes cropped image snapshots;
     /// archiveLinkedCanvases also retains full sources for later recropping.
@@ -159,11 +157,6 @@ public struct CanvasDocument {
             }
             embeddedCanvases[String(parts[1])] = try CanvasDocument(fileWrapper: wrapper)
         }
-        preservedLinks = manifest.preservedLinks ?? [:]
-        for (name, link) in preservedLinks {
-            guard let child = embeddedCanvases[name] else { throw CanvasDocumentError.invalidPackage(name) }
-            linkedDocuments[link.url] = child
-        }
     }
 
     /// Builds the complete directory wrapper, including a flattened SDR thumbnail.
@@ -226,7 +219,7 @@ public struct CanvasDocument {
                 imageFileName: $0.imageFileName, isolatesBackground: $0.isolatesBackground ? true : nil,
                 id: $0.id, app: $0.app, title: $0.title) },
             embeddedCanvases: embedded.keys.sorted().map { "embedded/\($0)" }, linkedCanvases: linkedCanvases,
-            store: storeMetadata, preservedLinks: preservedLinks.isEmpty ? nil : preservedLinks)
+            store: storeMetadata)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         files["canvas.json"] = FileWrapper(regularFileWithContents: try encoder.encode(manifest))
@@ -315,7 +308,6 @@ public struct CanvasDocument {
         var embeddedCanvases: [String]
         var linkedCanvases: [CanvasLink]
         var store: CanvasStoreMetadata?
-        var preservedLinks: [String: CanvasLink]? = nil
     }
 
     struct WindowMetadata: Codable {
