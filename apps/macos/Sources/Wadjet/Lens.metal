@@ -67,8 +67,10 @@ using namespace metal;
     // pixels: rises over the outer pixel, fades over the next two
     float dpx = -sdf / px;
     float hair = smoothstep(0.0, 1.0, dpx) * (1.0 - smoothstep(1.0, 3.0, dpx));
-    float2 ldir = normalize(light - centre);
-    float facing = 0.35 + 0.65 * clamp(dot(normalize(sc), ldir) * 0.5 + 0.5, 0.0, 1.0);
+    float2 lv = light - centre;
+    float2 ldir = lv / max(length(lv), 1e-3); // no normalize() at zero length
+    float2 sdir = sc / max(length(sc), 1e-3);
+    float facing = 0.35 + 0.65 * clamp(dot(sdir, ldir) * 0.5 + 0.5, 0.0, 1.0);
     float spec = exp(-length(light - position) / 140.0) * 0.09;
     o.rgb += half(hair * (facing * 0.12 + spec * 1.5));
     // coverage: sdf 0 → full effect, +half a px → plain backdrop
@@ -123,7 +125,8 @@ static float rrSdf(float2 c, float2 half_, float r) {
     // inner edge glow + a crisp rim hairline lit from the pointer, with a
     // hotspot that falls off ~140 pt — a light far above reproduces the old
     // top-lit look; the hotspot rides only the glow band and the hairline
-    float facing = clamp(dot(n, normalize(light - position)) * 0.5 + 0.5, 0.0, 1.0);
+    float2 lv = light - position;
+    float facing = clamp(dot(n, lv / max(length(lv), 1e-3)) * 0.5 + 0.5, 0.0, 1.0);
     float spec = exp(-length(light - position) / 140.0) * 0.18;
     float glow = pow(smoothstep(-barGlow, 0.0, s), 2.0) * (0.07 + spec);
     float rim = (1.0 - smoothstep(0.0, 1.3, -s)) * (mix(0.07, 0.21, facing) + spec * 0.7);

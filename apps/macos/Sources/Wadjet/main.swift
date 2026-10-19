@@ -1764,15 +1764,13 @@ final class OverlayController {
         let primaryH = NSScreen.screens[0].frame.height
         let scrTL = CGRect(x: screen.frame.minX, y: primaryH - screen.frame.maxY,
                            width: screen.frame.width, height: screen.frame.height)
-        // status item windows are SCK-visible but never render into a
-        // screenshot and would keep `needBare` permanently true
         // our status item windows are SCK-visible but never render into a
-        // screenshot and would keep `needBare` permanently true — CGWindowList
-        // knows them as our PID at the menu-bar window layer (3)
-        let statusish: Set<CGWindowID> = Set((CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? [])
-            .filter { ($0[kCGWindowOwnerPID as String] as? Int32) == ProcessInfo.processInfo.processIdentifier
-                && ($0[kCGWindowLayer as String] as? Int) == 3 }
-            .compactMap { $0[kCGWindowNumber as String] as? Int }.map(CGWindowID.init))
+        // screenshot and would keep `needBare` permanently true — exclude
+        // exactly them (a PID/layer filter would catch the .floating toast
+        // and pin panels)
+        let statusish: Set<CGWindowID> = Set([AppDelegate.shared?.statusItem?.button?.window,
+                                              AppDelegate.shared?.recStatusItem?.button?.window]
+            .compactMap { $0?.windowNumber }.map { CGWindowID(truncatingIfNeeded: $0) })
         let ownWindow = { (w: SCWindow) in w.owningApplication?.bundleIdentifier == Bundle.main.bundleIdentifier
             && !statusish.contains(w.windowID) }
         let ownWindows = content.windows.filter { w in
@@ -4263,8 +4261,10 @@ final class ToastController: ObservableObject {
             Task { @MainActor in self.dismiss(t) }
         }
     }
+    /// idempotent: a drag pause after a hover pause must not subtract twice
     func pauseTimer(_ t: ToastItem) {
-        t.timer?.invalidate(); t.timer = nil
+        guard let timer = t.timer else { return }
+        timer.invalidate(); t.timer = nil
         t.remaining -= Date().timeIntervalSince(t.t0)
     }
     func dismiss(_ t: ToastItem) { items.removeAll { $0 === t }; relayout(); AppDelegate.shared?.updateEscHotkey() }
