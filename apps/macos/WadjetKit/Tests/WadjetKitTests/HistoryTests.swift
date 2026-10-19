@@ -83,6 +83,65 @@ private final class Clock: @unchecked Sendable { var t = Date(timeIntervalSince1
     #expect(text.contains("42"))
 }
 
+// Proves History thumbnails follow Editor saves: the package's thumbnail.png is
+// re-rendered while the entry's recorded file, link and deletionURL stay as the
+// Workflow left them.
+@Test @MainActor func editingAHistoryCanvasRefreshesItsThumbnailButNotItsFileOrLink() throws {
+    let dir = tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = CanvasStore(directory: dir.appendingPathComponent("Canvases"))
+    let image = try rasterImage()
+    let file = dir.appendingPathComponent("shot.png")
+    try CanvasImageCodec.png(image).write(to: file)
+    let fileBytes = try Data(contentsOf: file)
+    let history = try HistoryStore.inMemory()
+    let entry = try history.record(kind: .screenshot, createdAt: Date(), file: file)
+    entry.link = "https://example.com/a"
+    entry.deletionURL = "https://example.com/d"
+
+    let canvas = CanvasDocument(
+        layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 64, height: 64), scaleFactor: 2)],
+        crop: CGRect(x: 0, y: 0, width: 32, height: 32), displayImages: [1: image])
+    let package = try store.add(canvas, for: entry.id, createdAt: entry.createdAt)
+    let thumbnail = package.appendingPathComponent("thumbnail.png")
+    let before = try Data(contentsOf: thumbnail)
+    #expect(entry.thumbnailFile(in: store) == thumbnail)
+
+    // an Editor save rewrites the package — a visible change re-renders the thumbnail
+    var edited = try #require(try store.canvas(for: entry.id))
+    edited.crop = CGRect(x: 0, y: 0, width: 16, height: 16)
+    try edited.write(to: package)
+
+    #expect(try Data(contentsOf: thumbnail) != before)
+    #expect(entry.thumbnailFile(in: store) == thumbnail)
+    #expect(entry.link == "https://example.com/a")
+    #expect(entry.deletionURL == "https://example.com/d")
+    #expect(try Data(contentsOf: file) == fileBytes)
+}
+
+// Proves a Canvas-less entry's thumbnail is its recorded file, as before.
+@Test @MainActor func thumbnailFallsBackToTheEntryFileWithoutAPackage() throws {
+    let dir = tempDir()
+    defer { try? FileManager.default.removeItem(at: dir) }
+    try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+    let store = CanvasStore(directory: dir.appendingPathComponent("Canvases"))
+    let file = dir.appendingPathComponent("shot.png")
+    try CanvasImageCodec.png(try rasterImage()).write(to: file)
+    let history = try HistoryStore.inMemory()
+    let entry = try history.record(kind: .screenshot, createdAt: Date(), file: file)
+    #expect(entry.thumbnailFile(in: store) == file)
+}
+
+private func rasterImage(size: Int = 64) throws -> CGImage {
+    let context = try #require(CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
+        bytesPerRow: 0, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+    context.setFillColor(red: 0.2, green: 0.4, blue: 0.8, alpha: 1)
+    context.fill(CGRect(x: 0, y: 0, width: size, height: size))
+    return try #require(context.makeImage())
+}
+
 @Test @MainActor func setOCRStoresTextOnTheRightEntry() throws {
     let store = try HistoryStore.inMemory()
     let a = try store.record(kind: .screenshot, createdAt: Date(), file: nil)

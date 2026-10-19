@@ -59,31 +59,11 @@ extension AppDelegate {
     /// Writes both outputs before Clear after Screenshot can discard the editable layers.
     func writeScreenshot(_ canvas: CanvasDocument, scale: CGFloat, capturedAt: Date, clear: Bool,
                          label: String, workflow: String) throws {
-        let image = try canvas.flatten(scale: scale)
-        let bytes: Data
-        let ext: String
-        // flatten always uses an extended space, including for SDR. Inspect its
-        // captured sources so an SDR Screenshot keeps today's PNG behaviour.
-        let sources = canvas.layout.filter { $0.frame.intersects(canvas.crop) }.compactMap { canvas.displayImages[$0.id] }
-            + canvas.windowLayers.map(\.image)
-        let hdr = sources.contains {
-            $0.colorSpace?.name == CGColorSpace.extendedSRGB || $0.colorSpace?.name == CGColorSpace.extendedLinearSRGB
-                || max($0.contentHeadroom, $0.calculatedContentHeadroom) > 1
-        }
-        if hdr {
-            bytes = try CanvasImageCodec.heic(image)
-            ext = "heic"
-        } else {
-            bytes = try CanvasImageCodec.png(image)
-            ext = "png"
-        }
-        let file = try captureFiles.newFile(ext: ext)
-        try bytes.write(to: file, options: .atomic)
-        let id = UUID()
-        let package = try canvasStore.add(canvas, for: id, createdAt: capturedAt)
+        let shot = try canvasStore.addScreenshot(canvas, files: captureFiles, scale: scale,
+            createdAt: capturedAt)
         if clear { clearAnnotations() }
-        runCapture(file: file, kind: .screenshot, label: label, workflow: workflow,
-            runID: id, capturedAt: capturedAt, canvas: package)
+        runCapture(file: shot.file, kind: .screenshot, label: label, workflow: workflow,
+            runID: shot.id, capturedAt: capturedAt, canvas: shot.package)
     }
 }
 
