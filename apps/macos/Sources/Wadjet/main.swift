@@ -3383,8 +3383,6 @@ struct ToolbarView: View {
                     .frame(width: panelW, height: panelH)
             }
             barSurface
-                .frame(width: shapeW, height: shapeH, alignment: .top)
-                .padding(.top, shapeTop + contentTop)
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
