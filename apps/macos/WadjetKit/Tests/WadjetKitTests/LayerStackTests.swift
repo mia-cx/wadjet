@@ -48,7 +48,7 @@ struct LayerStackTests {
         }
     }
 
-    // hidden and locked Annotations survive a flattened annotations.json
+    // hidden and locked Annotations survive the annotations.json round trip
     @Test func hiddenAndLockedRoundTrip() throws {
         var stack = LayerStack()
         stack.add(Annotation(kind: .line(start: .zero, end: CGPoint(x: 10, y: 0)), style: red4, hidden: true))

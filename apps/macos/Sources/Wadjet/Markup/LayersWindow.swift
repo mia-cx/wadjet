@@ -112,13 +112,14 @@ struct LayerThumbnail: View {
 
     var body: some View {
         Canvas { ctx, size in
+            let path = PathGeometry.path(for: annotation)
+            let b = path.boundingBoxOfPath
             let side = min(size.width, size.height)
-            let b = annotation.kind.bounds
             let s = (side - 10) / max(b.width, b.height, 1)
             let t = CGAffineTransform(translationX: size.width / 2, y: size.height / 2)
                 .scaledBy(x: s, y: -s)
                 .translatedBy(x: -b.midX, y: -b.midY)
-            let p = Path(PathGeometry.path(for: annotation)).applying(t)
+            let p = Path(path).applying(t)
             if case .censor = annotation.kind {
                 // Black out: opaque black fill, no stroke — as MarkupView draws it
                 ctx.fill(p, with: .color(.black))
