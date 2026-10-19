@@ -145,10 +145,13 @@ import WadjetKit
                         for later in occluders {
                             ctx.draw(later, sources: [], scale: scale)
                             // a later Magnify's content can't draw without
-                            // sources — its silhouette still occludes this rim
+                            // sources — its silhouette occludes this rim at
+                            // its own opacity (ctx.draw left state restored)
                             if case let .magnify(lm) = later.kind {
+                                ctx.setAlpha(later.style.opacity)
                                 ctx.addPath(lm.options.shape.path(in: lm.frame))
                                 ctx.fillPath()
+                                ctx.setAlpha(1)
                             }
                         }
                         let mask = wrapper.layer?.mask ?? CALayer()
