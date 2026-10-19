@@ -4025,6 +4025,7 @@ struct ToolMenuView: View {
             // what goes in → how it starts → what happens after
             case .shot:
                 tileRow(shotTiles)
+                autoRedactRow()
                 if tool == .capRegion { section("Start") { confirmRow() } }
                 section("Workflow") { workflowRows() }
             case .rec:
@@ -4045,7 +4046,7 @@ struct ToolMenuView: View {
                 if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                 if tool == .counter { CounterControls(ctrl: ctrl) }
                 if tool == .magnify { MagnifyShapeControls() }
-                if tool == .censor { CensorControls(ctrl: ctrl) } else {
+                if tool == .censor { CensorControls(ctrl: ctrl); smartRedactRows() } else {
                     if tool == .draw { tileRow(drawTiles) }
                     MarkupStyleControls(tool: tool, ctrl: ctrl)
                 }
@@ -4093,8 +4094,8 @@ struct ToolMenuView: View {
         .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
     }
 
-    func row(_ title: String, subtitle: String? = nil, icon: String, on: Bool, isToggle: Bool = false, action: @escaping () -> Void) -> some View {
-        MenuRow(title: title, subtitle: subtitle, icon: icon, on: on, isToggle: isToggle) {
+    func row(_ title: String, subtitle: String? = nil, icon: String, on: Bool, isToggle: Bool = false, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+        MenuRow(title: title, subtitle: subtitle, icon: icon, on: on, isToggle: isToggle, disabled: disabled) {
             action()
             s.openMenu = nil; ctrl.syncMenu()
         }
@@ -4203,6 +4204,8 @@ struct MenuRow: View {
     let on: Bool
     /// an on/off option rather than one pick of several — VoiceOver reads it as a toggle
     var isToggle = false
+    /// greys the row out and swallows its action — a command that can't run right now
+    var disabled = false
     let action: () -> Void
     @State var hovering = false
     var body: some View {
@@ -4229,6 +4232,8 @@ struct MenuRow: View {
             .onHover { hovering = $0 }
         }
         .buttonStyle(.plain)
+        .disabled(disabled)
+        .opacity(disabled ? 0.35 : 1)
         .accessibilityAddTraits(isToggle ? .isToggle : (on ? .isSelected : []))
         .accessibilityValue(isToggle ? (on ? "On" : "Off") : "")
     }
