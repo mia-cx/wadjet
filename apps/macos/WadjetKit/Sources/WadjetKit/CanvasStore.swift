@@ -62,13 +62,14 @@ public struct CanvasStore: Sendable {
         var records: [CanvasRetentionRecord] = []
         var packages: [UUID: URL] = [:]
         var links: [UUID: [CanvasLink]] = [:]
+        var linkedCrops: [String: [CGRect]] = [:]
         for url in urls {
             guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
                   try isPackage(url) else { continue }
             let manifest = try manifest(at: url)
             guard let metadata = manifest.store else { continue }
             packages[id] = url.standardizedFileURL
-            links[id] = try linkedCanvases(in: manifest, at: url)
+            links[id] = try linkedCanvases(in: manifest, at: url, crops: &linkedCrops)
             records.append(.init(id: id, createdAt: metadata.createdAt, state: metadata.state))
         }
         // Directory enumeration adds a trailing slash; file URL equality would
@@ -87,7 +88,7 @@ public struct CanvasStore: Sendable {
                 if decision.actions == [.delete] {
                     try fm.removeItem(at: url)
                 } else {
-                    try apply(decision.actions, to: url)
+                    try apply(decision.actions, to: url, linkedCrops: linkedCrops)
                 }
             } catch { failures.append(error) }
         }
@@ -100,7 +101,8 @@ public struct CanvasStore: Sendable {
         return decisions
     }
 
-    private func apply(_ actions: [CanvasRetentionAction], to url: URL) throws {
+    private func apply(_ actions: [CanvasRetentionAction], to url: URL,
+                       linkedCrops: [String: [CGRect]]) throws {
         let wrapper = try FileWrapper(url: url, options: .immediate)
         let canvas = try CanvasDocument(fileWrapper: wrapper)
         var manifest = try manifest(at: url)
@@ -111,7 +113,7 @@ public struct CanvasStore: Sendable {
                 quality: lossy || metadata.state.contains(.lossyHEIC) ? Self.lossyHEICQuality : 1)
         }
         if actions.contains(.dropUnusedDisplays) {
-            try dropUnusedDisplays(canvas, in: wrapper, manifest: &manifest)
+            try dropUnusedDisplays(canvas, at: url, in: wrapper, manifest: &manifest, linkedCrops: linkedCrops)
             metadata.state.insert(.unusedDisplaysDropped)
         }
         if sdr { metadata.state.insert(.sdr) }
@@ -143,14 +145,17 @@ public struct CanvasStore: Sendable {
         }
     }
 
-    private func dropUnusedDisplays(_ canvas: CanvasDocument, in wrapper: FileWrapper,
-                                    manifest: inout CanvasDocument.Manifest) throws {
+    private func dropUnusedDisplays(_ canvas: CanvasDocument, at url: URL, in wrapper: FileWrapper,
+                                    manifest: inout CanvasDocument.Manifest,
+                                    linkedCrops: [String: [CGRect]]) throws {
         // a display stays while it paints the canvas, an Annotation's coverage,
         // or the source pixels one samples — a Magnify's viewport may sit
         // wholly on a display its magnifier doesn't touch
         let bounds = canvas.layerStack.annotations.flatMap {
             [PathGeometry.coverage(for: $0).boundingBoxOfPath] + ($0.sampledRect.map { [$0] } ?? [])
-        }
+        } + linkedCrops[url.standardizedFileURL.path, default: []]
+        // Keep each touched display in full: a pasted Canvas can recrop beyond
+        // its current Annotation crop to any other part of that display.
         manifest.layout.removeAll { display in
             guard !touches(display.frame, canvas.crop),
                   !bounds.contains(where: { touches(display.frame, $0) }) else { return false }
@@ -161,7 +166,8 @@ public struct CanvasStore: Sendable {
             let childWrapper = wrapper.fileWrappers!["embedded"]!.fileWrappers![name]!
             var childManifest = try JSONDecoder().decode(CanvasDocument.Manifest.self,
                 from: childWrapper.fileWrappers!["canvas.json"]!.regularFileContents!)
-            try dropUnusedDisplays(child, in: childWrapper, manifest: &childManifest)
+            try dropUnusedDisplays(child, at: url.appendingPathComponent("embedded/\(name)"),
+                in: childWrapper, manifest: &childManifest, linkedCrops: linkedCrops)
             try replaceManifest(childManifest, in: childWrapper)
         }
     }
@@ -186,8 +192,15 @@ public struct CanvasStore: Sendable {
 
     // Embedded Canvases age with their root package, so their links are root edges too.
     // Read all required metadata before planning any destructive action.
-    private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL) throws -> [CanvasLink] {
+    private func linkedCanvases(in manifest: CanvasDocument.Manifest, at url: URL,
+                                crops: inout [String: [CGRect]]) throws -> [CanvasLink] {
         var links = manifest.linkedCanvases
+        let stack = try LayerStack(json: Data(contentsOf: url.appendingPathComponent("annotations.json")))
+        for annotation in stack.annotations {
+            guard case let .canvas(link, placement) = annotation.kind else { continue }
+            links.append(link)
+            crops[link.url.standardizedFileURL.path, default: []].append(placement.crop)
+        }
         for path in manifest.embeddedCanvases {
             let parts = path.split(separator: "/", omittingEmptySubsequences: false)
             guard parts.count == 2, parts[0] == "embedded", parts[1] != ".", parts[1] != "..",
@@ -198,7 +211,7 @@ public struct CanvasStore: Sendable {
             guard values.isDirectory == true, values.isSymbolicLink != true, try isPackage(child) else {
                 throw CanvasDocumentError.invalidPackage(path)
             }
-            links += try linkedCanvases(in: self.manifest(at: child), at: child)
+            links += try linkedCanvases(in: self.manifest(at: child), at: child, crops: &crops)
         }
         return links
     }

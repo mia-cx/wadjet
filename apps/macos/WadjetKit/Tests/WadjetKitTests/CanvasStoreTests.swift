@@ -6,6 +6,42 @@ import Testing
 import WadjetKit
 
 struct CanvasStoreTests {
+    // Proves root and embedded linking Annotations preserve whole displays for
+    // recropping, even when those displays are outside the target's own crop.
+    @Test(arguments: [false, true]) func linkedRecropKeepsItsDisplays(embedded: Bool) throws {
+        let directory = temporaryCanvasDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let created = Date(timeIntervalSince1970: 1_000_000)
+        let clock = Mutex(created)
+        let store = CanvasStore(directory: directory, now: { clock.withLock { $0 } })
+        var target = try fixtureCanvas()
+        for id: UInt32 in [2, 3, 4] {
+            target.layout.append(.init(id: id,
+                frame: CGRect(x: Int(id - 1) * 100, y: 0, width: 64, height: 64), scaleFactor: 4))
+            target.displayImages[id] = target.displayImages[1]
+        }
+        let id = UUID()
+        let url = try store.add(target, for: id, createdAt: created)
+        var host = try fixtureCanvas()
+        host.linkedCanvases = [CanvasLink(url: url)]
+        host.layerStack = LayerStack([100, 200].map { x in
+            Annotation(kind: .canvas(CanvasLink(url: url),
+                ImagePlacement(frame: host.crop, crop: CGRect(x: x + 4, y: 4, width: 8, height: 8))),
+                style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))
+        })
+        if embedded {
+            var root = try fixtureCanvas()
+            root.embeddedCanvases = ["child.wadjet": host]
+            host = root
+        }
+        try store.add(host, for: UUID(), createdAt: created)
+        clock.withLock { $0 = created.addingTimeInterval(30 * 86_400) }
+        try store.sweep(settings: .init(daysUntilSDRAndLossyHEIC: 60, daysUntilDeletion: 0))
+        #expect(try store.canvas(for: id)?.layout.map(\.id) == [1, 2, 3])
+        #expect(FileManager.default.fileExists(atPath: url.appendingPathComponent("display-2.heic").path))
+        #expect(FileManager.default.fileExists(atPath: url.appendingPathComponent("display-3.heic").path))
+    }
+
     // Proves persisted, configurable deadlines change real pixels/files exactly once,
     // prune each nested Canvas by its own crop/stroked Annotations, and leave History intact.
     @Test @MainActor func retentionStages() throws {
