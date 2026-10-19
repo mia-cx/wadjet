@@ -2,11 +2,6 @@ import AppKit
 import SwiftUI
 import WadjetKit
 
-extension Tool {
-    /// the Markup Tool the menu bar's Markup item arms: the last one opened
-    @MainActor static var lastMarkup: Tool = .draw
-}
-
 extension OverlayController {
     /// Back on the live desktop: nothing is selected, and the island stays on
     /// every display while Annotations exist or a Recording shows its island.

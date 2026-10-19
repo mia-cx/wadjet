@@ -105,6 +105,7 @@ final class MarkupController {
         guard want != armed else { return }
         let was = armed
         armed = want
+        if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
             gesture = nil; selection = nil; cmdHeld = false

@@ -19,13 +19,14 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", draw = "draw", shapes = "shapes", censor = "censor", clearAnnotations = "clearAnnotations"
+    case select = "select", draw = "draw", shapes = "shapes", censor = "censor", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
         case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .censor: "Censor"; case .clearAnnotations: "Clear Annotations"
+        case .moreMarkup: "More Markup Tools"
         }
     }
     // the permanent label under the cell icon — as short as it can be
@@ -34,9 +35,16 @@ enum Tool: String, CaseIterable {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
         case .select: "Select"; case .draw: "Draw"; case .shapes: "Shapes"; case .censor: "Censor"; case .clearAnnotations: "Clear"
+        case .moreMarkup: "More"
         }
     }
-    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; case .select, .draw, .shapes, .censor, .clearAnnotations: .markup; default: .util } }
+    var kind: Kind { switch self {
+        case .capRegion, .capWindow, .capScreen: .shot
+        case .recRegion, .recWindow, .recScreen: .rec
+        case .pickColour, .copyText, .measure: .util
+        // Markup Tools, More and Clear — new Markup Tools need no entry here
+        default: .markup
+    } }
     /// Tools that can skip the pick: one obvious target (the pointer's display
     /// or the focused window) — a Shortcut can capture them without confirming
     var confirmOptional: Bool { [.capWindow, .capScreen, .recWindow, .recScreen].contains(self) }
@@ -46,6 +54,7 @@ enum Tool: String, CaseIterable {
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
         case .select: "cursorarrow"; case .draw: "line.diagonal"; case .shapes: "square.on.circle"; case .censor: "eye.slash"; case .clearAnnotations: "trash"
+        case .moreMarkup: "ellipsis"
         }
     }
     enum Kind: CaseIterable { case shot, rec, util, markup
@@ -56,11 +65,11 @@ enum Tool: String, CaseIterable {
             switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities"; case .markup: "Markup" }
         }
     }
-    /// nil for Tools no Shortcut can name (Select, Clear)
+    /// nil for Tools no Shortcut can name (Select, Clear, More)
     var toolID: ToolID? { ToolID(rawValue: rawValue) }
     var hasMenu: Bool { ![.copyText, .clearAnnotations].contains(self) }
-    /// a toolbar button that acts at once instead of arming
-    var isAction: Bool { self == .clearAnnotations }
+    /// a toolbar button that acts at once instead of arming: Clear clears, More opens its menu
+    var isAction: Bool { self == .clearAnnotations || self == .moreMarkup }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
 }
 
@@ -119,7 +128,8 @@ final class AppState: ObservableObject {
     @Published var cursor = true
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
-    @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
+    // a toolbar opening re-ranks the Markup group (nil → a display)
+    @Published var expandedDisplay: Int? = nil { didSet { if oldValue == nil, expandedDisplay != nil { MarkupToolbar.shared.open() } } }
     @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util|markup> — drives the expanded toolbar's openGroup
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
@@ -823,8 +833,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: trigger
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
-        if tool.isAction { clearAnnotations(); return }
-        if tool.kind == .markup { Tool.lastMarkup = tool }
+        if tool.isAction { if tool == .clearAnnotations { clearAnnotations() }; return }
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
         if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup) {
@@ -2182,7 +2191,7 @@ enum WadjetCursors {
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
         case .pickColour: return symbol("eyedropper", centre: false)
-        case .clearAnnotations: return .arrow
+        case .clearAnnotations, .moreMarkup: return .arrow
         }
     }
     /// white glyph with a soft dark halo so it reads on any backdrop —
@@ -2591,7 +2600,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText, .select, .draw, .shapes, .censor, .clearAnnotations: break
+        case .copyText, .select, .draw, .shapes, .censor, .clearAnnotations, .moreMarkup: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -3076,6 +3085,17 @@ struct ToolbarView: View {
     }
 
     let toolD: CGFloat = 72
+    let compactD: CGFloat = 44 // More's button: an icon, no label
+    func cellW(_ t: Tool) -> CGFloat { t == .moreMarkup ? compactD : toolD }
+    /// More's look: an ellipsis in a circle, no label — shared by cell() and
+    /// iconCell() so the lens strip lines up
+    var moreButton: some View {
+        Image(systemName: "ellipsis").font(.system(size: 14, weight: .semibold))
+            .frame(width: 28, height: 28)
+            .background(Circle().fill(.white.opacity(s.openMenu == .moreMarkup ? 0.22 : 0.12)))
+            .frame(width: compactD, height: selH)
+            .accessibilityLabel(Tool.moreMarkup.title)
+    }
     let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
     let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
     // the capsule overhangs its cell by (selW − toolD)/2 on each side; the
@@ -3227,12 +3247,24 @@ struct ToolbarView: View {
     func openToolMenu(_ t: Tool) {
         guard t.hasMenu, !toolDisabled(t) else { return }
         TipPanel.hide()
-        if s.tool != t { AppDelegate.shared?.trigger(t) }
+        if s.tool != t, !t.isAction { AppDelegate.shared?.trigger(t) }
         s.openMenu = s.openMenu == t ? nil : t
         ctrl.syncMenu()
     }
     struct RowSlot { let tool: Tool; let collapsed: Bool }
-    func groupTools(_ k: Tool.Kind) -> [Tool] { Tool.allCases.filter { $0.kind == k } }
+    func groupTools(_ k: Tool.Kind) -> [Tool] {
+        // Markup lays out by use: pinned, ranked slots, the overflow under More,
+        // then Clear — every other group is simply all its Tools
+        k == .markup ? MarkupToolbar.shared.visible + MarkupToolbar.shared.overflow + [.moreMarkup, .clearAnnotations]
+                     : Tool.allCases.filter { $0.kind == k }
+    }
+    /// whether an open group shows the cell: the Markup group's overflow Tools
+    /// render (stable identity) but take no room, and More itself hides while
+    /// the overflow is empty
+    func inRow(_ t: Tool) -> Bool {
+        if MarkupToolbar.shared.overflow.contains(t) { return false }
+        return t != .moreMarkup || !MarkupToolbar.shared.overflow.isEmpty
+    }
     /// a collapsed group's representative: its last-used Tool — the selected
     /// Tool's group always shows the selection
     func lastUsedTool(_ k: Tool.Kind) -> Tool {
@@ -3240,7 +3272,7 @@ struct ToolbarView: View {
         return lastUsed[k] ?? groupTools(k)[0]
     }
     func slots(in k: Tool.Kind) -> [RowSlot] {
-        k == openGroup ? groupTools(k).map { RowSlot(tool: $0, collapsed: false) }
+        k == openGroup ? groupTools(k).filter(inRow).map { RowSlot(tool: $0, collapsed: false) }
                        : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
     }
     var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
@@ -3261,7 +3293,7 @@ struct ToolbarView: View {
     /// the Tool whose visible cell actually contains x — gaps and hidden
     /// stacked cells return nil
     func hitTool(at x: CGFloat) -> Tool? {
-        cellCentres.first { visibleTools.contains($0.key) && abs($0.value.x - x) <= toolD / 2 }?.key
+        cellCentres.first { visibleTools.contains($0.key) && abs($0.value.x - x) <= cellW($0.key) / 2 }?.key
     }
     /// press and drag targets skip disabled Tools; a gap still snaps to the
     /// nearest live cell
@@ -3283,33 +3315,37 @@ struct ToolbarView: View {
                         .frame(width: 1, height: selH * 0.6)
                         .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
                 }
-                // every group always renders all three Tools (stable identity,
+                // every group always renders all its Tools (stable identity,
                 // no inserts/removals): closed groups give EVERY slot zero
                 // width — leading-aligned — so the siblings stack on the rep
                 // wherever it sits, and open groups take a cell + gap each.
-                // The spread is real layout, so the geometry readers
+                // The Markup group's overflow Tools take no room either. The
+                // spread is real layout, so the geometry readers
                 // (cellCentres, ToolbarBtnFrames) report true positions
-                let open = k == openGroup, g = groupTools(k)
+                let open = k == openGroup, g = groupTools(k), v = g.filter(inRow)
                 HStack(spacing: 0) {
-                    ForEach(Array(g.enumerated()), id: \.element) { i, t in
-                        let rep = t == lastUsedTool(k), shown = open || rep
+                    ForEach(g, id: \.self) { t in
+                        let rep = t == lastUsedTool(k), shown = open ? v.contains(t) : rep
                         make(t, !open && rep)
                             .scaleEffect(shown ? 1 : 0.5)
                             .opacity(shown ? (toolDisabled(t) ? 0.35 : 1) : 0) // a Recording greys the video group
                             .allowsHitTesting(shown)
                             .accessibilityHidden(!shown)
-                            .frame(width: open ? toolD + (i < g.count - 1 ? cellGap : 0) : 0,
+                            .frame(width: open && shown ? cellW(t) + (t != v.last ? cellGap : 0) : 0,
                                    alignment: .leading)
                             .zIndex(rep ? 1 : 0)
                     }
                 }
-                .frame(width: open ? toolD * CGFloat(g.count) + cellGap * CGFloat(g.count - 1) : toolD, alignment: .leading)
+                .frame(width: open ? v.map(cellW).reduce(0, +) + cellGap * CGFloat(max(v.count - 1, 0)) : toolD, alignment: .leading)
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
     }
     // the icon strip once, for the accent-tint mask — same layout as the row
-    func iconCell(_ t: Tool, collapsed: Bool) -> some View {
+    @ViewBuilder func iconCell(_ t: Tool, collapsed: Bool) -> some View {
+        if t == .moreMarkup {
+            moreButton
+        } else {
         // pixel-identical layout to cell() so the masked splice joins equal:
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
@@ -3337,6 +3373,7 @@ struct ToolbarView: View {
                 }
         }
         .frame(width: toolD, height: selH)
+        }
     }
 
     /// pixel-res Freeze Frame crop under the whole toolbar panel — the
@@ -3461,6 +3498,11 @@ struct ToolbarView: View {
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
         return VStack(spacing: 3) {
+            if t == .moreMarkup {
+                // the rest of cell()'s modifier chain (mask, RightClickCatcher,
+                // geometry) still applies to More
+                moreButton
+            } else {
             Image(systemName: collapsed ? t.kind.badge : t.symbol).resizable().scaledToFit()
                 .frame(width: 24, height: 24)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
@@ -3486,9 +3528,10 @@ struct ToolbarView: View {
                             .offset(x: 11)
                     }
                 }
+            }
         }
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
-            .frame(width: toolD, height: selH)
+            .frame(width: cellW(t), height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space
             .background {
@@ -3510,10 +3553,10 @@ struct ToolbarView: View {
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
-                cellCentres[t] = CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)
-                if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + toolD / 2, y: $0.y + selH / 2)) }
+                cellCentres[t] = CGPoint(x: $0.x + cellW(t) / 2, y: $0.y + selH / 2)
+                if !lensActive, s.tool == t { snapLens(to: CGPoint(x: $0.x + cellW(t) / 2, y: $0.y + selH / 2)) }
                 // a tap's travel follows its Tool if a group reflow moves it mid-flight
-                else if travelling, !dragging, !pressing, s.tool == t { setLensTarget(x: $0.x + toolD / 2) }
+                else if travelling, !dragging, !pressing, s.tool == t { setLensTarget(x: $0.x + cellW(t) / 2) }
             }
             .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { f in
                 ToolbarBtnFrames.rects[displayIndex, default: [:]][t] = f
@@ -3613,7 +3656,7 @@ struct ToolbarView: View {
                         if let c = cellCentres[n] { setLensTarget(x: c.x) }
                     }
                 } else if !menuByHold, let t = hitTool(at: v.location.x) ?? nearestTool(to: v.location.x) {
-                    if t.isAction { AppDelegate.shared?.trigger(t) }
+                    if t.isAction { t.hasMenu ? openToolMenu(t) : AppDelegate.shared?.trigger(t) }
                     else if t != s.tool {
                         travelTap(t) // the lens travels all the way there
                     } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
@@ -3934,6 +3977,8 @@ struct ToolMenuView: View {
                 section("Code") { colourRows([.swiftUI]) }
             case .util where tool == .measure:
                 tileRow(measureTiles)
+            case .markup where tool == .moreMarkup:
+                overflowRows()
             case .markup:
                 if tool == .shapes { ShapeVariantControls(ctrl: ctrl) }
                 if tool == .censor { tileRow(censorTiles) } else { MarkupStyleControls(tool: tool, ctrl: ctrl) }
