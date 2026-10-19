@@ -163,7 +163,9 @@ struct WorkflowTests {
         let dir = tempDir(), a = tempDir(), b = tempDir()
         let file = try mkFile(dir)
         let package = tempDir().appendingPathComponent("shot.wadjet")
-        try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: package.deletingLastPathComponent(), withIntermediateDirectories: true)
+        let fixture = try #require(Bundle.module.url(forResource: "composition", withExtension: "png", subdirectory: "Fixtures"))
+        try CanvasDocument(image: Data(contentsOf: fixture)).write(to: package)
         let fx = FakeEffects()
         let wf = Workflow(name: "w", takes: .screenshot, steps: [
             .pin, .saveFile(folder: a.path), .pin, .saveFile(folder: b.path, format: .canvas), .pin])
