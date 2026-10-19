@@ -60,6 +60,8 @@ public struct CanvasDocument {
     /// Keys are package filenames such as `detail.wadjet`, stored beneath `embedded/`.
     public var embeddedCanvases: [String: CanvasDocument]
     public var linkedCanvases: [CanvasLink]
+    // Travels with Editor saves so History retention never restarts after an edit.
+    var storeMetadata: CanvasStoreMetadata?
 
     // Reuse unedited HEIC bytes on save: repeated Editor saves must not accumulate loss.
     private var originalImages: [String: (image: CGImage, data: Data)] = [:]
@@ -95,6 +97,7 @@ public struct CanvasDocument {
         self.init(layout: manifest.layout, crop: manifest.crop, cornerRadius: manifest.cornerRadius,
                   layerStack: try LayerStack(json: Self.data("annotations.json", in: fileWrapper)),
                   displayImages: [:], linkedCanvases: manifest.linkedCanvases)
+        storeMetadata = manifest.store
         try validateMetadata(windowNames: manifest.windowLayers.map(\.imageFileName))
         for display in layout {
             displayImages[display.id] = try readImage(display.imageFileName, in: fileWrapper)
@@ -139,7 +142,8 @@ public struct CanvasDocument {
         files["embedded"] = FileWrapper(directoryWithFileWrappers: embedded)
         let manifest = Manifest(version: Self.version, layout: layout, crop: crop, cornerRadius: cornerRadius,
             windowLayers: windowLayers.map { WindowMetadata(frame: $0.frame, zOrder: $0.zOrder, imageFileName: $0.imageFileName) },
-            embeddedCanvases: embedded.keys.sorted().map { "embedded/\($0)" }, linkedCanvases: linkedCanvases)
+            embeddedCanvases: embedded.keys.sorted().map { "embedded/\($0)" }, linkedCanvases: linkedCanvases,
+            store: storeMetadata)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
         files["canvas.json"] = FileWrapper(regularFileWithContents: try encoder.encode(manifest))
@@ -195,7 +199,7 @@ public struct CanvasDocument {
             && rect.width > 0 && rect.height > 0 && rect.maxX.isFinite && rect.maxY.isFinite
     }
 
-    private struct Manifest: Codable {
+    struct Manifest: Codable {
         var version: Int
         var layout: [CanvasDisplay]
         var crop: CGRect
@@ -203,9 +207,10 @@ public struct CanvasDocument {
         var windowLayers: [WindowMetadata]
         var embeddedCanvases: [String]
         var linkedCanvases: [CanvasLink]
+        var store: CanvasStoreMetadata?
     }
 
-    private struct WindowMetadata: Codable {
+    struct WindowMetadata: Codable {
         var frame: CGRect
         var zOrder: Int
         var imageFileName: String
