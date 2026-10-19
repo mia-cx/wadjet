@@ -462,6 +462,43 @@ struct CanvasDocumentTests {
         }
     }
 
+    // Proves the beneath source frame takes its size from the rendered image:
+    // at fractional scales a snapped rect's width*scale can round up one pixel,
+    // and an off-by-one frame would mis-scale the Censor's sampling again.
+    @Test func censorSamplesFractionalScaleFully() throws {
+        let scale: CGFloat = 256 / 422
+        var document = CanvasDocument(
+            layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 60, height: 80), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 60, height: 80),
+            displayImages: [1: try solidImage([0, 0, 1, 1], width: 8, height: 8)])
+        document.addWindowLayers([
+            CapturedWindow(frame: CGRect(x: 30, y: 0, width: 30, height: 80),
+                           image: try solidImage([1, 0, 0, 1], width: 8, height: 8)),
+        ])
+        let red = try #require(document.layerStack.annotations.last)
+        document.layerStack.replace(red.moved(by: CGVector(dx: -30, dy: 0))) // window covers it all
+        // output pixels fully inside the Censor: columns 7…11; the strip the
+        // unsnapped frame leaves (y_pt 55.84–60.9) is rows 12–13 or 34–35
+        // depending on row order, so assert both plus a deep-interior row
+        let width = Int(ceil(60 * scale)), height = Int(ceil(80 * scale))
+        for method in [CensorMethod.pixelate(blockSize: 1), .blur(radius: 1)] {
+            var doc = document
+            doc.layerStack.add(Annotation(
+                kind: .censor(rect: CGRect(x: 10.4, y: 20.1, width: 10.2, height: 40.8),
+                              method: method),
+                style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 0)))
+            let flat = try doc.flatten(scale: scale)
+            #expect(flat.width == width && flat.height == height)
+            let px = try linearPixels(flat)
+            func pixel(_ x: Int, _ y: Int) -> [Float] { Array(px[4 * (y * width + x)..<4 * (y * width + x) + 4]) }
+            for (x, y) in [(8, 13), (8, 34), (8, 35), (8, 25)] {
+                let p = pixel(x, y)
+                #expect(zip(p, [1, 0, 0, 1] as [Float]).allSatisfy { abs($0 - $1) < 0.01 },
+                        "\(method) pixel (\(x), \(y)) = \(p)")
+            }
+        }
+    }
+
     // Proves a damaged/newer package fails explicitly rather than opening with lost data.
     @Test func rejectsInvalidPackage() throws {
         let valid = CanvasDocument(layout: [], crop: CGRect(x: 0, y: 0, width: 2, height: 2), displayImages: [:])
