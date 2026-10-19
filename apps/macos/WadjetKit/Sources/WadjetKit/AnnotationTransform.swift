@@ -57,7 +57,7 @@ extension AnnotationKind {
     var isBox: Bool {
         switch self {
         case .line: false
-        case .censor, .shape: true
+        case .censor, .shape, .counter: true
         }
     }
     /// bounding box of `points` — may have zero width or height
