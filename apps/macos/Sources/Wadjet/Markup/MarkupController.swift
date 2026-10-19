@@ -99,7 +99,8 @@ final class MarkupController {
     }
     private func restore(_ s: LayerStack) {
         stack = s
-        if selected == nil { selection = nil }
+        // gone, hidden, or locked: none of those can stay the selection
+        if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
         syncPanels(); render()
     }
 
