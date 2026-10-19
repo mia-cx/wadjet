@@ -34,9 +34,9 @@ import WadjetKit
         staticSource = CIImage(cgImage: staticImage)
     }
 
-    /// the view's annotations each render; `layers` is MarkupView's shape
-    /// layer map so each sample lands on its own Censor's layer
-    func sync(_ annotations: [Annotation], layers: [Annotation.ID: CAShapeLayer]) {
+    /// the view's annotations each render; `layers` is MarkupView's
+    /// AnnotationLayer map so each sample lands on its own Censor's layer
+    func sync(_ annotations: [Annotation], layers: [Annotation.ID: AnnotationLayer]) {
         let sampling = annotations.filter { a in
             guard case let .censor(_, m) = a.kind, m.samplesBeneath else { return false }
             return PathGeometry.path(for: a).boundingBox.intersects(coverage)

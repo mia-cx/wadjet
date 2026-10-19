@@ -31,9 +31,9 @@ import WadjetKit
     }
 
     /// the panel's annotations each render, in stack order; `layers` is
-    /// MarkupView's shape layer map so each magnifier lands on its own
+    /// MarkupView's AnnotationLayer map so each magnifier lands on its own
     /// Magnify's layer
-    func sync(_ annotations: [Annotation], layers: [Annotation.ID: CAShapeLayer], scale: CGFloat) {
+    func sync(_ annotations: [Annotation], layers: [Annotation.ID: AnnotationLayer], scale: CGFloat) {
         var seen = Set<Annotation.ID>()
         var ordered: [NSView] = []
         for (i, a) in annotations.enumerated() {

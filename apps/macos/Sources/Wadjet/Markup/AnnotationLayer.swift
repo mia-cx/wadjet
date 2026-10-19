@@ -39,9 +39,10 @@ final class AnnotationLayer: CALayer {
             stroke.strokeColor = nil
             ends.path = nil
             opacity = 1
-        case .shape, .counter:
+        case .shape, .counter, .magnify:
             // upstream's look: one path, filled and stroked by the style's
-            // colours; a counter's glyph outline sits on top in white
+            // colours; a counter's glyph outline sits on top in white, a
+            // Magnify's source outline and leader are its path
             fill.path = nil
             ends.path = nil
             stroke.path = PathGeometry.path(for: a)
