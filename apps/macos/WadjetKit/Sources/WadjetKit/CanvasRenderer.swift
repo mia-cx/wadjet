@@ -44,7 +44,7 @@ extension CanvasDocument {
             context.draw(window.image, in: window.frame)
             context.restoreGState()
         }
-        for annotation in layerStack.annotations {
+        for annotation in layerStack.annotations where !annotation.hidden {
             context.saveGState()
             if case let .censor(_, method) = annotation.kind, method.samplesBeneath {
                 // black underneath first: the fallback for parts off every display

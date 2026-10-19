@@ -9,22 +9,32 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
     public var kind: AnnotationKind
     public var style: AnnotationStyle
     public var transform: AnnotationTransform
+    /// doesn't draw, on screen or in a flattened Canvas
+    public var hidden: Bool
+    /// can't be selected or erased
+    public var locked: Bool
     public init(id: UUID = UUID(), kind: AnnotationKind, style: AnnotationStyle,
-                transform: AnnotationTransform = .identity) {
+                transform: AnnotationTransform = .identity,
+                hidden: Bool = false, locked: Bool = false) {
         self.id = id
         self.kind = kind
         self.style = style
         self.transform = transform
+        self.hidden = hidden
+        self.locked = locked
     }
 
-    enum CodingKeys: String, CodingKey { case id, kind, style, transform }
-    /// annotations.json files from before `transform` existed decode as .identity
+    enum CodingKeys: String, CodingKey { case id, kind, style, transform, hidden, locked }
+    /// annotations.json files from before `transform` existed decode as .identity;
+    /// files from before `hidden`/`locked` existed decode as false
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         id = try c.decode(UUID.self, forKey: .id)
         kind = try c.decode(AnnotationKind.self, forKey: .kind)
         style = try c.decode(AnnotationStyle.self, forKey: .style)
         transform = try c.decodeIfPresent(AnnotationTransform.self, forKey: .transform) ?? .identity
+        hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
+        locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
     }
 }
 

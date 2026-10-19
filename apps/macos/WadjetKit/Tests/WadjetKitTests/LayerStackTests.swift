@@ -27,8 +27,52 @@ struct LayerStackTests {
         #expect(stack.topmost(at: CGPoint(x: 500, y: 500), tolerance: 0) == nil)
     }
 
+    // each Restack goes exactly as far as its name says; the edges are no-ops
+    @Test func restack() {
+        func stroke(_ y: CGFloat) -> Annotation {
+            Annotation(kind: .line(start: CGPoint(x: 0, y: y), end: CGPoint(x: 10, y: y)), style: red4)
+        }
+        let a = stroke(0), b = stroke(1), c = stroke(2), d = stroke(3)
+        let rows: [(Annotation.ID, LayerStack.Restack, [Annotation])] = [
+            (b.id, .up, [a, c, b, d]),
+            (b.id, .down, [b, a, c, d]),
+            (b.id, .front, [a, c, d, b]),
+            (c.id, .back, [c, a, b, d]),
+            (d.id, .up, [a, b, c, d]),
+            (a.id, .down, [a, b, c, d]),
+        ]
+        for (id, move, want) in rows {
+            var stack = LayerStack([a, b, c, d])
+            stack.restack(id, move)
+            #expect(stack.annotations == want)
+        }
+    }
+
+    // hidden and locked Annotations survive a flattened annotations.json
+    @Test func hiddenAndLockedRoundTrip() throws {
+        var stack = LayerStack()
+        stack.add(Annotation(kind: .line(start: .zero, end: CGPoint(x: 10, y: 0)), style: red4, hidden: true))
+        stack.add(Annotation(kind: .line(start: .zero, end: CGPoint(x: 10, y: 5)), style: red4, locked: true))
+        #expect(try LayerStack(json: stack.json()) == stack)
+    }
+
+    // a hidden or locked Annotation is not what a click selects
+    @Test func topmostSkipsHiddenAndLocked() {
+        var stack = LayerStack()
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: red4)
+        var b = Annotation(kind: .line(start: CGPoint(x: 50, y: -50), end: CGPoint(x: 50, y: 50)), style: red4)
+        b.hidden = true
+        stack.add(a); stack.add(b)
+        #expect(stack.topmost(at: CGPoint(x: 50, y: 0), tolerance: 0)?.id == a.id)
+        var locked = a
+        locked.locked = true
+        stack = LayerStack([locked, b])
+        #expect(stack.topmost(at: CGPoint(x: 50, y: 0), tolerance: 0) == nil)
+    }
+
     @Test func annotationsJSONRoundTrip() throws {
-        // the first annotation predates `transform` — it decodes as .identity
+        // the first annotation predates `transform` (decodes as .identity) and
+        // `hidden`/`locked` (decode as false)
         let fixture = """
             {"version":1,"annotations":[{"id":"6F1C2C3A-0B7E-4C1D-9C2E-1A2B3C4D5E6F","kind":{"line":{"start":[10,20],"end":[110,20]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4}},{"id":"7A2D3E4F-1C2D-4E3F-8D3E-2B3C4D5E6F7A","kind":{"line":{"start":[0,0],"end":[5,5]}},"style":{"colour":{"red":1,"green":0,"blue":0,"alpha":1},"width":4},"transform":{"flipHorizontal":true,"flipVertical":false,"rotation":1.5}}]}
             """
