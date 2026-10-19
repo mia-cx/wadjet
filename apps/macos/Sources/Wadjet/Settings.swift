@@ -158,13 +158,13 @@ enum SettingsPanes: String, CaseIterable {
             if pendingTool == tool {
                 HStack {
                     KeyboardShortcuts.Recorder(for: .init("settings.newShortcut")) { ks in
-                        guard let ks else { return }
+                        guard let ks, let id = tool.toolID else { return }
                         guard let keys = KeyCombo(keyCode: ks.carbonKeyCode, carbonModifiers: ks.carbonModifiers) else {
                             AppLog.line("settings: recorded key isn't a config KeyCombo — try another")
                             KeyboardShortcuts.reset(.init("settings.newShortcut"))
                             return
                         }
-                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: tool.toolID)) }
+                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: id)) }
                         KeyboardShortcuts.reset(.init("settings.newShortcut"))
                         pendingTool = nil
                     }

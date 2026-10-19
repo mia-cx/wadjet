@@ -19,11 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
+    case draw = "draw", clearAnnotations = "clearAnnotations"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
+        case .draw: "Draw"; case .clearAnnotations: "Clear Annotations"
         }
     }
     // the permanent label under the cell icon — as short as it can be
@@ -31,9 +33,10 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
+        case .draw: "Draw"; case .clearAnnotations: "Clear"
         }
     }
-    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; default: .util } }
+    var kind: Kind { switch self { case .capRegion, .capWindow, .capScreen: .shot; case .recRegion, .recWindow, .recScreen: .rec; case .draw, .clearAnnotations: .markup; default: .util } }
     /// Tools that can skip the pick: one obvious target (the pointer's display
     /// or the focused window) — a Shortcut can capture them without confirming
     var confirmOptional: Bool { [.capWindow, .capScreen, .recWindow, .recScreen].contains(self) }
@@ -42,22 +45,29 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
+        case .draw: "line.diagonal"; case .clearAnnotations: "trash"
         }
     }
-    enum Kind: CaseIterable { case shot, rec, util
+    enum Kind: CaseIterable { case shot, rec, util, markup
         var badge: String {
-            switch self { case .shot: "camera.fill"; case .rec: "video.fill"; case .util: "wrench.and.screwdriver.fill" }
+            switch self { case .shot: "camera.fill"; case .rec: "video.fill"; case .util: "wrench.and.screwdriver.fill"; case .markup: "pencil.and.scribble" }
         }
         var groupTitle: String {
-            switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities" }
+            switch self { case .shot: "Still"; case .rec: "Video"; case .util: "Utilities"; case .markup: "Markup" }
         }
     }
-    var toolID: ToolID { ToolID(rawValue: rawValue)! }
-    var hasMenu: Bool { self != .copyText }
+    /// nil for Markup Tools, which no Shortcut names yet
+    var toolID: ToolID? { ToolID(rawValue: rawValue) }
+    var hasMenu: Bool { ![.copyText, .draw, .clearAnnotations].contains(self) }
+    /// a toolbar button that acts at once instead of arming
+    var isAction: Bool { self == .clearAnnotations }
     init?(named s: String) { self = Tool.allCases.first { $0.title.lowercased().contains(s.lowercased()) } ?? Tool(rawValue: s)! }
 }
 
-enum Phase { case desktop, frozen, countdown } // the overlay's phase only — a Recording lives in recActive
+// the overlay's phase only — a Recording lives in recActive. .toolbar = only
+// the toolbar is up, over the live screen, no overlay panels (Escape with a
+// Markup Tool armed drops the Freeze Frame but keeps the toolbar)
+enum Phase { case desktop, frozen, toolbar, countdown }
 
 extension Color {
     // Wadjet means "the green one": a malachite green, used instead of the system accent
@@ -71,7 +81,9 @@ let fallbackWindowRadius: CGFloat = 16 // a title-bar-only window's corner; used
 @MainActor
 final class AppState: ObservableObject {
     static let shared = AppState()
-    @Published var phase: Phase = .desktop
+    @Published var phase: Phase = .desktop { didSet { MarkupController.shared.syncArmed() } }
+    /// the toolbar is up, over an overlay or alone
+    var toolbarOpen: Bool { phase == .frozen || phase == .toolbar }
     @Published var recActive = false // a Recording is running (independent of the overlay)
     // Screenshot options, toggled live on an open Freeze Frame — session state
     // like the recording toggles, not persisted. Each fresh capture starts
@@ -83,7 +95,7 @@ final class AppState: ObservableObject {
         cursor = config.value.capture.cursor
     }
     @Published var bubblesDying = false // set while a recording bubble merges back into the island
-    @Published var tool: Tool? = nil
+    @Published var tool: Tool? = nil { didSet { MarkupController.shared.syncArmed() } }
     @Published var workflowByTool: [Tool: String] = [:]
     /// a Shortcut's one-shot Workflow pick; cleared when the capture runs or is cancelled
     @Published var triggerWorkflow: String? = nil
@@ -108,7 +120,7 @@ final class AppState: ObservableObject {
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
     @Published var expandedDisplay: Int? = nil // which display's toolbar is expanded, if any
-    @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util> — drives the expanded toolbar's openGroup
+    @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util|markup> — drives the expanded toolbar's openGroup
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
@@ -455,7 +467,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
         case "group" where parts.count > 1: // debug: animated group switch on the expanded toolbar
-            s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util][String(parts[1])]
+            s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util, "markup": .markup][String(parts[1])]
         case "tap" where parts.count > 1: // debug: a tap's Tool switch with lens travel
             s.debugTap = Tool(rawValue: String(parts[1]))
         case "hold" where parts.count > 1: // debug: keep the pressed lens up for inspection
@@ -779,7 +791,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // options and any menu toggles then override on top. Toolbar triggers
         // do the same in trigger() — never mid-capture (the Recording reads
         // cursor after the overlay closes).
-        if s.phase == .desktop { s.applyCaptureDefaults() }
+        if s.phase == .desktop || s.phase == .toolbar { s.applyCaptureDefaults() }
         if let c = sc.options.countdown { s.countdown = c == 0 ? "Off" : String(c) }
         if let v = sc.options.systemAudio { s.sysAudio = v }
         if let v = sc.options.microphone { s.mic = v }
@@ -793,9 +805,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: trigger
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, immediate: Bool = false) {
         let s = AppState.shared
+        if tool.isAction { MarkupController.shared.clear(); AppLog.line("markup: cleared"); return }
         // switching Tools while frozen keeps the same Freeze Frame — Record
         // Tools are disabled while a Recording runs
-        if s.phase == .frozen {
+        if s.phase == .frozen || (s.phase == .toolbar && tool.kind == .markup) {
             if s.tool != tool {
                 guard tool.kind != .rec || !s.recActive else { AppLog.line("tool switch ignored: recording"); return }
                 s.tool = tool; s.openMenu = nil; overlayCtrl.syncMenu(); overlayCtrl.refreshCursors(); overlayCtrl.applyFreezeVisibility(); overlayCtrl.swapFrozenImages(); AppLog.line("tool switched to \(tool.title)")
@@ -804,7 +817,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         }
         // a Record Shortcut while recording stops it
         if s.phase == .desktop && s.recActive && tool.kind == .rec { stopRecording(); return }
-        if s.phase != .desktop { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
+        if s.phase != .desktop && s.phase != .toolbar { AppLog.line("trigger ignored: busy (\(s.phase))"); return }
         if !CGPreflightScreenCaptureAccess() { permissionNeeded(); AppLog.line("screen capture preflight denied for \(tool.title)"); return }
         if applyDefaults { s.applyCaptureDefaults() }
         Task { await overlayCtrl.freezeAndShow(tool: tool, start: start, immediate: immediate) }
@@ -930,6 +943,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 ids.formUnion(overlayCtrl.toolbarPanels.values.map(\.windowNumber))
                 ids.formUnion(overlayCtrl.recBubblePanels.values.map(\.windowNumber))
                 ids.formUnion(overlayCtrl.dyingBubbles.values.map(\.windowNumber))
+                ids.formUnion(MarkupController.shared.windowNumbers)
                 if let m = overlayCtrl.menuPanel { ids.insert(m.windowNumber) }
                 overlayCtrl.closeAll()
                 Task { @MainActor in
@@ -1313,7 +1327,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // stopping ends only the Recording — a Freeze Frame that's up is an
         // unrelated Screenshot in progress and stays up (its Shortcut one-shot
         // Workflow survives too). Without one, the recording chrome goes.
-        if s.phase != .frozen {
+        if !s.toolbarOpen {
             s.phase = .desktop
             overlayCtrl.chromeScreens = []
             overlayCtrl.closeAllPanelsOnly()
@@ -1393,7 +1407,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     func updateEscHotkey() {
         let s = AppState.shared
-        let active = s.phase == .frozen || s.phase == .countdown
+        let active = s.phase == .frozen || s.phase == .toolbar || s.phase == .countdown
             || !toastCtrl.items.isEmpty || !pins.isEmpty
         if active && !escRegistered {
             if !escHandlerInstalled {
@@ -1451,7 +1465,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func handleEsc() {
         let s = AppState.shared
         if s.openMenu != nil { s.openMenu = nil; overlayCtrl.syncMenu(); AppLog.line("esc: closed tool menu"); return }
+        if s.toolbarOpen, s.tool?.kind == .markup { // disarm, dropping any Freeze Frame; Annotations stay
+            if s.phase == .frozen { overlayCtrl.dropFreezeFrame() }
+            s.tool = nil; s.triggerWorkflow = nil; AppLog.line("esc: disarmed Markup"); updateEscHotkey(); return
+        }
         if s.phase == .frozen { s.triggerWorkflow = nil; AppLog.line("esc: cancelled overlay"); overlayCtrl.closeAll(); return }
+        if s.phase == .toolbar { s.triggerWorkflow = nil; AppLog.line("esc: closed toolbar"); overlayCtrl.closeAll(); return }
         if s.phase == .countdown { s.triggerWorkflow = nil; cancelCountdown(); return }
         if let t = toastCtrl.items.first(where: { $0.showBar || $0.showRing }) {
             t.showBar = false; t.showRing = false; t.showCancel = false
@@ -1862,8 +1881,11 @@ final class OverlayController {
         var nums: [CGWindowID] = []
         let expanded = AppState.shared.expandedDisplay
         for (di, p) in toolbarPanels {
-            if di != expanded { nums.append(CGWindowID(p.windowNumber)) }
+            // while only the toolbar is up, every toolbar panel stays out of
+            // the next Freeze Frame (expanded included)
+            if di != expanded || AppState.shared.phase == .toolbar { nums.append(CGWindowID(p.windowNumber)) }
         }
+        nums.append(contentsOf: MarkupController.shared.windowNumbers.map(CGWindowID.init))
         for (di, p) in recBubblePanels {
             if bubbleExpanded[di] != true { nums.append(CGWindowID(p.windowNumber)) }
         }
@@ -1940,7 +1962,12 @@ final class OverlayController {
 
     func showPanels(tool: Tool) {
         let s = AppState.shared
-        s.phase = .frozen; s.tool = tool
+        // a Markup Tool armed on the live toolbar already took activation;
+        // keep its hand-back target so close returns focus to the user's app —
+        // captured before s.tool fires syncArmed, whose disarm hands back
+        let prev = prevFrontmost ?? NSWorkspace.shared.frontmostApplication
+        prevFrontmost = nil
+        s.tool = tool; s.phase = .frozen
         chromeScreens = Freeze.shared.displays.map(\.screen)
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
@@ -1968,11 +1995,12 @@ final class OverlayController {
             p.makeFirstResponder(ov)
             panels.append(p)
         }
+        MarkupController.shared.raise() // Annotations sit above the Freeze Frame
         // Only the ACTIVE app's cursor changes reach the screen — the overlay
         // is non-activating, so while a Freeze Frame is up we take activation
         // and make the pointer's panel key so cursorUpdate fires for it.
         // Window lists were read at freeze time, before this.
-        prevFrontmost = NSWorkspace.shared.frontmostApplication
+        prevFrontmost = prev
         if prevFrontmost?.processIdentifier != getpid() {
             NSApp.activate(ignoringOtherApps: true)
             AppLog.line("active for overlay (was \(prevFrontmost?.localizedName ?? "?"))")
@@ -2026,7 +2054,7 @@ final class OverlayController {
     /// island/toolbar shape
     func syncBubbles() {
         let want = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
-            && AppState.shared.phase == .frozen
+            && AppState.shared.toolbarOpen
         for di in chromeScreens.indices {
             if want, recBubblePanels[di] == nil {
                 if let d = dyingBubbles[di] { d.close(); dyingBubbles[di] = nil } // cancel a merge still in flight
@@ -2142,8 +2170,7 @@ final class OverlayController {
     func refreshToolbars() {
         toolbarPanels.values.forEach { $0.close() }
         toolbarPanels = [:]
-        let p = AppState.shared.phase
-        if p == .frozen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording) { showToolbars() }
+        if AppState.shared.toolbarOpen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording) { showToolbars() }
         AppLog.line("chrome: \(toolbarPanels.count) islands, \(recBubblePanels.count) bubbles on \(chromeScreens.count) screens")
     }
     func closeAllPanelsOnly() {
@@ -2159,8 +2186,11 @@ final class OverlayController {
         let merge = AppState.shared.recActive && AppState.shared.showIslandWhileRecording
         for di in recBubblePanels.keys { closeBubble(di: di, merge: merge) }
         ToolbarHit.rects = [:]; ToolbarBtnFrames.rects = [:]
-        // every teardown — Recording start, Esc, failures — hands activation
-        // back unless the user switched apps meanwhile
+        handBackActivation()
+    }
+    /// every teardown — Recording start, Esc, failures — hands activation
+    /// back unless the user switched apps meanwhile
+    func handBackActivation() {
         if let prev = prevFrontmost {
             prevFrontmost = nil
             if NSWorkspace.shared.frontmostApplication?.processIdentifier == getpid() {
@@ -2169,6 +2199,16 @@ final class OverlayController {
             }
             NSCursor.arrow.set() // once activation leaves, our cursor can't change
         }
+    }
+    /// Escape with a Markup Tool armed: the Freeze Frame goes, the toolbar stays over the live screen
+    func dropFreezeFrame() {
+        AppState.shared.phase = .toolbar
+        closeAllPanelsOnly()
+        Freeze.shared.displays = []; bitmapStore = []; cornerRadii = [:]
+        AppState.shared.expandedDisplay = nil
+        chromeScreens = NSScreen.screens
+        refreshToolbars()
+        app?.updateEscHotkey()
     }
     func closeAll() {
         // phase first: cursorUpdate on the dying panels must not re-assert
@@ -2199,10 +2239,11 @@ enum WadjetCursors {
     }
     static func make(_ t: Tool) -> NSCursor {
         switch t {
-        case .capRegion, .recRegion, .copyText, .measure: return .crosshair
+        case .capRegion, .recRegion, .copyText, .measure, .draw: return .crosshair
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .recWindow, .recScreen: return symbol("video.fill", centre: true)
         case .pickColour: return symbol("eyedropper", centre: false)
+        case .clearAnnotations: return .arrow
         }
     }
     /// white glyph with a soft dark halo so it reads on any backdrop —
@@ -2392,7 +2433,7 @@ final class OverlayNSView: NSView {
             }
         }
         if t == .measure { drawMeasure() }
-        if !overToolbar && t != .measure { drawLoupe(ctx) }
+        if !overToolbar && t != .measure && t.kind != .markup { drawLoupe(ctx) }
         if let s = sel, t == .capRegion || t == .recRegion {
             let str = "\(Int(s.width)) × \(Int(s.height))"
             let at = CGPoint(x: min(bounds.width - 90, s.maxX + 8), y: min(bounds.height - 26, s.maxY + 8))
@@ -2611,7 +2652,7 @@ final class OverlayNSView: NSView {
             let fmts = ColourFormat.allCases.map(\.rawValue)
             let i = wrap(fmts.firstIndex(of: s.colourFmt) ?? 0, fmts.count)
             s.colourFmt = fmts[i]; setFlash(fmts[i])
-        case .copyText: break
+        case .copyText, .draw, .clearAnnotations: break
         }
     }
     override func mouseDown(with e: NSEvent) {
@@ -2696,7 +2737,7 @@ final class OverlayNSView: NSView {
     @discardableResult
     func handleKey(_ e: NSEvent) -> Bool {
         if e.keyCode == 36, confirming { confirmSel(); return true } // Return
-        if e.keyCode == 53 { ctrl?.closeAll(); return true }
+        if e.keyCode == 53 { app?.handleEsc(); return true }
         if e.keyCode == 49 { app?.toggleRegionWindow(); return true } // Space
         // Ctrl+1..4 switch Measure modes while the overlay is open
         if tool == .measure, e.modifierFlags.contains(.control),
@@ -2822,7 +2863,7 @@ struct ToolbarView: View {
     }
     // the compact recording island — only while no Freeze Frame is up;
     // during one the island holds the toolbar and the Recording is the bubble
-    var recording: Bool { s.recActive && s.showIslandWhileRecording && s.phase != .frozen }
+    var recording: Bool { s.recActive && s.showIslandWhileRecording && !s.toolbarOpen }
 
     // Notched display: black, flush with the top edge, rounded bottom corners,
     // centred on (and slightly wider than) the notch.
@@ -3263,7 +3304,7 @@ struct ToolbarView: View {
     /// press and drag targets skip disabled Tools; a gap still snaps to the
     /// nearest live cell
     func nearestTool(to x: CGFloat) -> Tool? {
-        cellCentres.filter { visibleTools.contains($0.key) && !toolDisabled($0.key) }
+        cellCentres.filter { visibleTools.contains($0.key) && !toolDisabled($0.key) && !$0.key.isAction }
             .min { abs($0.value.x - x) < abs($1.value.x - x) }?.key
     }
     var rowEnds: (CGFloat, CGFloat) {
@@ -3300,7 +3341,7 @@ struct ToolbarView: View {
                             .zIndex(rep ? 1 : 0)
                     }
                 }
-                .frame(width: open ? toolD * 3 + cellGap * 2 : toolD, alignment: .leading)
+                .frame(width: open ? toolD * CGFloat(g.count) + cellGap * CGFloat(g.count - 1) : toolD, alignment: .leading)
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
@@ -3561,7 +3602,7 @@ struct ToolbarView: View {
                     // the real cell under the finger (gaps pick the nearest
                     // cell); a greyed Record cell swallows the press entirely
                     pressTool = hitTool(at: v.startLocation.x) ?? nearestTool(to: v.startLocation.x)
-                    if let pt = pressTool, toolDisabled(pt) { pressTool = nil }
+                    if let pt = pressTool, toolDisabled(pt) || pt.isAction { pressTool = nil }
                     // the lens only pops for an actual switch — a press on the
                     // selected Tool (its menu tap) shows none; a travel in
                     // flight keeps it up so it can't vanish mid-flight
@@ -3609,8 +3650,9 @@ struct ToolbarView: View {
                         // the spring carries it home — overshoot is the wobble
                         if let c = cellCentres[n] { setLensTarget(x: c.x) }
                     }
-                } else if !menuByHold, let t = nearestTool(to: v.location.x) {
-                    if t != s.tool {
+                } else if !menuByHold, let t = hitTool(at: v.location.x) ?? nearestTool(to: v.location.x) {
+                    if t.isAction { AppDelegate.shared?.trigger(t) }
+                    else if t != s.tool {
                         travelTap(t) // the lens travels all the way there
                     } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
                 }
