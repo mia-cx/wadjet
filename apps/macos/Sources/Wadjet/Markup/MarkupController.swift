@@ -420,7 +420,9 @@ final class MarkupController {
             placeCounter(at: p)
             return
         case .magnify:
-            let display = NSScreen.screens.first { $0.frame.contains(p) }?.frame
+            // the Editor's "display" is its Canvas; on screen it's the NSScreen under the point
+            let display = snapBounds
+                ?? NSScreen.screens.first { $0.frame.contains(p) }?.frame
                 ?? NSScreen.main?.frame ?? .zero
             a = Annotation(kind: .magnify(.placed(source: CGRect(origin: p, size: .zero),
                                                  options: MarkupMagnify.options, on: display)),

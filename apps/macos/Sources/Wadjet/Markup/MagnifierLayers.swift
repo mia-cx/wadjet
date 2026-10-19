@@ -102,8 +102,9 @@ import WadjetKit
                         h = max(1, Int(ceil(m.frame.height * scale)))
                     if let ctx = CGContext(data: nil, width: w, height: h,
                         bitsPerComponent: 8, bytesPerRow: 0,
-                        space: CGColorSpaceCreateDeviceGray(),
-                        bitmapInfo: CGImageAlphaInfo.only.rawValue) {
+                        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                        bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue
+                            | CGBitmapInfo.byteOrder32Little.rawValue) {
                         ctx.scaleBy(x: scale, y: scale)
                         ctx.translateBy(x: -m.frame.minX, y: -m.frame.minY)
                         ctx.setFillColor(CGColor(gray: 1, alpha: 1))

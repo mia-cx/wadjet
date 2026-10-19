@@ -77,4 +77,11 @@ import WadjetKit
         }
         CATransaction.commit()
     }
+
+    /// the view is closing: drop the sampled layers — ScreenSamples' stream
+    /// stops through MarkupController.syncPanels
+    func stop() {
+        for l in imageLayers.values { l.removeFromSuperlayer() }
+        imageLayers = [:]
+    }
 }

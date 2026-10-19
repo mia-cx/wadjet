@@ -9,17 +9,17 @@ import WadjetKit
 
     /// the selected Magnify's options, else the configured defaults, else stock
     static var options: MagnifierOptions {
-        if case let .magnify(m) = MarkupController.shared.selected?.kind { return m.options }
+        if case let .magnify(m) = MarkupController.active.selected?.kind { return m.options }
         return config.value.markup.tools["magnify"]?.magnifier ?? .init()
     }
 
     /// a selected Magnify changes alone (via MarkupController.transformSelection);
     /// with nothing selected the change becomes the Tool's default
     static func setOptions(_ change: (inout MagnifierOptions) -> Void) {
-        if var a = MarkupController.shared.selected, case var .magnify(m) = a.kind {
+        if var a = MarkupController.active.selected, case var .magnify(m) = a.kind {
             change(&m.options)
             a.kind = .magnify(m)
-            MarkupController.shared.transformSelection { _ in a }
+            MarkupController.active.transformSelection { _ in a }
             return
         }
         config.update {
@@ -32,7 +32,7 @@ import WadjetKit
     /// restyles one Magnify's options by id — the eyedropper's border target,
     /// whose selection Pick Colour's disarm cleared
     static func setOptions(of id: Annotation.ID, _ change: (inout MagnifierOptions) -> Void) {
-        MarkupController.shared.update(id) {
+        MarkupController.active.update(id) {
             guard case var .magnify(m) = $0.kind else { return }
             change(&m.options)
             $0.kind = .magnify(m)
@@ -41,15 +41,15 @@ import WadjetKit
 
     /// whether the selected Magnify scroll-zoomed away from auto
     static var zoomOverridden: Bool {
-        if case let .magnify(m) = MarkupController.shared.selected?.kind { return m.zoom != nil }
+        if case let .magnify(m) = MarkupController.active.selected?.kind { return m.zoom != nil }
         return false
     }
     /// the selected Magnify zooms by its source size again
     static func resetZoom() {
-        guard var a = MarkupController.shared.selected, case var .magnify(m) = a.kind else { return }
+        guard var a = MarkupController.active.selected, case var .magnify(m) = a.kind else { return }
         m.zoom = nil
         a.kind = .magnify(m)
-        MarkupController.shared.transformSelection { _ in a }
+        MarkupController.active.transformSelection { _ in a }
     }
 }
 
