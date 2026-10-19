@@ -19,6 +19,7 @@ import WadjetKit
         self.screen = screen
         sampler = LiveSampler(screen: screen) { _ in }
         sampler.onSample = { [weak self] s in self?.sampled(s) }
+        sampler.onLost = { [weak self] in self?.invalidate() }
     }
 
     /// the panel's annotations each render; `layers` is MarkupView's shape
@@ -32,7 +33,10 @@ import WadjetKit
         }
         var source: CIImage?
         var sourceRect = CGRect.zero
+        // .frozen isn't proof the picture is up: with Settings' Freeze off the
+        // panels hide it, so the desktop underneath is live — sample it then
         if AppState.shared.phase == .frozen,
+           AppDelegate.shared?.overlayCtrl.showsFrozen == true,
            let fd = Freeze.shared.displays.first(where: { Self.sameDisplay($0.screen, screen) }) {
             source = CIImage(cgImage: fd.clean)
             sourceRect = screen.frame
@@ -80,6 +84,17 @@ import WadjetKit
             imageLayers[id]?.removeFromSuperlayer()
             imageLayers[id] = nil
         }
+        CATransaction.commit()
+    }
+
+    /// the stream died: drop the stale frame and fall back
+    /// to the shape layers' black fill at once. No watch here — a stopped
+    /// stream stays stopped until the next Markup render retries it
+    private func invalidate() {
+        latest = nil
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        for layer in imageLayers.values { layer.isHidden = true }
         CATransaction.commit()
     }
 

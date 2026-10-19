@@ -21,6 +21,8 @@ struct LiveSample {
     private let screen: NSScreen
     /// wired at init, replaceable — CensorLayers binds itself after the fact
     var onSample: @MainActor (LiveSample) -> Void
+    /// a running stream was lost: the last sample is stale
+    var onLost: @MainActor () -> Void = {}
     private let queue = DispatchQueue(label: "wadjet.livesampler")
     private var stream: SCStream?
     private var output: Output?
@@ -162,7 +164,9 @@ struct LiveSample {
     }
 
     private func dropStream() {
+        guard stream != nil else { return }
         stream = nil; output = nil; applied = nil
+        onLost()
     }
 
     /// The system can kill the stream; the sampler drops it and the next
