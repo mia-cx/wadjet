@@ -148,10 +148,12 @@ final class MarkupController {
     }
 
     func undo() {
+        closeScroll()
         guard gesture == nil, let s = history.undo(from: stack) else { return }
         restore(s); AppLog.line("markup: undo")
     }
     func redo() {
+        closeScroll()
         guard gesture == nil, let s = history.redo(from: stack) else { return }
         restore(s); AppLog.line("markup: redo")
     }
@@ -362,6 +364,7 @@ final class MarkupController {
     // strokes arrive as global screen points from MarkupView; `command` =
     // temporary Select, `constrained` = Shift (45° snaps)
     func begin(at p: CGPoint, command: Bool, constrained: Bool = false) {
+        closeScroll() // an open phased scroll is its own undo step
         gestureStart = stack
         if armed == .select || command {
             if let sel = selected {
@@ -593,22 +596,43 @@ final class MarkupController {
     }
 
     /// scroll over a selected Magnify's magnifier steps its zoom — a trackpad
-    /// gesture is one undo step, each wheel tick its own. Returns false when
-    /// it isn't ours so the view's default handling can take the event
+    /// gesture is one undo step, each wheel tick its own. A phased scroll
+    /// stays with the magnifier it began on even when the pointer leaves it
+    /// (Magic Mouse reports events to the view under the resting pointer).
+    /// Returns false when it isn't ours so the view can take the event
     @ObservationIgnored private var scrollResidual: CGFloat = 0
+    /// the phased scroll in flight, if any — set on `.began`, cleared on end
+    @ObservationIgnored private var scrolling: Annotation.ID?
     func scroll(_ e: NSEvent, at p: CGPoint) -> Bool {
-        guard gesture == nil, var a = selected, case var .magnify(m) = a.kind,
+        if let id = scrolling {
+            if e.momentumPhase != [] { return true }
+            if e.phase == .ended || e.phase == .cancelled {
+                scrolling = nil
+                commitGesture()
+                return true
+            }
+            guard let a = stack.annotations.first(where: { $0.id == id }) else {
+                scrolling = nil
+                commitGesture()
+                return true
+            }
+            return applyScroll(e, to: a)
+        }
+        guard gesture == nil, let a = selected, case .magnify(let m) = a.kind,
               m.options.shape.path(in: m.frame).contains(p) else { return false }
         if e.momentumPhase != [] { return true } // a trackpad fling isn't input — swallow it
-        switch e.phase {
-        case .began: gestureStart = stack; scrollResidual = 0
-        case .ended, .cancelled: commitGesture(); return true
-        default: break
-        }
+        if e.phase == .began { gestureStart = stack; scrollResidual = 0; scrolling = a.id }
+        return applyScroll(e, to: a)
+    }
+    /// accumulate to whole steps, then step `a`'s zoom — through the open
+    /// gesture while a phase sequence is in flight, as its own edit otherwise
+    private func applyScroll(_ e: NSEvent, to a: Annotation) -> Bool {
         scrollResidual += e.hasPreciseScrollingDeltas ? e.scrollingDeltaY / 8 : e.scrollingDeltaY
         let steps = Int(scrollResidual)
         guard steps != 0 else { return true }
         scrollResidual -= CGFloat(steps)
+        var a = a
+        guard case var .magnify(m) = a.kind else { return true }
         m.zoom = MagnifyZoom.stepped(m.effectiveZoom, by: steps)
         a.kind = .magnify(m)
         if e.phase == [] {
@@ -619,6 +643,13 @@ final class MarkupController {
             render()
         }
         return true
+    }
+    /// an open phased scroll commits as its undo step before anything else
+    /// starts — begin/undo/redo would otherwise overwrite `gestureStart`
+    private func closeScroll() {
+        guard scrolling != nil else { return }
+        scrolling = nil
+        commitGesture()
     }
 
     func render() {

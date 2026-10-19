@@ -7,9 +7,10 @@ import WadjetKit
 /// layer so it sits above the source outline, inherits the style's opacity,
 /// and keeps its stack order, masked to the shape over a black fallback. The
 /// optional border is a CAShapeLayer sibling; the optional Liquid Glass rim
-/// is an NSHostingView in the panel's pass-through container — the rims are
-/// views, so they sit above the panel's other layers, and the peer-through
-/// mask doesn't cut them.
+/// is an NSHostingView inside a pass-through wrapper in the panel's
+/// container — the wrappers are views, so they sit above the panel's other
+/// layers (each masked out where a higher Annotation paints over the
+/// magnifier), and the peer-through mask doesn't cut them.
 @MainActor final class MagnifierLayers {
     private let screen: NSScreen
     /// the pass-through view the glass rims live in; the MarkupView adds it
@@ -18,6 +19,9 @@ import WadjetKit
     private var layers: [Annotation.ID: CALayer] = [:]
     private var borders: [Annotation.ID: CAShapeLayer] = [:]
     private var rims: [Annotation.ID: NSHostingView<MagnifierRim>] = [:]
+    /// each rim's pass-through wrapper — it carries the mask that keeps a
+    /// higher Annotation painting over a lower magnifier's glass
+    private var wrappers: [Annotation.ID: NSView] = [:]
     /// the shape each rim's root view was built for — reassign only on change
     private var rimShapes: [Annotation.ID: MagnifierShape] = [:]
 
@@ -26,17 +30,16 @@ import WadjetKit
         container = MagnifierGlassHost()
     }
 
-    /// the panel's annotations each render; `layers` is MarkupView's shape
-    /// layer map so each magnifier lands on its own Magnify's layer
+    /// the panel's annotations each render, in stack order; `layers` is
+    /// MarkupView's shape layer map so each magnifier lands on its own
+    /// Magnify's layer
     func sync(_ annotations: [Annotation], layers: [Annotation.ID: CAShapeLayer], scale: CGFloat) {
-        let magnifying = annotations.filter { a in
-            guard case let .magnify(m) = a.kind else { return false }
-            return m.frame.intersects(screen.frame)
-        }
         var seen = Set<Annotation.ID>()
-        for a in magnifying {
+        var ordered: [NSView] = []
+        for (i, a) in annotations.enumerated() {
+            guard case let .magnify(m) = a.kind, m.frame.intersects(screen.frame),
+                  let shape = layers[a.id] else { continue }
             seen.insert(a.id)
-            guard case let .magnify(m) = a.kind, let shape = layers[a.id] else { continue }
             let layer = self.layers[a.id] ?? CALayer()
             self.layers[a.id] = layer
             if layer.superlayer !== shape { shape.addSublayer(layer) }
@@ -71,22 +74,55 @@ import WadjetKit
                     host.rootView = MagnifierRim(shape: m.options.shape)
                     rimShapes[a.id] = m.options.shape
                 }
-                if host.superview !== container { container.addSubview(host) }
+                // the wrapper carries the mask — the rim view above the canvas
+                // must still lose to every Annotation stacked over its magnifier
+                let wrapper = wrappers[a.id] ?? MagnifierGlassHost()
+                wrappers[a.id] = wrapper
+                wrapper.wantsLayer = true
+                wrapper.frame = m.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
+                wrapper.alphaValue = CGFloat(a.style.opacity)
+                if host.superview !== wrapper {
+                    wrapper.addSubview(host)
+                    host.frame = wrapper.bounds
+                    host.autoresizingMask = [.width, .height]
+                }
                 host.sizingOptions = []
-                host.frame = m.frame.offsetBy(dx: -screen.frame.minX, dy: -screen.frame.minY)
-                host.alphaValue = CGFloat(a.style.opacity)
+                ordered.append(wrapper)
+                // cut the rim wherever a later Annotation paints over the
+                // magnifier — the wrappers are views above every canvas layer
+                var cut = CGMutablePath() as CGPath
+                for later in annotations.suffix(from: i + 1) {
+                    let c = PathGeometry.coverage(for: later)
+                    if c.boundingBoxOfPath.intersects(m.frame) {
+                        cut = cut.union(c, using: .winding)
+                    }
+                }
+                if !cut.isEmpty {
+                    let mask = wrapper.layer?.mask as? CAShapeLayer ?? CAShapeLayer()
+                    var t = CGAffineTransform(translationX: -m.frame.minX, y: -m.frame.minY)
+                    mask.path = m.options.shape.path(in: m.frame)
+                        .subtracting(cut, using: .winding).copy(using: &t)
+                    mask.frame = CGRect(origin: .zero, size: m.frame.size)
+                    wrapper.layer?.mask = mask
+                } else {
+                    wrapper.layer?.mask = nil
+                }
             } else {
-                rims[a.id]?.removeFromSuperview()
+                wrappers[a.id]?.removeFromSuperview()
+                wrappers[a.id] = nil
                 rims[a.id] = nil
                 rimShapes[a.id] = nil
             }
         }
+        // rim wrappers stack in annotation order
+        if container.subviews != ordered { container.subviews = ordered }
         for id in self.layers.keys where !seen.contains(id) {
             self.layers[id]?.removeFromSuperlayer()
             self.layers[id] = nil
             borders[id]?.removeFromSuperlayer()
             borders[id] = nil
-            rims[id]?.removeFromSuperview()
+            wrappers[id]?.removeFromSuperview()
+            wrappers[id] = nil
             rims[id] = nil
             rimShapes[id] = nil
         }
