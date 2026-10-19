@@ -7,7 +7,7 @@ extension Tool {
     /// Text, then the rest. A new Markup Tool joins with one entry here; where it
     /// sits sets its default rank, so the first three unpinned Tools fill the ranked
     /// slots before any use. Variants live in their Tool's menu, not here.
-    static let markupCatalogue: [Tool] = [.select, .shapes, .draw, .censor, .counter, .magnify]
+    static let markupCatalogue: [Tool] = [.select, .shapes, .draw, .text, .censor, .counter, .magnify]
     /// always shown ahead of the ranked slots, by raw name: Eraser (#128) takes its
     /// pinned slot once it joins the catalogue
     static let markupPinned: Set<String> = ["select", "eraser"]
