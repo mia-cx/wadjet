@@ -1,0 +1,41 @@
+import CoreGraphics
+
+extension Annotation {
+    /// a grip drag that snaps: a resize grip follows the pointer's delta from `from`
+    /// (an off-centre press doesn't jump) and snaps only along the screen axes it can
+    /// move; `.rotate` is unsnapped. Returns the result and the guides it reached.
+    public func dragging(_ handle: SelectionHandle, from: CGPoint, to: CGPoint,
+                         minExtent: CGFloat, rotateOffset: CGFloat,
+                         targets: [SnapTarget], range: CGFloat, skip: Bool)
+        -> (annotation: Annotation, guides: [SnapGuide]) {
+        guard case .resize = handle else { return (dragging(handle, from: from, to: to), []) }
+        guard let grip = handles(minExtent: minExtent, rotateOffset: rotateOffset)
+            .filter({ $0.handle == handle })
+            .min(by: { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) })?.at
+        else { return (dragging(handle, from: from, to: to), []) }
+        let proposed = CGPoint(x: grip.x + to.x - from.x, y: grip.y + to.y - from.y)
+        let r = SnappingEngine.snap(points: [proposed], targets: targets,
+                                    range: range, skip: skip, axes: freeAxes(handle))
+        return (dragging(handle, from: from,
+                         to: CGPoint(x: proposed.x + r.offset.x, y: proposed.y + r.offset.y)),
+                r.guides)
+    }
+
+    /// the screen axes a grip can move along: corners both; a side grip moves
+    /// along its one local axis, which maps to a screen axis only at
+    /// right-angle rotations — flips don't change axes
+    private func freeAxes(_ handle: SelectionHandle) -> SnapAxes {
+        guard case let .resize(x, y) = handle else { return [] }
+        let local: SnapAxes
+        switch (x != 0, y != 0) {
+        case (true, true): return .both
+        case (false, true): local = .y
+        case (true, false): local = .x
+        case (false, false): return []
+        }
+        let q = transform.rotation / (.pi / 2)
+        guard abs(q - q.rounded()) < 1e-6 else { return [] }
+        let odd = ((Int(q.rounded()) % 2) + 2) % 2 == 1
+        return odd ? (local == .x ? .y : .x) : local
+    }
+}

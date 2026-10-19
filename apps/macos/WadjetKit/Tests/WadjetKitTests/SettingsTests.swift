@@ -36,13 +36,19 @@ struct SettingsTests {
         let c = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
         #expect(c.markup.clearAfterScreenshot == false)
         #expect(c.markup.peerThrough == true)
+        #expect(c.markup.snapping == true)
+        #expect(c.markup.snapRange == 6)
 
         var on = WadjetConfig()
         on.markup.clearAfterScreenshot = true
         on.markup.peerThrough = false
+        on.markup.snapping = false
+        on.markup.snapRange = 10
         let back = try JSONDecoder().decode(WadjetConfig.self, from: JSONEncoder().encode(on))
         #expect(back.markup.clearAfterScreenshot == true)
         #expect(back.markup.peerThrough == false)
+        #expect(back.markup.snapping == false)
+        #expect(back.markup.snapRange == 10)
     }
 
     // Proves the colour history stays bounded: the best-ranked colours survive
