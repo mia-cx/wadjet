@@ -82,10 +82,10 @@ final class MarkupView: NSView {
         layer?.addSublayer(guidesLayer)
         // the magnifiers' Liquid Glass rims live in a pass-through subview
         // above the canvas layers, outside the peer-through mask
-        if let magnifiers {
-            magnifiers.container.frame = bounds
-            magnifiers.container.autoresizingMask = [.width, .height]
-            addSubview(magnifiers.container)
+        if let container = magnifiers?.container {
+            container.frame = bounds
+            container.autoresizingMask = [.width, .height]
+            addSubview(container)
         }
     }
     required init?(coder: NSCoder) { fatalError() }

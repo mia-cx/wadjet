@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import SwiftUI
 import WadjetKit
 
@@ -212,7 +213,8 @@ final class EditorCanvasView: NSView {
         if markupView == nil {
             markupView = MarkupView(frame: NSRect(origin: .zero, size: region.size),
                                     region: region, scale: window?.backingScaleFactor ?? 2,
-                                    controller: doc.markup, censors: censorSource())
+                                    controller: doc.markup, censors: censorSource(),
+                                    magnifiers: magnifierSource())
             doc.markup.surface = markupView
             addSubview(markupView)
         } else {
@@ -324,6 +326,17 @@ final class EditorCanvasView: NSView {
         canvas.cornerRadius = 0
         guard let image = try? canvas.flatten(crop: canvas.displayBounds, scale: 1) else { return nil }
         return CensorLayers(staticImage: image, coverage: canvas.displayBounds, scale: 1)
+    }
+
+    /// Magnifies in an Editor sample the Canvas's own displays — the same
+    /// pixels flatten draws, at the window's backing scale so they stay crisp
+    private func magnifierSource() -> MagnifierLayers? {
+        let canvas = doc.canvas
+        let sources = canvas.layout.compactMap { d -> MagnifyRenderer.Source? in
+            canvas.displayImages[d.id].map { (CIImage(cgImage: $0), d.frame) }
+        }
+        guard !sources.isEmpty else { return nil }
+        return MagnifierLayers(staticSources: sources, scale: window?.backingScaleFactor ?? 2)
     }
 
     // MARK: keys — the view is the window's first responder

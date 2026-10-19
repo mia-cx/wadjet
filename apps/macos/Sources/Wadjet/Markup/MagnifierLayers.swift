@@ -2,20 +2,29 @@ import AppKit
 import SwiftUI
 import WadjetKit
 
-/// Shows each Magnify on one Markup panel: a content layer per magnifier —
-/// the viewport magnified — added as a sublayer of the Annotation's shape
-/// layer so it sits above the source outline, inherits the style's opacity,
-/// and keeps its stack order, masked to the shape over a black fallback. The
-/// optional border is a CAShapeLayer sibling; the optional Liquid Glass rim
-/// is an NSHostingView inside a pass-through wrapper in the panel's
-/// container — the wrappers are views, so they sit above the panel's other
-/// layers (each masked out where a higher Annotation paints over the
-/// magnifier), and the peer-through mask doesn't cut them.
+/// Shows each Magnify on one Markup view, in one of two modes. A screen
+/// panel's magnifiers sample live through ScreenSamples and wear Liquid Glass
+/// rims — NSHostingViews inside pass-through wrappers in `container`, views
+/// above the panel's other layers (each masked out where a higher Annotation
+/// paints over the magnifier). An Editor's magnifiers draw the Canvas's own
+/// display images and flatten the glass in — `MagnifyRenderer.glass` stands
+/// in for the live rims so the view shows what a Screenshot will flatten to.
+/// Either way: a content layer per magnifier — the viewport magnified — added
+/// as a sublayer of the Annotation's shape layer so it sits above the source
+/// outline, inherits the style's opacity, and keeps its stack order, masked
+/// to the shape over a black fallback; the optional border is a CAShapeLayer
+/// sibling.
 @MainActor final class MagnifierLayers {
-    private let screen: NSScreen
-    /// the pass-through view the glass rims live in; the MarkupView adds it
-    /// above its canvas layers
-    let container: NSView
+    /// nil in static mode — a screen panel streams its display through ScreenSamples
+    private let screen: NSScreen?
+    /// nil in live mode — an Editor's fixed sources: the Canvas's display images
+    private let staticSources: [MagnifyRenderer.Source]?
+    /// static mode renders at the Canvas's own scale; nil means the sync scale
+    private let staticScale: CGFloat?
+    /// the global rect magnifiers draw within — the display's frame or the Canvas's bounds
+    private let coverage: CGRect
+    /// the pass-through view the glass rims live in; nil in static mode
+    let container: NSView?
     private var layers: [Annotation.ID: CALayer] = [:]
     private var borders: [Annotation.ID: CAShapeLayer] = [:]
     private var rims: [Annotation.ID: NSHostingView<MagnifierRim>] = [:]
@@ -25,9 +34,23 @@ import WadjetKit
     /// the shape each rim's root view was built for — reassign only on change
     private var rimShapes: [Annotation.ID: MagnifierShape] = [:]
 
+    /// a screen panel's magnifiers: the live stream and Liquid Glass rims
     init(screen: NSScreen) {
         self.screen = screen
+        coverage = screen.frame
+        staticSources = nil
+        staticScale = nil
         container = MagnifierGlassHost()
+    }
+
+    /// an Editor's magnifiers: the Canvas's own displays at `scale`, the
+    /// flattened glass pass standing in for the live rims — no container
+    init(staticSources: [MagnifyRenderer.Source], scale: CGFloat) {
+        screen = nil
+        self.staticSources = staticSources
+        staticScale = scale
+        coverage = staticSources.reduce(.null) { $0.union($1.rect) }
+        container = nil
     }
 
     /// the panel's annotations each render, in stack order; `layers` is
@@ -36,18 +59,26 @@ import WadjetKit
     func sync(_ annotations: [Annotation], layers: [Annotation.ID: AnnotationLayer], scale: CGFloat) {
         var seen = Set<Annotation.ID>()
         var ordered: [NSView] = []
+        let renderScale = staticScale ?? scale
         for (i, a) in annotations.enumerated() {
-            guard case let .magnify(m) = a.kind, m.frame.intersects(screen.frame),
+            guard case let .magnify(m) = a.kind, m.frame.intersects(coverage),
                   let shape = layers[a.id] else { continue }
             seen.insert(a.id)
             let layer = self.layers[a.id] ?? CALayer()
             self.layers[a.id] = layer
             if layer.superlayer !== shape { shape.addSublayer(layer) }
             layer.frame = m.frame // canvas sublayers are in global points
-            layer.contentsScale = scale
+            layer.contentsScale = renderScale
             layer.backgroundColor = CGColor(gray: 0, alpha: 1) // fallback until a sample lands
-            layer.contents = MagnifyRenderer.content(
-                m, sources: ScreenSamples.shared.sources(covering: m.viewport), scale: scale)
+            let sources = staticSources?.filter { $0.rect.intersects(m.viewport) }
+                ?? ScreenSamples.shared.sources(covering: m.viewport)
+            var content = MagnifyRenderer.content(m, sources: sources, scale: renderScale)
+            // static mode is what the Screenshot flattens to: bake the glass in
+            if staticSources != nil, m.options.glass, let c = content {
+                content = MagnifyRenderer.glass(c, shape: m.options.shape,
+                                                scale: renderScale) ?? c
+            }
+            layer.contents = content
             var t = CGAffineTransform(translationX: -m.frame.minX, y: -m.frame.minY)
             let mask = layer.mask as? CAShapeLayer ?? CAShapeLayer()
             mask.path = m.options.shape.path(in: m.frame).copy(using: &t)
@@ -67,7 +98,7 @@ import WadjetKit
                 borders[a.id]?.removeFromSuperlayer()
                 borders[a.id] = nil
             }
-            if m.options.glass {
+            if let screen, container != nil, m.options.glass {
                 let host = rims[a.id] ?? NSHostingView(rootView: MagnifierRim(shape: m.options.shape))
                 rims[a.id] = host
                 if rimShapes[a.id] != m.options.shape {
@@ -134,7 +165,7 @@ import WadjetKit
             }
         }
         // rim wrappers stack in annotation order
-        if container.subviews != ordered { container.subviews = ordered }
+        if let container, container.subviews != ordered { container.subviews = ordered }
         for id in self.layers.keys where !seen.contains(id) {
             self.layers[id]?.removeFromSuperlayer()
             self.layers[id] = nil
