@@ -23,8 +23,6 @@ public enum ClearFeedback {
         return .fadeOut(reduceMotion ? Fade(duration: 0.12, endScale: 1, settle: 0.16)
                                      : Fade(duration: 0.22, endScale: 0.96, settle: 0.32))
     }
-    /// how long ⌘Z still restores a Clear that dismissed the island
-    public static let undoGrace: TimeInterval = 6
     /// the "nothing to clear" shake: a horizontal offset for progress 0...1 —
     /// three swings of at most `distance` points that die out, 0 at both ends
     public static func shakeOffset(progress p: Double, distance: Double = 4) -> Double {
@@ -33,15 +31,75 @@ public enum ClearFeedback {
     }
 }
 
-/// The window after a dismissing Clear in which its undo step survives the
-/// closed toolbar. History normally ends once the toolbar is closed and the
-/// stack is empty; while the grace is open it doesn't, and ⌘Z stays bound.
-public struct UndoGrace: Equatable, Sendable {
-    private var until: Date?
+/// What stays undoable after a Clear lands, and for how long. ⌘Z restores it
+/// for `shortcut` seconds (a global hot key, so it then goes back to the front
+/// app); the toolbar's Clear cell reads Undo for `offer` seconds; and a Clear
+/// that leaves no toolbar open keeps the collapsed island for `ring` seconds
+/// with a ring draining to empty, then lets it go. Hovering the island pauses
+/// the ring, and the Undo offer lasts at least until the ring empties. Undo,
+/// or any later edit, ends it all at once. Pass the time in: the caller's
+/// clock drives every answer.
+public struct ClearUndo: Equatable, Sendable {
+    public static let shortcut: TimeInterval = 3
+    public static let ring: TimeInterval = 3
+    public static let offer: TimeInterval = 6
+
+    private var clearedAt: Date?
+    private var hasRing = false
+    /// time the ring spent paused before the current pause
+    private var pausedFor: TimeInterval = 0
+    private var pausedAt: Date?
+
     public init() {}
-    public mutating func open(at now: Date, for seconds: TimeInterval = ClearFeedback.undoGrace) {
-        until = now.addingTimeInterval(seconds)
+
+    /// a Clear is still undoable (until `end()`; ask the `at:` answers for the timing)
+    public var isActive: Bool { clearedAt != nil }
+
+    /// a Clear landed; `ring` when it left no toolbar open, so the island holds on
+    public mutating func cleared(at now: Date, ring: Bool) {
+        self = ClearUndo()
+        clearedAt = now; hasRing = ring
     }
-    public mutating func close() { until = nil }
-    public func isOpen(at now: Date) -> Bool { until.map { now < $0 } ?? false }
+    /// Undo restored the Annotations, a later edit made "Undo Clear" untrue, or time ran out
+    public mutating func end() { self = ClearUndo() }
+    /// the pointer entered (true) or left (false) the island: the ring stops draining while it's in
+    public mutating func hover(_ inside: Bool, at now: Date) {
+        guard clearedAt != nil, hasRing else { return }
+        if inside, pausedAt == nil, ringLeft(at: now) != nil { pausedAt = now }
+        else if !inside, let p = pausedAt { pausedFor += now.timeIntervalSince(p); pausedAt = nil }
+    }
+
+    /// ⌘Z still restores the Clear
+    public func takesShortcut(at now: Date) -> Bool {
+        guard let c = clearedAt else { return false }
+        return now.timeIntervalSince(c) < Self.shortcut
+    }
+    /// the Clear cell reads Undo, and the undo step outlives a closed toolbar
+    public func offersUndo(at now: Date) -> Bool {
+        guard let c = clearedAt else { return false }
+        return now.timeIntervalSince(c) < Self.offer || ringLeft(at: now) != nil
+    }
+    /// the ring's share left, 1 at the Clear down to 0; nil without a ring or once it's empty
+    public func ringLeft(at now: Date) -> Double? {
+        guard let c = clearedAt, hasRing else { return nil }
+        let drained = now.timeIntervalSince(c) - pausedFor - (pausedAt.map { now.timeIntervalSince($0) } ?? 0)
+        let left = 1 - drained / Self.ring
+        return left > 0 ? min(1, left) : nil
+    }
+    /// the ring keeps the collapsed island up
+    public func holdsIsland(at now: Date) -> Bool { ringLeft(at: now) != nil }
+    /// whole seconds left on the ring, counting down 3, 2, 1: Reduce Motion's text
+    public func ringSeconds(at now: Date) -> Int? {
+        ringLeft(at: now).map { Int(($0 * Self.ring).rounded(.up)) }
+    }
+    /// the next moment an answer above changes, so the caller can wake then;
+    /// nil when nothing is pending or a paused ring waits on the pointer
+    public func nextChange(after now: Date) -> Date? {
+        guard let c = clearedAt else { return nil }
+        var marks = [c.addingTimeInterval(Self.shortcut), c.addingTimeInterval(Self.offer)]
+        if hasRing, pausedAt == nil { marks.append(c.addingTimeInterval(Self.ring + pausedFor)) }
+        if let next = marks.filter({ $0 > now }).min() { return next }
+        // past every mark, with a paused ring still holding the offer
+        return nil
+    }
 }

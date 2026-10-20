@@ -15,13 +15,14 @@ struct IslandRuleTests {
 
     // Proves the island shows for exactly one of its reasons, and not for none.
     @Test(arguments: [
-        (true, false, false, true), // toolbar open
-        (false, true, false, true), // Annotations on screen
-        (false, false, true, true), // a Recording with its island option on
-        (false, false, false, false), // nothing needs it
+        (true, false, false, false, true), // toolbar open
+        (false, true, false, false, true), // Annotations on screen
+        (false, false, true, false, true), // a Recording with its island option on
+        (false, false, false, true, true), // a Clear's Undo ring still draining
+        (false, false, false, false, false), // nothing needs it
     ])
-    func island(toolbarOpen: Bool, hasAnnotations: Bool, recordingIsland: Bool, shows: Bool) {
+    func island(toolbarOpen: Bool, hasAnnotations: Bool, recordingIsland: Bool, undoRing: Bool, shows: Bool) {
         #expect(IslandRule.showsIsland(toolbarOpen: toolbarOpen, hasAnnotations: hasAnnotations,
-                                       recordingIsland: recordingIsland) == shows)
+                                       recordingIsland: recordingIsland, undoRing: undoRing) == shows)
     }
 }

@@ -11,7 +11,8 @@ extension OverlayController {
         dismissIdleToolbar()
         guard s.phase == .desktop else { return }
         s.tool = nil
-        chromeScreens = s.recActive || !MarkupController.shared.stack.isEmpty ? NSScreen.screens : []
+        let mc = MarkupController.shared
+        chromeScreens = s.recActive || !mc.stack.isEmpty || mc.clearUndo.holdsIsland(at: .now) ? NSScreen.screens : []
         refreshToolbars()
     }
     /// the live toolbar ends once no Markup Tool is armed and no Annotation is
@@ -59,7 +60,13 @@ extension ToolbarView {
         let n = MarkupController.shared.stack.annotations.count
         return recording || s.phase == .frozen || MarkupController.shared.armed != nil || n == 0 ? nil : n
     }
-    /// the group the bar opens on with nothing selected: Markup while Annotations exist
-    var restingGroup: Tool.Kind { s.tool?.kind ?? (MarkupController.shared.stack.isEmpty ? .shot : .markup) }
+    /// the group the bar opens on with nothing selected: Markup while
+    /// Annotations exist or a Clear can be undone, so the Undo cell shows
+    var restingGroup: Tool.Kind {
+        let mc = MarkupController.shared
+        return s.tool?.kind ?? (mc.stack.isEmpty && !mc.undoOffered ? .shot : .markup)
+    }
+    /// the collapsed island carries a Clear's draining Undo ring
+    var undoRingShown: Bool { MarkupController.shared.undoRingShown }
 }
 
