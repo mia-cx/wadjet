@@ -341,7 +341,8 @@ final class MarkupView: NSView {
     }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
     override func mouseDown(with e: NSEvent) {
-        controller.begin(at: canvasPoint(e), constrained: e.modifierFlags.contains(.shift),
+        // ⇧⌘ held at the press is the attach chord, not a Shift-click
+        controller.begin(at: canvasPoint(e), constrained: DragModifiers(e.modifierFlags).constrains,
                          clickCount: e.clickCount)
     }
     // drags keep coming to this view across displays

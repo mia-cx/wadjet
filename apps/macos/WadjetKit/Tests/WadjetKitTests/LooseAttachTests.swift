@@ -98,7 +98,8 @@ struct LooseAttachTests {
 
     // Proves the drag tells loose from exact: deep inside a box the end
     // attaches loosely; near a spot it snaps exactly; with snapping off (⌘)
-    // even a spot gives a loose drop; a bend inside attaches nothing loose.
+    // even a spot gives a loose drop, but just outside the stroke doesn't;
+    // inside a closed path counts; a bend inside attaches nothing loose.
     @Test func hoverPicksTheMode() {
         let target = box(), line = Annotation(kind: .line(start: CGPoint(x: 300, y: 25), end: .zero), style: red4)
         let stack = LayerStack([target, line])
@@ -109,6 +110,16 @@ struct LooseAttachTests {
         let unsnapped = AttachFinder.hover(at: CGPoint(x: 98, y: 48), in: stack, attaching: line.id, .end,
                                            radius: 8, snapping: false)
         #expect(unsnapped?.loose == true && unsnapped?.snapped == nil)
+        let outside = AttachFinder.hover(at: CGPoint(x: 104, y: 25), in: stack, attaching: line.id, .end,
+                                         radius: 8, snapping: false)
+        #expect(outside?.loose != true)
+        let loop = Annotation(kind: .path(PathData(nodes: [PathNode(anchor: CGPoint(x: 200, y: 0)),
+                                                           PathNode(anchor: CGPoint(x: 300, y: 0)),
+                                                           PathNode(anchor: CGPoint(x: 250, y: 100))], closed: true)),
+                              style: red4)
+        let withLoop = LayerStack([loop, line])
+        let inLoop = AttachFinder.hover(at: CGPoint(x: 250, y: 40), in: withLoop, attaching: line.id, .end, radius: 8)
+        #expect(inLoop?.loose == true)
         let bend = AttachFinder.hover(at: CGPoint(x: 40, y: 20), in: stack, attaching: line.id, .bend, radius: 8)
         #expect(bend?.loose == false)
     }

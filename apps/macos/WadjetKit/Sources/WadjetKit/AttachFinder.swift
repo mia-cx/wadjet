@@ -120,13 +120,16 @@ public enum AttachFinder {
                 return AttachHover(target: a, spots: spots(on: a), snapped: s)
             }
         }
-        // inside a hollow shape counts, as it does in tldraw
-        if let a = eligible.first(where: {
-            (!$0.kind.insertsAttachSegments && outline(of: $0).contains(p))
-                || PathGeometry.hitTest($0, at: p, tolerance: radius)
-        }) {
-            return AttachHover(target: a, spots: spots(on: a), snapped: nil,
-                               loose: (point == .start || point == .end) && !a.kind.insertsAttachSegments)
+        // inside a hollow shape counts, as it does in tldraw: inside the
+        // outline an end attaches loosely; merely near the stroke it doesn't
+        for a in eligible {
+            if a.kind.hasAttachInterior, outline(of: a).contains(p) {
+                return AttachHover(target: a, spots: spots(on: a), snapped: nil,
+                                   loose: point == .start || point == .end)
+            }
+            if PathGeometry.hitTest(a, at: p, tolerance: radius) {
+                return AttachHover(target: a, spots: spots(on: a), snapped: nil)
+            }
         }
         return nil
     }
@@ -145,13 +148,16 @@ public enum AttachFinder {
 }
 
 extension AnnotationKind {
-    /// Lines and paths attach by segment, everything else by its frame
-    var insertsAttachSegments: Bool {
+    /// whether the attach outline encloses an inside a loose end can be
+    /// dropped in: everything but a Line and an open path
+    var hasAttachInterior: Bool {
         switch self {
-        case .line, .path: true
-        default: false
+        case .line: false
+        case let .path(d): d.closed
+        default: true
         }
     }
+
 }
 
 extension Annotation {
