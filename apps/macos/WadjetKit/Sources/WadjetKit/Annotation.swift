@@ -13,18 +13,22 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
     public var hidden: Bool
     /// can't be selected or erased
     public var locked: Bool
+    /// what of this Annotation is attached to others, and where (Attachment.swift);
+    /// the LayerStack keeps the geometry above resolved against them
+    public var attachments: [Attachment]
     public init(id: UUID = UUID(), kind: AnnotationKind, style: AnnotationStyle,
                 transform: AnnotationTransform = .identity,
-                hidden: Bool = false, locked: Bool = false) {
+                hidden: Bool = false, locked: Bool = false, attachments: [Attachment] = []) {
         self.id = id
         self.kind = kind
         self.style = style
         self.transform = transform
         self.hidden = hidden
         self.locked = locked
+        self.attachments = attachments
     }
 
-    enum CodingKeys: String, CodingKey { case id, kind, style, transform, hidden, locked }
+    enum CodingKeys: String, CodingKey { case id, kind, style, transform, hidden, locked, attachments }
     /// annotations.json files from before `transform` existed decode as .identity;
     /// files from before `hidden`/`locked` existed decode as false
     public init(from decoder: Decoder) throws {
@@ -35,6 +39,19 @@ public struct Annotation: Codable, Equatable, Identifiable, Sendable {
         transform = try c.decodeIfPresent(AnnotationTransform.self, forKey: .transform) ?? .identity
         hidden = try c.decodeIfPresent(Bool.self, forKey: .hidden) ?? false
         locked = try c.decodeIfPresent(Bool.self, forKey: .locked) ?? false
+        attachments = try c.decodeIfPresent([Attachment].self, forKey: .attachments) ?? []
+    }
+    /// `attachments` is left out when empty, so an unattached Annotation
+    /// writes exactly what builds before attaching wrote
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(id, forKey: .id)
+        try c.encode(kind, forKey: .kind)
+        try c.encode(style, forKey: .style)
+        try c.encode(transform, forKey: .transform)
+        try c.encode(hidden, forKey: .hidden)
+        try c.encode(locked, forKey: .locked)
+        if !attachments.isEmpty { try c.encode(attachments, forKey: .attachments) }
     }
 }
 

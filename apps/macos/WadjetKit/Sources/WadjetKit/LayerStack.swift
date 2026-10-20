@@ -4,8 +4,16 @@ import Foundation
 /// `Codable` as a Canvas's `annotations.json`: `{"version":1,"annotations":[…]}`.
 public struct LayerStack: Codable, Equatable, Sendable {
     public static let version = 1 // the annotations.json format this build reads and writes
-    public internal(set) var annotations: [Annotation] // last draws on top; internal(set) so other WadjetKit files can add operations
-    public init(_ annotations: [Annotation] = []) { self.annotations = annotations }
+    /// last draws on top; internal(set) so other WadjetKit files can add
+    /// operations. Every change re-solves attachments (Attaching.swift), so
+    /// whatever follows another Annotation moves in the same change — and the
+    /// same undo snapshot.
+    public internal(set) var annotations: [Annotation] {
+        didSet { if let r = Self.resolvingAttachments(annotations) { annotations = r } }
+    }
+    public init(_ annotations: [Annotation] = []) {
+        self.annotations = Self.resolvingAttachments(annotations) ?? annotations
+    }
     public var isEmpty: Bool { annotations.isEmpty }
     /// on top
     public mutating func add(_ a: Annotation) { annotations.append(a) }
@@ -62,7 +70,8 @@ public struct LayerStack: Codable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(forKey: .version, in: c,
                 debugDescription: "annotations.json version \(v) is newer than this build reads")
         }
-        annotations = try c.decode([Annotation].self, forKey: .annotations)
+        let list = try c.decode([Annotation].self, forKey: .annotations)
+        annotations = Self.resolvingAttachments(list) ?? list
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
