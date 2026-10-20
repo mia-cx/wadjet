@@ -29,6 +29,11 @@ final class MarkupController {
     let assets = MarkupAssets()
     /// every committed change is one undo step
     @ObservationIgnored private var history = LayerHistory()
+    /// after a Clear that closed the toolbar, its undo step outlives the
+    /// session for a few seconds (MarkupClear.swift)
+    @ObservationIgnored var undoGrace = UndoGrace()
+    /// a Clear's fade is running; its clear lands when the fade ends
+    @ObservationIgnored var clearInFlight = false
     /// an Editor's canvas view; the screen draws on its per-display panels instead
     @ObservationIgnored weak var surface: MarkupView?
     /// an Editor's undo steps go to its document; the screen keeps LayerHistory
@@ -245,7 +250,7 @@ final class MarkupController {
     /// history ends once the stack is empty and the session is closed — Clear
     /// can run after the toolbar closes (Clear after Screenshot), so edits check too
     private func endHistoryIfClosed() {
-        if isScreen, !AppState.shared.toolbarOpen {
+        if isScreen, !AppState.shared.toolbarOpen, !undoGrace.isOpen(at: .now) {
             history.end(ifCleared: stack)
             if stack.isEmpty { assets.removeAll() }
         }
@@ -264,6 +269,7 @@ final class MarkupController {
     func syncSession() {
         let s = AppState.shared, typing = textHasFocus
         MarkupKeys.shared.sync(commands: s.toolbarOpen && !typing,
+                               undo: MarkupController.shared.undoGrace.isOpen(at: .now) && !typing,
                                tools: !typing && (s.phase == .frozen || (s.toolbarOpen && s.tool?.kind == .markup)))
         LayersWindow.shared.sync()
         endHistoryIfClosed()
@@ -275,6 +281,7 @@ final class MarkupController {
         if editing != nil { editor?.undoManager?.undo(); return }
         guard gesture == nil, let s = history.undo(from: stack) else { return }
         restore(s); AppLog.line("markup: undo")
+        undidInGrace()
     }
     func redo() {
         closeScroll()

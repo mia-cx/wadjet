@@ -139,6 +139,10 @@ final class AppState: ObservableObject {
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
     @Published var openMenu: Tool? = nil // which Tool's dropdown is open, if any
+    /// a Clear's fade is running: the Clear cell holds the highlight (MarkupClear.swift)
+    @Published var clearing = false
+    /// bumped by each Clear with nothing to clear — the Clear cell shakes
+    @Published var clearRefusals = 0
     /// the open menu body's height while it scrolls: set when its content
     /// outgrows the space below its top edge
     @Published var menuScrollHeight: CGFloat? = nil
@@ -867,7 +871,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     // MARK: trigger
     func trigger(_ tool: Tool, at start: ContinuousClock.Instant = .now, applyDefaults: Bool = true, shortcut: ShortcutOptions? = nil, immediate: Bool = false) {
         let s = AppState.shared
-        if tool.isAction { if tool == .clearAnnotations { clearAnnotations() }; return }
+        if tool.isAction { if tool == .clearAnnotations { clearAnnotationsWithFeedback() }; return }
         // a press sets what its session freezes by; a toolbar switch on an open Freeze Frame keeps the press that opened it
         if shortcut != nil || s.phase != .frozen { overlayCtrl.freezeContext = FreezeContext(recording: s.recActive, shortcut: shortcut) }
         if tool.freezeUse == .markup, !overlayCtrl.freezeContext.freezes(tool), s.phase == .desktop || s.phase == .frozen { overlayCtrl.showLiveToolbar(armed: tool); return }
@@ -3559,6 +3563,8 @@ struct ToolbarView: View {
     // at rest); a collapsed cell carries its group's badge
     func cell(_ t: Tool, collapsed: Bool) -> some View {
         let selected = s.tool == t
+        // the highlight: the selected Tool's, or Clear's while its fade runs
+        let marked = s.clearing ? t == .clearAnnotations : selected
         let c = cellCentres[t] ?? .zero
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
@@ -3589,13 +3595,13 @@ struct ToolbarView: View {
                     }
                 }
         }
-        .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
+        .foregroundStyle(marked && !lensActive ? Color.wadjetAccent : .white)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space. Colour
             // icons can't take the accent, so an accent ring marks the cell
             .background {
-                if selected, !lensActive {
+                if marked, !lensActive {
                     Capsule().fill(.white.opacity(0.10))
                         .overlay(Capsule().strokeBorder(Color.wadjetAccent, lineWidth: 1.5))
                         .frame(width: selW, height: selH)
@@ -3604,6 +3610,7 @@ struct ToolbarView: View {
                 }
             }
             .contentShape(Rectangle()) // whole cell, not just the glyph
+            .modifier(NothingToClearCue(refusals: t == .clearAnnotations ? s.clearRefusals : 0))
             .mask {
                 ZStack {
                     Rectangle()
@@ -3724,7 +3731,8 @@ struct ToolbarView: View {
                 } else if !menuByHold, let t = hitTool(at: v.location.x), opensOnRelease(t) {
                     openTheGroup(t.kind, anchor: t) // Steady: a click opens the group in place
                 } else if !menuByHold, let t = hitTool(at: v.location.x) ?? nearestTool(to: v.location.x) {
-                    if t.isAction { t.hasMenu ? openToolMenu(t) : AppDelegate.shared?.trigger(t) }
+                    if t == .clearAnnotations { clearTap() } // the lens glides to Clear (MarkupClear.swift)
+                    else if t.isAction { t.hasMenu ? openToolMenu(t) : AppDelegate.shared?.trigger(t) }
                     else if t != s.tool {
                         travelTap(t) // the lens travels all the way there
                     } else if t.hasMenu { openToolMenu(t) } // tap the selected Tool: menu
@@ -3750,12 +3758,15 @@ struct ToolbarView: View {
             if let t = s.tool { lastUsed[t.kind] = t }
             // only an active lens interaction goes through the spring;
             // a passive switch snaps
-            if dragging || travelling { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
+            // a disarm mid-travel (Clear's) leaves the lens where it's headed
+            if s.tool == nil, travelling {}
+            else if dragging || travelling { if let c = cellCentres[s.tool ?? .capRegion] { setLensTarget(x: c.x) } }
             else if let c = cellCentres[s.tool ?? .capRegion] { snapLens(to: c) }
             // the selected Tool's group is the default open one; a collapsed
             // group's click opens it
             if !lensActive { openTheGroup(restingGroup) }
         }
+        .onChange(of: s.clearing) { clearEnded() }
         .padding(.top, rowTop)
 
     }
