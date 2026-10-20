@@ -2135,8 +2135,9 @@ final class OverlayController {
     func refreshToolbars() {
         toolbarPanels.values.forEach { $0.close() }
         toolbarPanels = [:]
-        if AppState.shared.toolbarOpen || (AppState.shared.recActive && AppState.shared.showIslandWhileRecording)
-            || !MarkupController.shared.stack.isEmpty { showToolbars() }
+        let s = AppState.shared
+        if IslandRule.showsIsland(toolbarOpen: s.toolbarOpen, hasAnnotations: !MarkupController.shared.stack.isEmpty,
+                                  recordingIsland: s.recActive && s.showIslandWhileRecording) { showToolbars() }
         AppLog.line("chrome: \(toolbarPanels.count) islands, \(recBubblePanels.count) bubbles on \(chromeScreens.count) screens")
     }
     func closeAllPanelsOnly() {

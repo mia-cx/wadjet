@@ -166,6 +166,11 @@ final class MarkupController {
         change(&stack)
         record(from: before)
         render()
+        dismissIdleToolbarIfEmpty()
+    }
+    /// the last Annotation gone with no Tool armed ends the live toolbar
+    private func dismissIdleToolbarIfEmpty() {
+        if isScreen, stack.isEmpty { AppDelegate.shared?.overlayCtrl.scheduleIdleToolbarCheck() }
     }
     /// the drag in flight becomes its one undo step, if it changed anything
     private func commitGesture() {
@@ -241,6 +246,7 @@ final class MarkupController {
         if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
         if let id = cropping, !s.annotations.contains(where: { $0.id == id }) { cropping = nil }
         syncPanels(); render()
+        dismissIdleToolbarIfEmpty()
     }
     /// replaces the whole stack — a reverted document
     func load(_ s: LayerStack) { gesture = nil; gestureStart = nil; restore(s) }
@@ -260,6 +266,8 @@ final class MarkupController {
     func syncArmed() {
         syncSession()
         PeerThrough.shared.sync()
+        // any disarm with no Annotations left ends the live toolbar
+        if isScreen { AppDelegate.shared?.overlayCtrl.scheduleIdleToolbarCheck() }
         let s = AppState.shared
         // Freeze region picks on the Freeze Frame, never on the panels — excluding it lets the clicks through
         let want: Tool? = s.toolbarOpen && s.tool?.kind == .markup && s.tool?.isAction != true
