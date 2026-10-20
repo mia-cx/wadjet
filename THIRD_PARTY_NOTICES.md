@@ -4,6 +4,8 @@
 
 The full-colour icons in the macOS app's status menu and toolbars (`apps/macos/Sources/Wadjet/Icons.xcassets`) are downscaled from Microsoft's [Fluent Emoji](https://github.com/microsoft/fluentui-emoji), 3D style.
 
+The app ships this notice as `Contents/Resources/ThirdPartyNotices.txt` (from `apps/macos/Sources/Wadjet/ThirdPartyNotices.txt`); keep the two in step.
+
 ```
 MIT License
 
