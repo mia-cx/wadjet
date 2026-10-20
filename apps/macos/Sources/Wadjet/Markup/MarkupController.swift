@@ -697,7 +697,7 @@ final class MarkupController {
     func setEditing(_ id: Annotation.ID?) { editing = id }
     func setSelection(_ ids: AnnotationSelection) { selection = ids }
     /// a drag in flight rewrites these Annotations; its gesture snapshot records the step
-    func replaceDuringGesture(_ annotations: [Annotation]) { for a in annotations { stack.replace(a) } }
+    func replaceDuringGesture(_ annotations: [Annotation]) { stack.replaceGroup(annotations) }
     /// the panel whose screen holds `p`
     func panel(containing p: CGPoint) -> MarkupPanel? {
         panels.first { $0.screen?.frame.contains(p) == true }

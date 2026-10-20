@@ -374,5 +374,59 @@ struct AttachingTests {
         stack.replaceInsertingNode(inserted, at: i, splitAt: t)
         #expect(near(current(stack, follower.id).position(of: .end), was, 1e-6))
     }
+
+    // Proves a multi-selection replaced as a group re-solves once: moving
+    // both end targets of an unselected bent Line shifts the whole curve
+    // (bend (5,5) → (15,5)) instead of flattening it mid-way; and a selected
+    // follower carried away from an unselected target lets go of it.
+    @Test func groupReplaceSolvesOnce() {
+        let line = arrow(from: .zero, to: CGPoint(x: 10, y: 0), bend: CGPoint(x: 5, y: 5))
+        let s1 = box(CGRect(x: 0, y: 0, width: 2, height: 2)), s2 = box(CGRect(x: 10, y: 0, width: 2, height: 2))
+        var stack = LayerStack([s1, s2, line])
+        stack.attach(line.id, .start, to: s1.id, at: .frame(.zero))
+        stack.attach(line.id, .end, to: s2.id, at: .frame(.zero))
+        let d = CGVector(dx: 10, dy: 0)
+        stack.replaceGroup([s1, s2].map { current(stack, $0.id).moved(by: d) })
+        #expect(near(current(stack, line.id).position(of: .bend), CGPoint(x: 15, y: 5)))
+
+        stack.replaceGroup([current(stack, line.id).moved(by: CGVector(dx: 0, dy: 40))])
+        #expect(current(stack, line.id).attachments.isEmpty)
+        #expect(near(current(stack, line.id).position(of: .start), CGPoint(x: 10, y: 40)))
+    }
+
+    // Proves copying a box with its arrow gives a copied arrow that follows
+    // the copied box, and copying the arrow alone lets go of the original.
+    @Test func copiesFollowCopies() {
+        let target = box(), a = arrow()
+        var stack = LayerStack([target, a])
+        stack.attach(a.id, .end, to: target.id, at: .frame(CGPoint(x: 1, y: 1)))
+        let ids = [target.id: UUID(), a.id: UUID()]
+        let copies = LayerStack.copies(of: stack.annotations.map { $0.moved(by: CGVector(dx: 0, dy: 200)) }, ids: ids)
+        copies.forEach { stack.add($0) }
+        stack.replace(current(stack, ids[target.id]!).moved(by: CGVector(dx: 10, dy: 0)))
+        #expect(near(current(stack, ids[a.id]!).position(of: .end), CGPoint(x: 110, y: 250)))
+        #expect(near(current(stack, a.id).position(of: .end), CGPoint(x: 100, y: 50)))
+
+        let lone = LayerStack.copies(of: [current(stack, a.id)], ids: [a.id: UUID()])
+        #expect(lone[0].attachments.isEmpty)
+    }
+
+    // Proves a batch of refits made from one snapshot keeps each other's
+    // remaps: Brush B's end on Brush A stays put whichever is refitted first.
+    @Test func batchRefitKeepsRemaps() {
+        func brush() -> Annotation {
+            Annotation(kind: .path(PathData.fitted(PathDataTests.wavy, smoothing: 0)!), style: red4)
+        }
+        var results: [CGPoint] = []
+        for aFirst in [true, false] {
+            let a = brush(), b = brush().moved(by: CGVector(dx: 0, dy: 100))
+            var stack = LayerStack([a, b])
+            stack.attach(b.id, .end, to: a.id, at: .segment(20, t: 0.5))
+            let snapshot = [current(stack, a.id), current(stack, b.id)].map { $0.refitted(smoothing: 1) }
+            for r in aFirst ? snapshot : snapshot.reversed() { stack.replaceReshaping(r) }
+            results.append(current(stack, b.id).position(of: .end)!)
+        }
+        #expect(near(results[0], results[1], 1e-6))
+    }
 }
 

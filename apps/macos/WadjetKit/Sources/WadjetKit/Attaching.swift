@@ -74,8 +74,30 @@ extension LayerStack {
     /// ends. A moved Annotation lets go of anything that doesn't move with it:
     /// dragging it away detaches it.
     public mutating func translate(_ ids: Set<Annotation.ID>, by d: CGVector) {
-        // whatever moves rigidly: the ids, whole Annotations attached to
-        // them, and Lines and paths whose every point follows them
+        replaceGroup(annotations.filter { ids.contains($0.id) }.map { $0.moved(by: d) })
+    }
+
+    /// replaces several Annotations at once — a multi-selection's move,
+    /// resize, or rotation — in one change, so what follows them re-solves
+    /// once against all of them. Each lets go of whatever doesn't move with
+    /// the group: carrying it away detaches it, while an arrow moved with
+    /// its target stays attached and lands where the target takes its ends.
+    public mutating func replaceGroup(_ members: [Annotation]) {
+        let rigid = movingTogether(Set(members.map(\.id)))
+        var list = annotations
+        let index = Dictionary(list.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for m in members {
+            guard let i = index[m.id] else { continue }
+            list[i] = m
+            list[i].attachments.removeAll { !rigid.contains($0.target) }
+        }
+        annotations = list
+    }
+
+    /// what moves exactly as `ids` do when they move together: the ids,
+    /// whole Annotations attached to them, and Lines and paths whose every
+    /// point follows them, through chains
+    public func movingTogether(_ ids: Set<Annotation.ID>) -> Set<Annotation.ID> {
         var rigid = ids, grew = true
         while grew {
             grew = false
@@ -83,12 +105,24 @@ extension LayerStack {
                 rigid.insert(a.id); grew = true
             }
         }
-        var list = annotations
-        for i in list.indices where ids.contains(list[i].id) {
-            list[i] = list[i].moved(by: d)
-            list[i].attachments.removeAll { !rigid.contains($0.target) }
+        return rigid
+    }
+
+    /// copies of `annotations` under new ids (`ids` maps each old id to its
+    /// copy's): attachments between copies point at the copies, and ones to
+    /// anything left out of the copy let go — Duplicate, ⌥-drag, and paste
+    public static func copies(of annotations: [Annotation], ids: [Annotation.ID: Annotation.ID]) -> [Annotation] {
+        annotations.map { a in
+            var c = a
+            c.id = ids[a.id] ?? a.id
+            c.attachments = a.attachments.compactMap { at in
+                guard let t = ids[at.target] else { return nil }
+                var at = at
+                at.target = t
+                return at
+            }
+            return c
         }
-        annotations = list
     }
 
     /// replaces `a` after an edit that rebuilds its nodes — a Brush refit,
@@ -103,7 +137,9 @@ extension LayerStack {
                 // each node attachment moves to the new node nearest where it
                 // held; when two land on one node (or on an attached end),
                 // the one that moved least keeps it and the others go free
-                let moved: [(Attachment, CGFloat)] = a.attachments.map { at in
+                // the stack's records, not `a`'s: a batch of refits made from
+                // one snapshot must not undo each other's remaps
+                let moved: [(Attachment, CGFloat)] = old.attachments.map { at in
                     guard case .node = at.point, let was = old.position(of: at.point),
                           let node = a.nearestNode(to: was), let now = a.position(of: node) else { return (at, 0) }
                     var at = at
@@ -138,13 +174,13 @@ extension LayerStack {
     /// attachment keeps its exact spot: an anchor on the split segment moves
     /// to the matching half and t, later segments and nodes shift up by one.
     public mutating func replaceInsertingNode(_ a: Annotation, at node: Int, splitAt t0: CGFloat) {
-        guard annotations.contains(where: { $0.id == a.id }), node > 0 else { return replace(a) }
+        guard let old = annotations.first(where: { $0.id == a.id }), node > 0 else { return replace(a) }
         let split = node - 1
         var list = annotations
         for i in list.indices {
             if list[i].id == a.id {
                 var new = a
-                new.attachments = a.attachments.map { at in
+                new.attachments = old.attachments.map { at in
                     guard case let .node(k) = at.point, k >= node else { return at }
                     var at = at
                     at.point = .node(k + 1)
