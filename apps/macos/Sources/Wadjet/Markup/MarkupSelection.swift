@@ -211,10 +211,13 @@ extension MarkupController {
         }
     }
 
-    /// whether ⇧ or ⌥ changing mid-drag reshapes the gesture in flight
-    var reshapesOnModifiers: Bool {
+    /// whether a modifier changing mid-drag changes the gesture in flight, so
+    /// it re-runs at the same pointer: ⇧ and ⌥ reshape, ⌘ stops snapping,
+    /// ⌃ stops attaching, ⇧⌘ attaches a moved Annotation whole. Brush, Pen
+    /// and Eraser drags add a sample per run, so they don't re-run.
+    var reactsToModifiers: Bool {
         switch gesture {
-        case .drawing, .cutting, .groupHandle: true
+        case .drawing, .cutting, .moving, .movingSource, .handle, .anchors, .group, .groupHandle: true
         default: false
         }
     }

@@ -11,6 +11,6 @@ extension LayerStack {
         var free = a
         free.attachments = []
         replace(free)
-        attach(a.id, .whole, to: whole.target, at: whole.anchor)
+        attach(a.id, .whole, to: whole.target, at: whole.spot)
     }
 }

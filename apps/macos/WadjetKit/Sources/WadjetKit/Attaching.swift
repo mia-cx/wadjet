@@ -3,10 +3,10 @@ import Foundation
 
 /// Attaching on the layer stack: what may attach where, attaching and
 /// detaching, moving a set of Annotations together, and the re-solve that
-/// keeps every attached point and Annotation on its anchor after any change.
+/// keeps every attached point and Annotation on its spot after any change.
 extension LayerStack {
     /// closer than this, in points, a followed point already sits on its
-    /// anchor — re-solving it again changes nothing, so a no-op edit records
+    /// spot — re-solving it again changes nothing, so a no-op edit records
     /// no undo step
     static let attachTolerance: CGFloat = 1e-6
 
@@ -32,20 +32,25 @@ extension LayerStack {
         return !followers(of: source).contains(target)
     }
 
-    /// attaches `point` of `source` to `anchor` on `target`, replacing what
-    /// that point was attached to; the point moves onto the anchor at once.
-    /// A whole Annotation keeps its current offset and turn from the anchor,
+    /// attaches `point` of `source` to `spot` on `target`, replacing what
+    /// that point was attached to; the point moves onto the spot at once.
+    /// A whole Annotation keeps its current offset and turn from the spot,
     /// and drops its point attachments — and a point attachment drops a whole
-    /// one. False, changing nothing, when `canAttach` refuses.
+    /// one. `loose` attaches a Line's or path's end loosely instead: it aims
+    /// at the target's centre and stops on its outline, and `spot` is
+    /// ignored. False, changing nothing, when `canAttach` refuses or `loose`
+    /// names another point.
     @discardableResult
     public mutating func attach(_ source: Annotation.ID, _ point: AttachPoint, to target: Annotation.ID,
-                                at anchor: AttachAnchor) -> Bool {
+                                at spot: AttachSpot, loose: Bool = false) -> Bool {
+        guard !loose || point == .start || point == .end else { return false }
+        let spot = loose ? AttachSpot.frame(CGPoint(x: 0.5, y: 0.5)) : spot
         guard canAttach(source, point, to: target),
               let i = annotations.firstIndex(where: { $0.id == source }),
               let t = annotations.first(where: { $0.id == target }),
-              let p = t.position(of: anchor) else { return false }
+              let p = t.position(of: spot) else { return false }
         var a = annotations[i]
-        let new = Attachment(point: point, target: target, anchor: anchor)
+        let new = Attachment(point: point, target: target, spot: spot, loose: loose)
         if point == .whole {
             a.attachments = [a.rebased(new, on: t, at: p)]
         } else {
@@ -128,7 +133,7 @@ extension LayerStack {
         for id in ids {
             guard let i = index[id], let w = list[i].attachments.first(where: { $0.point == .whole }),
                   targets.map({ $0.contains(w.target) }) ?? true,
-                  let j = index[w.target], let p = list[j].position(of: w.anchor) else { continue }
+                  let j = index[w.target], let p = list[j].position(of: w.spot) else { continue }
             list[i].attachments = [list[i].rebased(w, on: list[j], at: p)]
         }
     }
@@ -197,10 +202,10 @@ extension LayerStack {
                 continue
             }
             list[i].attachments = list[i].attachments.map { at in
-                guard at.target == a.id, case .segment = at.anchor, let was = old.position(of: at.anchor),
-                      let anchor = a.nearestSegmentAnchor(to: was) else { return at }
+                guard at.target == a.id, case .segment = at.spot, let was = old.position(of: at.spot),
+                      let spot = a.nearestSegmentSpot(to: was) else { return at }
                 var at = at
-                at.anchor = anchor
+                at.spot = spot
                 return at
             }
         }
@@ -210,7 +215,7 @@ extension LayerStack {
     /// replaces `a`, a path with the anchors at `removed` (old indices)
     /// deleted — `Annotation.removingAnchors`. Removed points let go; the
     /// nodes and segments that survive keep their exact attachments under
-    /// their new indices; an anchor on a segment the deletion merged moves
+    /// their new indices; a spot on a segment the deletion merged moves
     /// to the nearest spot on the merged one.
     public mutating func replaceRemovingAnchors(_ a: Annotation, removed: Set<Int>) {
         guard let old = annotations.first(where: { $0.id == a.id }), case let .path(od) = old.kind,
@@ -240,13 +245,13 @@ extension LayerStack {
                 continue
             }
             list[i].attachments = list[i].attachments.map { at in
-                guard at.target == a.id, case let .segment(j, t) = at.anchor else { return at }
+                guard at.target == a.id, case let .segment(j, t) = at.spot else { return at }
                 var at = at
                 let j1 = od.closed ? (j + 1) % n : j + 1
                 if let s = newIndex[j], let e = newIndex[j1], e == (nd.closed ? (s + 1) % m : s + 1) {
-                    at.anchor = .segment(s, t: t)
-                } else if let was = old.position(of: at.anchor), let anchor = a.nearestSegmentAnchor(to: was) {
-                    at.anchor = anchor
+                    at.spot = .segment(s, t: t)
+                } else if let was = old.position(of: at.spot), let spot = a.nearestSegmentSpot(to: was) {
+                    at.spot = spot
                 }
                 return at
             }
@@ -257,7 +262,7 @@ extension LayerStack {
     /// replaces `a`, a copy of a Line or path with node `node` just added by
     /// splitting the segment before it at `t0` —
     /// `Annotation.insertingNodeSplit`. The split keeps the curve, so every
-    /// attachment keeps its exact spot: an anchor on the split segment moves
+    /// attachment keeps its exact spot: a spot on the split segment moves
     /// to the matching half and t, later segments and nodes shift up by one.
     public mutating func replaceInsertingNode(_ a: Annotation, at node: Int, splitAt t0: CGFloat) {
         guard let old = annotations.first(where: { $0.id == a.id }), node > 0 else { return replace(a) }
@@ -276,9 +281,9 @@ extension LayerStack {
                 continue
             }
             list[i].attachments = list[i].attachments.map { at in
-                guard at.target == a.id, case let .segment(j, t) = at.anchor, j >= split else { return at }
+                guard at.target == a.id, case let .segment(j, t) = at.spot, j >= split else { return at }
                 var at = at
-                at.anchor = j > split ? .segment(j + 1, t: t)
+                at.spot = j > split ? .segment(j + 1, t: t)
                     : t < t0 ? .segment(split, t: t0 > 0 ? t / t0 : 0)
                     : .segment(node, t: t0 < 1 ? (t - t0) / (1 - t0) : 1)
                 return at
@@ -337,7 +342,7 @@ extension LayerStack {
 
 extension Annotation {
     /// `at`, a whole attachment, with the offset and turn this Annotation
-    /// has now from its anchor at `p` on `target` — the offset in the
+    /// has now from its spot at `p` on `target` — the offset in the
     /// target's unrotated frame, so it turns with it
     func rebased(_ at: Attachment, on target: Annotation, at p: CGPoint) -> Attachment {
         var at = at
@@ -386,8 +391,20 @@ extension Annotation {
         if let (at, target) = attached.first(where: { $0.0.point == .whole }) {
             return followingWhole(at, on: target)
         }
+        // where each attached point would sit before a loose end is clipped
+        // to its target's outline: an exact spot, or a loose target's centre
+        func unclipped(_ at: Attachment, _ target: Annotation) -> CGPoint? {
+            at.loose ? AttachFinder.centre(of: target) : target.position(of: at.spot)
+        }
         let moves: [(AttachPoint, CGPoint)] = attached.compactMap { at, target in
-            target.position(of: at.anchor).map { (at.point, $0) }
+            guard at.loose else { return target.position(of: at.spot).map { (at.point, $0) } }
+            // a loose end aims from its neighbour, as that neighbour will be
+            // placed: never from the Line's bend, which re-solves from the
+            // ends and would never settle
+            guard let n = neighbour(of: at.point),
+                  let origin = attached.first(where: { $0.0.point == n }).flatMap({ unclipped($0.0, $0.1) })
+                    ?? position(of: n) else { return nil }
+            return (at.point, AttachFinder.looseEnd(from: origin, on: target))
         }
         guard moves.contains(where: { point, p in
             position(of: point).map { hypot(p.x - $0.x, p.y - $0.y) > tolerance } ?? false
@@ -395,9 +412,9 @@ extension Annotation {
         return placing(moves)
     }
 
-    /// a whole Annotation put back at its offset and turn from the anchor, or nil when it sits there
+    /// a whole Annotation put back at its offset and turn from the spot, or nil when it sits there
     func followingWhole(_ at: Attachment, on target: Annotation) -> Annotation? {
-        guard let p = target.position(of: at.anchor) else { return nil }
+        guard let p = target.position(of: at.spot) else { return nil }
         let tolerance = LayerStack.attachTolerance
         let th = target.attachRotation
         let centre = CGPoint(x: p.x + at.offset.dx * cos(th) - at.offset.dy * sin(th),

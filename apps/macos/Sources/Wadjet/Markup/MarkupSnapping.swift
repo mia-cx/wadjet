@@ -42,7 +42,7 @@ import WadjetKit
 
     mutating func offset(rect: CGRect? = nil, points: [CGPoint] = []) -> CGVector {
         let r = SnappingEngine.snap(rect: rect, points: points, targets: targets + pixelTargets(rect: rect, points: points),
-                                    range: range, skip: NSEvent.modifierFlags.contains(.control))
+                                    range: range, skip: !DragModifiers.held.snaps)
         guides = r.guides
         return CGVector(dx: r.offset.x, dy: r.offset.y)
     }
@@ -70,13 +70,13 @@ import WadjetKit
                            minExtent: MarkupController.handleMinExtent,
                            rotateOffset: MarkupController.rotateOffset,
                            targets: targets + pixelTargets(rect: rect, points: points), range: range,
-                           skip: NSEvent.modifierFlags.contains(.control))
+                           skip: !DragModifiers.held.snaps)
         guides = r.guides
         return r.annotation
     }
 
     private func pixelTargets(rect: CGRect? = nil, points: [CGPoint] = []) -> [SnapTarget] {
-        guard !NSEvent.modifierFlags.contains(.control) else { return [] }
+        guard DragModifiers.held.snaps else { return [] }
         return pixels.flatMap { $0.targets(rect: rect, points: points, range: range) }
     }
 }

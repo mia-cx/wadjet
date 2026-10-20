@@ -42,7 +42,7 @@ public enum SnappingEngine {
     /// inclusive. Equal distances prefer target order, then the moving rectangle's
     /// min/centre/max anchors, then point order. Rectangles are standardized.
     /// Exclude the moving Annotation from targets. Coordinates must be finite.
-    /// `skip` implements Control or the Snapping toggle without discarding targets.
+    /// `skip` implements holding ⌘ or the Snapping toggle without discarding targets.
     /// `axes` limits snapping to the listed axes — a grip that can't move along
     /// one gets no offset and no guide there.
     public static func snap(

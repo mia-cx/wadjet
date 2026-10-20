@@ -58,7 +58,7 @@ struct SnappingEngineTests {
         Fixture(name: "exact alignment still draws a guide", points: [CGPoint(x: 7, y: 10)],
                 targets: [.x(7, span: 0...20)], range: 0,
                 guides: [SnapGuide(start: CGPoint(x: 7, y: 0), end: CGPoint(x: 7, y: 20))]),
-        Fixture(name: "Control skips snapping", points: [CGPoint(x: 10, y: 10)],
+        Fixture(name: "⌘ skips snapping", points: [CGPoint(x: 10, y: 10)],
                 targets: [.x(12), .y(12)], skip: true),
         Fixture(name: "nothing within range", points: [CGPoint(x: 0, y: 0)], targets: [.x(7), .y(-7)]),
         Fixture(name: "no targets", rect: CGRect(x: 0, y: 0, width: 10, height: 10)),
