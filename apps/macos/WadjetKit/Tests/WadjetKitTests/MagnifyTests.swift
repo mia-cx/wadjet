@@ -132,6 +132,61 @@ struct MagnifyTests {
         #expect(PathGeometry.path(for: a).boundingBox == s.source)
     }
 
+    // Proves the drawn/selectable source outline is the magnifier's shape:
+    // its corners hit for the rectangle only, its mid-edges for all three,
+    // and the superellipse's 45° point for the superellipse only.
+    @Test func sourceOutlineTakesMagnifierShape() {
+        let source = CGRect(x: 0, y: 0, width: 100, height: 100)
+        func annotation(_ shape: MagnifierShape) -> Annotation {
+            Annotation(kind: .magnify(Magnifier(source: source,
+                                                frame: CGRect(x: 400, y: 400, width: 100, height: 100),
+                                                options: .init(shape: shape, leader: false))),
+                       style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))
+        }
+        func hits(_ shape: MagnifierShape, _ x: CGFloat, _ y: CGFloat) -> Bool {
+            PathGeometry.hitTest(annotation(shape), at: CGPoint(x: x, y: y), tolerance: 0)
+        }
+        // (0,0): the rect's corner — the circle and superellipse bow inside it
+        #expect(hits(.rectangle, 0, 0))
+        #expect(!hits(.superellipse, 0, 0))
+        #expect(!hits(.circle, 0, 0))
+        // (50,0): a mid-edge point all three shapes share
+        for shape in MagnifierShape.allCases {
+            #expect(hits(shape, 50, 0))
+        }
+        // 50 + 50·(1/2)^(1/4): on |x/a|^4 + |y/b|^4 = 1 at 45°, inside the
+        // rect's corner and outside the circle's √2·a diagonal reach
+        let d = 50 + 50 * pow(0.5, 0.25)
+        #expect(hits(.superellipse, d, d))
+        #expect(!hits(.rectangle, d, d))
+        #expect(!hits(.circle, d, d))
+    }
+
+    // Proves the leader starts where the centre ray exits the source's own
+    // shape — the L∞ box for a rectangle, u²+v²=1 for a circle, u⁴+v⁴=1 for
+    // the superellipse — not the source's bounding box.
+    @Test func leaderStartsOnShapedOutline() throws {
+        // a diagonal ray: 40×20 source at the origin, frame down-right
+        for shape in MagnifierShape.allCases {
+            let m = Magnifier(source: CGRect(x: 0, y: 0, width: 40, height: 20),
+                              frame: CGRect(x: 200, y: 150, width: 80, height: 80),
+                              options: .init(shape: shape))
+            let l = try #require(m.leader)
+            // the start sits on the ray from the source's centre to the frame's
+            let cross = (l.start.x - 20) * 180 - (l.start.y - 10) * 220
+            #expect(abs(cross) < 1e-6)
+            let u = (l.start.x - 20) / 20, v = (l.start.y - 10) / 10
+            switch shape {
+            case .rectangle:
+                #expect(abs(max(abs(u), abs(v)) - 1) < 1e-6)
+            case .circle:
+                #expect(abs(u * u + v * v - 1) < 1e-6)
+            case .superellipse:
+                #expect(abs(u * u * u * u + v * v * v * v - 1) < 1e-6)
+            }
+        }
+    }
+
     // Proves the shape paths mask inside their edge: corners belong to
     // rectangle and superellipse only, mid-edge neighbourhoods to all three.
     @Test func shapeMasks() {
