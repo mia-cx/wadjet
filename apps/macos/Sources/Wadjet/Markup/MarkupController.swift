@@ -166,8 +166,11 @@ final class MarkupController {
     @ObservationIgnored var snapper: MarkupSnapper?
     /// what a dragged end is over and would attach to (MarkupAttach.swift)
     @ObservationIgnored var attachHover: AttachHover?
-    /// a grip drag on an end that can attach is in flight
-    var draggingAttachable: Bool { draggedAttachPoint != nil }
+    /// a drag of a point that can attach, or a whole Annotation's move, is in flight
+    var draggingAttachable: Bool {
+        if case .moving = gesture { return true }
+        return draggedAttachPoint != nil
+    }
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
@@ -992,7 +995,10 @@ final class MarkupController {
             // a Magnify snaps its magnifier frame, not its whole path's box
             let snapRect = moved.pixelSnapBounds
             let snapped = snapper?.offset(rect: snapRect) ?? .zero
-            stack.replace(moved.moved(by: snapped))
+            // over another Annotation's spot or edge, the pointer snaps there to attach
+            let (attached, hover) = attachingWhole(moved.moved(by: snapped), unsnapped: moved, pointer: p)
+            attachHover = hover
+            stack.replace(attached)
         case let .movingSource(start, from):
             // only the source re-aims; the magnifier box stays where it is
             guard case var .magnify(m) = start.kind else { return }
@@ -1031,15 +1037,16 @@ final class MarkupController {
             // an end over another Annotation snaps to its attach spot
             let (attached, hover) = attaching(moved, point: moved.attachPoint(for: h), constrained: constrained && shiftConstrained)
             attachHover = hover
-            stack.replace(attached)
+            // an edit of an Annotation attached whole keeps it attached where it lands
+            stack.replaceRebasing(attached)
         case let .recrop(h, start, from):
             guard assets.canRecrop(start),
                   let source = assets.source(for: start)?.bounds else { return }
-            stack.replace(start.recropping(h, from: from, to: p, source: source))
+            stack.replaceRebasing(start.recropping(h, from: from, to: p, source: source))
         case let .pan(start, from):
             guard assets.canRecrop(start),
                   let source = assets.source(for: start)?.bounds else { return }
-            stack.replace(start.panning(from: from, to: p, source: source))
+            stack.replaceRebasing(start.panning(from: from, to: p, source: source))
         case .group, .groupHandle, .marqueeSelect:
             dragGroup(to: p, constrained: constrained)
         case nil:
@@ -1122,6 +1129,10 @@ final class MarkupController {
         if let (id, point) = draggedAttachPoint, let spot = attachHover?.snapped, !attachSuppressed {
             stack.attach(id, point, to: spot.target, at: spot.anchor)
             AppLog.line("markup: attached \(point)")
+        }
+        if case let .moving(start, _) = gesture, let spot = attachHover?.snapped, !attachSuppressed {
+            stack.attach(start.id, .whole, to: spot.target, at: spot.anchor)
+            AppLog.line("markup: attached a whole Annotation")
         }
         attachHover = nil
         commitGesture()
