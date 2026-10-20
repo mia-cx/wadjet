@@ -153,6 +153,7 @@ struct TextFormatControls: View {
 
     func pick(_ family: String) {
         styles.pickFont(family: family, weight: format.weight, for: tool)
+        ctrl.fitMenu() // the Weight row shows only for multi-weight families
     }
 
     // MARK: alignment and pill tiles — they keep the menu open
