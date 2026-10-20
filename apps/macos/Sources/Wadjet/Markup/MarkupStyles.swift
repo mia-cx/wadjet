@@ -121,7 +121,10 @@ final class MarkupStyles {
             }
             return
         }
-        eyedropper = (tool, target, annotation: MarkupController.active.selection, live: s.phase == .toolbar)
+        // the menu's Tool follows the selection (Select's menu shows a selected
+        // Line's Draw controls); the pick returns to the Tool actually armed
+        let armed = MarkupController.active.armed ?? tool
+        eyedropper = (armed, target, annotation: MarkupController.active.selection, live: s.phase == .toolbar)
         s.openMenu = nil; AppDelegate.shared?.overlayCtrl.syncMenu()
         AppDelegate.shared?.trigger(.pickColour)
     }

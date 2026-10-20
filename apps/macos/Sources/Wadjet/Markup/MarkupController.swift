@@ -107,6 +107,10 @@ final class MarkupController {
             if isScreen, selection == nil, AppState.shared.openMenu?.kind == .markup {
                 AppState.shared.openMenu = nil
                 AppDelegate.shared?.overlayCtrl.syncMenu()
+            } else if isScreen, selection != nil, selection != oldValue,
+                      AppState.shared.openMenu?.kind == .markup {
+                // the menu's rows follow the new selection's kind — refit the panel
+                AppDelegate.shared?.overlayCtrl.fitMenu()
             }
             render()
         }
