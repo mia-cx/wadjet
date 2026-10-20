@@ -4008,8 +4008,6 @@ struct ToolMenuView: View {
                     if t == .magnify { MagnifyShapeControls() }
                     if t == .censor {
                         CensorControls(ctrl: ctrl)
-                        // Smart Redact belongs to the Censor Tool, not to a selected Censor
-                        if tool == .censor { smartRedactRows() }
                     } else {
                         // the variant tiles set new strokes' type — never a selected path's
                         if subject == .armed(.draw) { tileRow(drawTiles) }
@@ -4021,6 +4019,8 @@ struct ToolMenuView: View {
                 if MarkupStyles.shared.editsText(t) {
                     TextFormatControls(tool: t, ctrl: ctrl)
                 }
+                // Smart Redact belongs to the armed Censor Tool, whatever is selected
+                if tool == .censor { smartRedactRows() }
                 // the Transform rows are hidden while a text is being edited
                 if MarkupController.active.editing == nil {
                     selectionRows()
