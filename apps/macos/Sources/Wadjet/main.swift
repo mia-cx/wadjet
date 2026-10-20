@@ -3164,7 +3164,8 @@ struct ToolbarView: View {
     // pressed lens: 4 pt past the bar's edges so the bar's own edge falls
     // inside it and gets refracted (iOS tab-bar lens); the mask follows it
     let lensOverhang: CGFloat = 4
-    let lensIconBoost: CGFloat = 0.15 // icons seen through the lens are this much bigger
+    let lensIconBoost: CGFloat = 0.15 // icons seen through the lens's centre are this much bigger
+    let lensSqueeze: CGFloat = 0.9 // the bar seen through the lens's centre is this size
     var lensW: CGFloat { selW * (selH + 2 * d + 2 * lensOverhang) / selH }
     var lensH: CGFloat { selH + 2 * d + 2 * lensOverhang }
     var lensSize: CGSize { lensActive ? CGSize(width: lensW, height: lensH) : CGSize(width: selW, height: selH) }
@@ -3202,24 +3203,6 @@ struct ToolbarView: View {
     @State var holdTask: Task<Void, Never>?
     @State var hoverInside = false
     var lensActive: Bool { pressing || dragging || travelling }
-    /// with the clear-glass patch the Metal lens layer owns the pressed look —
-    /// the in-row accent/cut-out lens pieces must not draw under it
-    var shaderLensActive: Bool {
-        #if CLEAR_GLASS_PATCH
-        return lensActive
-        #else
-        return false
-        #endif
-    }
-    /// the pre-patch in-row lens: glass + accent mask + cut-outs, only while
-    /// pressing. With the shader patch nothing in-row draws for the lens
-    var usesInRowLens: Bool {
-        #if CLEAR_GLASS_PATCH
-        return false
-        #else
-        return lensActive
-        #endif
-    }
     /// frozen + expanded: our barSurface draws the bar; system glass off
     var ownBar: Bool {
         #if CLEAR_GLASS_PATCH
@@ -3376,8 +3359,8 @@ struct ToolbarView: View {
         let xs = cellCentres.filter { visibleTools.contains($0.key) }.values.map(\.x)
         return (xs.min() ?? 0, xs.max() ?? 0)
     }
-    /// the row laid out once, shared by the real cells, the accent copy and
-    /// the lens's icon strip — every copy keeps the same geometry
+    /// the row laid out once, shared by the real cells and the lens's icon
+    /// strip — both copies keep the same geometry
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
         HStack(spacing: twoRows ? 0 : cellGap) { // Two Rows' hidden groups take no gap either
             ForEach(Tool.Kind.allCases, id: \.self) { k in
@@ -3414,9 +3397,9 @@ struct ToolbarView: View {
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
     }
-    // the icon strip once, for the accent-tint mask — same layout as the row
+    // one cell of the lens's icon strip — same layout as the row
     @ViewBuilder func iconCell(_ t: Tool, collapsed: Bool) -> some View {
-        // pixel-identical layout to cell() so the masked splice joins equal:
+        // pixel-identical layout to cell() so the lens's copy lines up:
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
             (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
@@ -3462,15 +3445,19 @@ struct ToolbarView: View {
     var lensCentre: CGPoint {
         CGPoint(x: (panelW - rowSize.width) / 2 + barDX + blobX, y: shapeTop + rowTop + blobY)
     }
-    /// the lens capsule's centre in row space (for the accent mask)
-    var lensCentreInRow: CGPoint {
-        CGPoint(x: (shapeW - rowSize.width) / 2 + blobX, y: blobY)
-    }
-    /// the lens's icon copy — every icon always grown about its own centre;
-    /// the copy only shows inside the lens, so the real row never scales
-    func iconStrip(_ color: Color) -> some View {
-        rowContent { t, collapsed in iconCell(t, collapsed: collapsed).scaleEffect(1 + lensIconBoost) }
-            .foregroundStyle(color)
+    /// the lens's icon copy, at the real row's spot in panel space. Every
+    /// icon is grown about its own centre by the boost and by the inverse of
+    /// the lens's squeeze, so after the shader minifies it the icon at the
+    /// lens's centre reads 1 + lensIconBoost. The real row never scales
+    var iconStrip: some View {
+        rowContent { t, collapsed in
+            iconCell(t, collapsed: collapsed).scaleEffect((1 + lensIconBoost) / lensSqueeze)
+        }
+        .foregroundStyle(.white)
+        .frame(width: shapeW, height: shapeH, alignment: .top)
+        .padding(.top, shapeTop + rowTop)
+        .offset(x: barDX)
+        .frame(width: panelW, height: panelH, alignment: .top)
     }
     /// the bar's surface, drawn by us while frozen: the Freeze Frame crop,
     /// edge-lensed by barGlass, lightly frosted, tinted. The SAME view is the
@@ -3501,7 +3488,10 @@ struct ToolbarView: View {
     }
 
     /// a glass-free copy of what sits under the lens — backdrop views can't
-    /// rasterize into layerEffect, so the shader bends this instead
+    /// rasterize into layerEffect, so the shader bends this instead. The
+    /// icons are in it, so they bend and fringe at the rim like the bar.
+    /// On the live desktop there is no crop: the icons are all it holds,
+    /// and the system glass bar shows through around them
     var lensSource: some View {
         ZStack(alignment: .top) {
             if let img = lensBg {
@@ -3511,6 +3501,7 @@ struct ToolbarView: View {
                     .frame(width: panelW, height: panelH)
             }
             barSurface
+            iconStrip
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -3518,37 +3509,15 @@ struct ToolbarView: View {
     /// through LensEffect so the mask, rim and SDF share the same
     /// interpolated values every frame (shader args don't animate on
     /// their own — the mask would run ahead of them during the springs)
-    /// the icons, kept out of the shader so they read like the real row —
-    /// grown about their own centres in this copy only, so a Tool swells as
-    /// it passes into the lens. Same panel-space spot it had in lensSource.
-    var lensIcons: some View {
-        ZStack {
-            iconStrip(.white)
-            iconStrip(Color.wadjetAccent)
-                .mask(Capsule().frame(width: lensW, height: lensH)
-                      .scaleEffect(x: stretchX, y: stretchY)
-                      .position(lensCentreInRow))
-        }
-        .frame(width: shapeW, height: shapeH, alignment: .top)
-        .padding(.top, shapeTop + rowTop)
-        .offset(x: barDX)
-        .frame(width: panelW, height: panelH, alignment: .top)
-    }
     var lensLayer: some View {
         lensSource
-            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, icons: lensIcons, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
+            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, squeeze: lensSqueeze, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
                                  stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
             .allowsHitTesting(false)
     }
     #endif
-
-    var selShape: some View {
-        Capsule()
-            .frame(width: lensSize.width, height: lensSize.height)
-            .scaleEffect(x: stretchX, y: stretchY) // with the lens, never against it
-    }
 
     func lens(_ glass: Glass) -> some View {
         Capsule().fill(.clear)
@@ -3566,7 +3535,6 @@ struct ToolbarView: View {
         let selected = s.tool == t
         // the highlight: the selected Tool's, or Clear's while its fade runs
         let marked = s.clearing ? t == .clearAnnotations : selected
-        let c = cellCentres[t] ?? .zero
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
         return VStack(spacing: 3) {
@@ -3612,15 +3580,6 @@ struct ToolbarView: View {
             }
             .contentShape(Rectangle()) // whole cell, not just the glyph
             .modifier(NothingToClearCue(refusals: t == .clearAnnotations ? s.clearRefusals : 0))
-            .mask {
-                ZStack {
-                    Rectangle()
-                    selShape.opacity(usesInRowLens ? 1 : 0)
-                        .transaction { $0.animation = nil }
-                        .offset(x: blobX - c.x, y: blobY - c.y).blendMode(.destinationOut)
-                }
-                .compositingGroup()
-            }
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
@@ -3640,18 +3599,12 @@ struct ToolbarView: View {
         // and behind them without it
         rowContent(cell)
         .coordinateSpace(name: "row")
-        // the accent tint follows the lens, clipped to its shape — the icon row
-        // is drawn a second time in accent, masked to a capsule at blobX.
-        // Only while the in-row lens draws: at rest the selected cell's own
-        // icon carries the accent
-        .overlay {
-            rowContent(iconCell)
-                .mask(selShape.opacity(usesInRowLens ? 1 : 0)
-                    .position(x: blobX, y: blobY)
-                    .transaction { $0.animation = nil })
-                .foregroundStyle(Color.wadjetAccent)
-                .allowsHitTesting(false)
-        }
+        #if CLEAR_GLASS_PATCH
+        // the lens draws its own refracted icons, so the real ones step out
+        // from under it — on the live desktop they would show through
+        .modifier(LensCutout(centre: CGPoint(x: blobX, y: blobY), size: lensSize,
+                             stretch: CGSize(width: stretchX, height: stretchY), on: lensActive))
+        #endif
         // the glass lens: identity glass at rest, glass while pressing —
         // animating the effect, never inserted. With the clear-glass patch it
         // sits on top and refracts the icons; without it, glass would blur and
@@ -3797,10 +3750,10 @@ struct BarGlassEffect: ViewModifier {
     }
 }
 
-struct LensEffect<Icons: View>: ViewModifier, @preconcurrency Animatable {
+struct LensEffect: ViewModifier, @preconcurrency Animatable {
     let ctrl: OverlayController
     let di: Int
-    let icons: Icons // rides above the refraction, inside the same mask
+    let squeeze: CGFloat // what the bar's scale reads in the lens's body
     @ObservedObject var light = PointerLight.shared
     var bounds: CGSize = .zero // the source layer's size; samples clamp to it
     var centre: CGPoint
@@ -3828,14 +3781,48 @@ struct LensEffect<Icons: View>: ViewModifier, @preconcurrency Animatable {
                                        let lp = ctrl.lightPoint(in: ctrl.toolbarPanels[di], height: bounds.height, above: centre)
                                        return .float2(Float(lp.x), Float(lp.y))
                                    }(),
-                                   .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2)))),
+                                   .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2))),
+                                   .float(Float(1 / squeeze))),
                 maxSampleOffset: CGSize(width: 64, height: 64))
-            .overlay { icons }
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
                     .scaleEffect(x: stretch.width, y: stretch.height)
                     .position(centre)
             }
+    }
+}
+
+/// the real row's hole under the lens: the same capsule LensEffect masks to,
+/// animated the same way, so the refracted icons replace the real ones
+/// without a seam. It fades with the lens layer, a cross-fade.
+struct LensCutout: ViewModifier, @preconcurrency Animatable {
+    var centre: CGPoint
+    var size: CGSize
+    var stretch: CGSize
+    let on: Bool
+    var animatableData: AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
+                                      AnimatablePair<AnimatablePair<CGFloat, CGFloat>,
+                                                      AnimatablePair<CGFloat, CGFloat>>> {
+        get { .init(.init(centre.x, centre.y),
+                    .init(.init(size.width, size.height), .init(stretch.width, stretch.height))) }
+        set {
+            centre = CGPoint(x: newValue.first.first, y: newValue.first.second)
+            size = CGSize(width: newValue.second.first.first, height: newValue.second.first.second)
+            stretch = CGSize(width: newValue.second.second.first, height: newValue.second.second.second)
+        }
+    }
+    func body(content: Content) -> some View {
+        content.mask {
+            ZStack {
+                Rectangle().padding(-32) // the rest ring and labels may overhang
+                Capsule().frame(width: size.width + 2, height: size.height + 2)
+                    .scaleEffect(x: stretch.width, y: stretch.height)
+                    .position(centre)
+                    .opacity(on ? 1 : 0)
+                    .blendMode(.destinationOut)
+            }
+            .compositingGroup()
+        }
     }
 }
 #endif

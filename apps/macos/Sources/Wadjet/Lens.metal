@@ -12,8 +12,10 @@ using namespace metal;
 // pixels so it stays a soft ~3 px line at 1× and 2×. Gotchas: stitchable
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
-// keep the whole sampled half4 and overwrite only r and b.
-#define kCentre 1.1111 // 1 / 0.9: the bar reads squeezed to 0.9× inside the lens
+// keep the whole sampled half4 and overwrite only r and b. The Tool icons
+// are part of the sampled layer, so they bend and fringe with the bar; the
+// caller pre-scales them by kCentre so they still read grown at the centre,
+// which is why kCentre comes in as an argument rather than a #define.
 #define kRim 2.1       // how far the rim reaches outward
 #define band 9.0       // rim band width in points
 #define disp 0.07      // dispersion at the very edge
@@ -21,7 +23,8 @@ using namespace metal;
 
 [[ stitchable ]] half4 lens(float2 position, SwiftUI::Layer layer,
                             float2 centre, float2 size, float2 stretch,
-                            float2 bounds, float2 light, float px) {
+                            float2 bounds, float2 light, float px,
+                            float kCentre) {
     float2 c = position - centre;
     float2 half_ = size / 2.0;
     // capsule SDF in the (velocity-)stretched space, in points
