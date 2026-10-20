@@ -992,7 +992,10 @@ final class MarkupController {
             // a Magnify snaps its magnifier frame, not its whole path's box
             let snapRect = moved.pixelSnapBounds
             let snapped = snapper?.offset(rect: snapRect) ?? .zero
-            stack.replace(moved.moved(by: snapped))
+            // over another Annotation's spot or edge, the pointer snaps there to attach
+            let (attached, hover) = attachingWhole(moved.moved(by: snapped), unsnapped: moved, pointer: p)
+            attachHover = hover
+            stack.replace(attached)
         case let .movingSource(start, from):
             // only the source re-aims; the magnifier box stays where it is
             guard case var .magnify(m) = start.kind else { return }
@@ -1122,6 +1125,10 @@ final class MarkupController {
         if let (id, point) = draggedAttachPoint, let spot = attachHover?.snapped, !attachSuppressed {
             stack.attach(id, point, to: spot.target, at: spot.anchor)
             AppLog.line("markup: attached \(point)")
+        }
+        if case let .moving(start, _) = gesture, let spot = attachHover?.snapped, !attachSuppressed {
+            stack.attach(start.id, .whole, to: spot.target, at: spot.anchor)
+            AppLog.line("markup: attached a whole Annotation")
         }
         attachHover = nil
         commitGesture()
