@@ -5,8 +5,9 @@ import WadjetKit
 // Clear Annotations with feedback: the toolbar's lens glides to the Clear
 // cell, every Annotation fades out on every display, then the clear lands and
 // the island goes the way IslandRule says. With nothing on screen the Clear
-// cell shakes instead. A Clear that closes the toolbar stays undoable with ⌘Z
-// for ClearFeedback.undoGrace seconds.
+// cell shakes instead. Afterwards (ClearUndo): ⌘Z restores it for 3 s, the
+// Clear cell reads Undo for 6 s, and a Clear that closed the toolbar keeps the
+// collapsed island for 3 s with an Undo ring draining around its glyph.
 
 extension MarkupView {
     /// fades the whole Markup view (Annotations, their chrome, Magnify rims)
@@ -80,37 +81,74 @@ extension MarkupController {
         return r
     }
 
-    /// keeps the screen's undo history and ⌘Z alive past a closing toolbar
-    /// for ClearFeedback.undoGrace seconds; open it before the Clear records
-    func openUndoGrace() {
+    /// a Clear is about to land: ⌘Z, the Undo cell and, with `ring`, the
+    /// island's ring start now. Open it before the Clear records its step, so
+    /// the step outlives a closing toolbar
+    func offerUndo(ring: Bool) {
         guard isScreen else { return }
-        undoGrace.open(at: .now)
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(ClearFeedback.undoGrace + 0.05))
-            // a later Clear's grace runs on its own timer
-            guard let self, !self.undoGrace.isOpen(at: .now) else { return }
-            self.endUndoGrace()
+        clearUndo.cleared(at: .now, ring: ring)
+        // the pointer may already rest on the island: the ring holds from the start
+        if !hoveredIslands.isEmpty { clearUndo.hover(true, at: .now) }
+        clearUndoChanged()
+    }
+    /// re-reads clearUndo now and wakes at its next change: ⌘Z unbinds at 3 s,
+    /// the island goes when the ring empties, the Undo cell turns back into
+    /// Clear and history ends with the offer
+    func clearUndoChanged(chrome: Bool = true) {
+        let now = Date.now
+        if clearUndo.isActive, !clearUndo.offersUndo(at: now) { clearUndo.end() }
+        let held = undoRingShown
+        undoOffered = clearUndo.offersUndo(at: now)
+        undoRingShown = clearUndo.holdsIsland(at: now)
+        clearUndoWake?.cancel(); clearUndoWake = nil
+        if let next = clearUndo.nextChange(after: now) {
+            clearUndoWake = Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(max(0, next.timeIntervalSinceNow) + 0.02))
+                guard !Task.isCancelled else { return }
+                self?.clearUndoChanged()
+            }
+        }
+        syncSession()
+        // the ring emptied: the island goes the way IslandRule says
+        if chrome, held, !undoRingShown, AppState.shared.phase == .desktop {
+            AppLog.line("markup: Undo ring emptied")
+            AppDelegate.shared?.overlayCtrl.syncDesktopChrome()
         }
     }
-    /// history ends now if the toolbar is closed and nothing is left, and ⌘Z unbinds
-    func endUndoGrace() {
-        undoGrace.close()
-        syncSession()
+    /// the pointer entered or left a display's island or toolbar: the ring
+    /// holds while it's on any of them. The pointer itself, not the bar's
+    /// expansion, which an armed Tool keeps up after the pointer leaves
+    func islandHovered(_ inside: Bool, on display: Int) {
+        guard isScreen else { return }
+        let was = !hoveredIslands.isEmpty
+        if inside { hoveredIslands.insert(display) } else { hoveredIslands.remove(display) }
+        let now = !hoveredIslands.isEmpty
+        guard clearUndo.isActive, now != was else { return }
+        clearUndo.hover(now, at: .now)
+        clearUndoChanged()
     }
-    /// ⌘Z in the grace brought the Annotations back: so does their island
-    func undidInGrace() {
-        guard isScreen, undoGrace.isOpen(at: .now) else { return }
-        AppLog.line("markup: Clear undone after the toolbar closed")
+    /// an edit after the Clear: "Undo Clear" would undo that edit instead
+    func editedAfterClear() {
+        guard clearUndo.isActive, !clearInFlight else { return }
+        clearUndo.end()
+        clearUndoChanged()
+    }
+    /// ⌘Z or the Undo cell brought the Annotations back: so does their island
+    func undidClear() {
+        guard isScreen, clearUndo.isActive else { return }
+        AppLog.line("markup: Clear undone")
+        clearUndo.end()
+        clearUndoChanged(chrome: false)
         if AppState.shared.phase == .desktop { AppDelegate.shared?.overlayCtrl.syncDesktopChrome() }
-        endUndoGrace()
     }
 }
 
 extension AppDelegate {
     /// a Clear from the toolbar, a Shortcut, or cmd.sh: fade, then clear.
     /// On the live toolbar Clear disarms the armed Markup Tool first, so the
-    /// toolbar and island go once the screen is empty; a Freeze Frame keeps
-    /// its Tool and stays, and a Recording keeps its island (IslandRule).
+    /// toolbar closes once the screen is empty and the collapsed island holds
+    /// on with the Undo ring; a Freeze Frame keeps its Tool and stays, and a
+    /// Recording keeps its own island (IslandRule), so neither gets the ring.
     func clearAnnotationsWithFeedback() {
         let s = AppState.shared, mc = MarkupController.shared, armed = s.tool
         let r = mc.fadeOutThenClear(beforeClear: {
@@ -118,13 +156,11 @@ extension AppDelegate {
             if s.phase == .toolbar, let t = armed, t.kind == .markup, s.tool == t {
                 s.tool = nil; AppLog.line("markup: Clear disarmed")
             }
-            mc.openUndoGrace()
+            mc.offerUndo(ring: s.phase != .frozen && !(s.recActive && s.showIslandWhileRecording))
         }, afterClear: { [self] in
             AppLog.line("markup: cleared")
             s.clearing = false
             overlayCtrl.syncDesktopChrome()
-            // the toolbar stayed (a Freeze Frame): its history lives on anyway
-            if s.toolbarOpen { mc.undoGrace.close() }
             mc.syncSession()
         })
         switch r {
@@ -142,11 +178,31 @@ extension AppDelegate {
     }
 }
 
+extension AppDelegate {
+    /// the Undo cell: the Annotations a Clear removed come back, as with ⌘Z
+    func undoClear() {
+        let mc = MarkupController.shared
+        guard mc.undoOffered else { return }
+        AppLog.line("markup: Undo Clear tapped")
+        mc.undo()
+    }
+}
+
 extension ToolbarView {
+    /// for a few seconds after a Clear its cell is an Undo button
+    var clearReadsUndo: Bool { MarkupController.shared.undoOffered }
+    /// a cell's icon: the Tool's own, or Undo's on the Clear cell
+    func icon(for t: Tool) -> Image {
+        t == .clearAnnotations && clearReadsUndo ? Image(systemName: "arrow.uturn.backward").resizable() : t.iconImage
+    }
+    /// a cell's label: the Tool's short title, or Undo on the Clear cell
+    func label(for t: Tool) -> String { t == .clearAnnotations && clearReadsUndo ? "Undo" : t.shortTitle }
+
     /// a tap on Clear: the lens glides from the selected Tool to Clear, the way
     /// selecting a Tool travels, and Clear holds the highlight while the
     /// Annotations fade. With no visible selection the highlight just lands.
     func clearTap() {
+        if clearReadsUndo { AppDelegate.shared?.undoClear(); return }
         let mc = MarkupController.shared
         if !mc.stack.isEmpty || mc.draft != nil, !mc.clearInFlight, let c = cellCentres[.clearAnnotations],
            let sel = s.tool, visibleTools.contains(sel), let from = cellCentres[sel] {
@@ -201,5 +257,65 @@ struct ShakeEffect: GeometryEffect {
     func effectValue(size: CGSize) -> ProjectionTransform {
         let x = ClearFeedback.shakeOffset(progress: Double(shakes - shakes.rounded(.down)))
         return ProjectionTransform(CGAffineTransform(translationX: CGFloat(x), y: 0))
+    }
+}
+
+/// VoiceOver for the Clear cell while it's Undo: one button named "Undo Clear"
+struct UndoClearAccessibility: ViewModifier {
+    let on: Bool
+    func body(content: Content) -> some View {
+        if on {
+            content
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Undo Clear")
+                .accessibilityAddTraits(.isButton)
+                .accessibilityAction { AppDelegate.shared?.undoClear() }
+        } else {
+            content
+        }
+    }
+}
+
+/// The collapsed island's trailing item after a Clear that closed the toolbar:
+/// an Undo glyph inside a ring that drains clockwise from full to empty over
+/// ClearUndo.ring seconds, holding while the pointer is on the island. Under
+/// Reduce Motion the ring gives way to the seconds left beside the glyph,
+/// stepping 3, 2, 1.
+struct UndoRing: View {
+    let undo: ClearUndo
+    var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
+    static let size: CGFloat = 14
+    var body: some View {
+        Group {
+            if reduceMotion {
+                TimelineView(.periodic(from: .now, by: 0.25)) { ctx in
+                    HStack(spacing: 3) {
+                        glyph
+                        Text("\(undo.ringSeconds(at: ctx.date) ?? 0)").font(.system(size: 12)).monospacedDigit()
+                    }
+                    .fixedSize()
+                }
+            } else {
+                TimelineView(.animation) { ctx in
+                    ZStack {
+                        Circle().stroke(.white.opacity(0.25), lineWidth: 1.5)
+                        Circle().trim(from: 0, to: undo.ringLeft(at: ctx.date) ?? 0)
+                            .stroke(.white, style: StrokeStyle(lineWidth: 1.5, lineCap: .round))
+                            // drains from 12 o'clock, clockwise
+                            .rotationEffect(.degrees(-90))
+                            .scaleEffect(x: -1)
+                        glyph
+                    }
+                    .frame(width: Self.size, height: Self.size)
+                }
+            }
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Undo Clear")
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAction { AppDelegate.shared?.undoClear() }
+    }
+    var glyph: some View {
+        Image(systemName: "arrow.uturn.backward").font(.system(size: 7, weight: .bold))
     }
 }

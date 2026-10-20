@@ -2164,7 +2164,8 @@ final class OverlayController {
         toolbarPanels = [:]
         let s = AppState.shared
         if IslandRule.showsIsland(toolbarOpen: s.toolbarOpen, hasAnnotations: !MarkupController.shared.stack.isEmpty,
-                                  recordingIsland: s.recActive && s.showIslandWhileRecording) { showToolbars() }
+                                  recordingIsland: s.recActive && s.showIslandWhileRecording,
+                                  undoRing: MarkupController.shared.clearUndo.holdsIsland(at: .now)) { showToolbars() }
         AppLog.line("chrome: \(toolbarPanels.count) islands, \(recBubblePanels.count) bubbles on \(chromeScreens.count) screens")
     }
     func closeAllPanelsOnly() {
@@ -2880,7 +2881,7 @@ struct ToolbarView: View {
     // and an expand chevron (or the recording dot and time) in ears either side
     // of the notch, so the toolbar is visible while collapsed.
     /// the wide collapsed island: recording dot + time, or the Annotation count
-    var wideIsland: Bool { recording || annotationCount != nil }
+    var wideIsland: Bool { recording || annotationCount != nil || undoRingShown }
     var earW: CGFloat { wideIsland ? 48 : 28 }
     // A fake island sizes like the notched one: the notch-width formula with
     // a 185 pt stand-in notch on displays that don't have one.
@@ -2993,13 +2994,19 @@ struct ToolbarView: View {
                     hoverInside = pointerInside()
                 }
             }
-            .onChange(of: hoverInside) { syncExpanded(); refitOnLeave() }
+            .onChange(of: hoverInside) { syncExpanded(); refitOnLeave()
+                // the pointer on the island holds a Clear's Undo ring (MarkupClear.swift)
+                MarkupController.shared.islandHovered(hoverInside, on: displayIndex)
+            }
+            .onDisappear { MarkupController.shared.islandHovered(false, on: displayIndex) }
             .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded(); refitOnLeave() }
             .onAppear { syncHit(); syncLensBg()
                 // a Markup Tool armed by a Shortcut or the menu expands the new
                 // bar; unarmed bars wait for hover so they don't collapse under
                 // a resting pointer
                 if MarkupController.shared.armed != nil { syncExpanded() }
+                // a Clear's Undo cell is in view as soon as the bar opens
+                if MarkupController.shared.undoOffered, s.tool == nil { openGroup = .markup }
             }
             .onChange(of: rowSize) { syncHit(); syncLensBg() }
             // an armed bar expands only once its row is measured and the panel
@@ -3098,7 +3105,12 @@ struct ToolbarView: View {
                     .frame(width: islandSlot, height: pillH)
             }
             Spacer(minLength: 0)
-            if recording || annotationCount != nil {
+            if !recording, annotationCount == nil, undoRingShown {
+                // a Clear's Undo ring, concentric with the end cap like the leading badge
+                UndoRing(undo: MarkupController.shared.clearUndo)
+                    .padding(.trailing, max(4, (islandSlot - UndoRing.size) / 2))
+                    .frame(height: pillH)
+            } else if recording || annotationCount != nil {
                 // the time/count must never touch the cap or the notch: measure
                 // it and inset its edge like the leading dot's, shrinking the
                 // inset only as far as the glyph itself needs
@@ -3402,7 +3414,7 @@ struct ToolbarView: View {
         // pixel-identical layout to cell() so the lens's copy lines up:
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
-            (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
+            (collapsed ? t.kind.iconImage : icon(for: t)).scaledToFit()
                 .frame(width: iconD, height: iconD)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
@@ -3414,7 +3426,7 @@ struct ToolbarView: View {
                             .offset(x: 6, y: 4)
                     }
                 }
-            Text(collapsed ? t.kind.groupTitle : t.shortTitle)
+            Text(collapsed ? t.kind.groupTitle : label(for: t))
                 .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
                 // the menu chevron rides beside the selected Tool's label —
                 // trailing overlay so the label itself stays centred
@@ -3548,7 +3560,7 @@ struct ToolbarView: View {
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
         return VStack(spacing: 3) {
-            (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
+            (collapsed ? t.kind.iconImage : icon(for: t)).scaledToFit()
                 .frame(width: iconD, height: iconD)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
@@ -3563,7 +3575,7 @@ struct ToolbarView: View {
                             .offset(x: 6, y: 4)
                     }
                 }
-            Text(collapsed ? t.kind.groupTitle : t.shortTitle)
+            Text(collapsed ? t.kind.groupTitle : label(for: t))
                 .font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
                 // the menu chevron rides beside the selected Tool's label —
                 // trailing overlay so the label itself stays centred
@@ -3590,6 +3602,7 @@ struct ToolbarView: View {
             }
             .contentShape(Rectangle()) // whole cell, not just the glyph
             .modifier(NothingToClearCue(refusals: t == .clearAnnotations ? s.clearRefusals : 0))
+            .modifier(UndoClearAccessibility(on: t == .clearAnnotations && clearReadsUndo))
             .overlay(RightClickCatcher { openToolMenu(t) })
             .onGeometryChange(for: CGPoint.self) { $0.frame(in: .named("row")).origin } action: {
                 // keep the whole frame's centre in row space
@@ -3859,6 +3872,10 @@ struct RecControlsView: View {
             recButton(s.recordingPaused ? "play.fill" : "pause.fill",
                       label: s.recordingPaused ? "Resume" : "Pause") { AppDelegate.shared?.togglePause() }
             recButton("stop.fill", label: "Stop") { AppDelegate.shared?.stopRecording() }
+            // for a few seconds after a Clear (MarkupClear.swift)
+            if MarkupController.shared.undoOffered {
+                recButton("arrow.uturn.backward", label: "Undo Clear") { AppDelegate.shared?.undoClear() }
+            }
         }
         .foregroundStyle(.white)
         // the outer circles' edges sit so their centres meet the corner
