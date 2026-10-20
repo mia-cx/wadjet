@@ -14,11 +14,19 @@ final class TextEditorView: NSTextView {
     private lazy var ownUndoManager = UndoManager()
     override var undoManager: UndoManager? { ownUndoManager }
 
+    /// the TextKit 1 stack's root; a view built on its own container doesn't
+    /// own the storage, so the view keeps it alive
+    private let storage = NSTextStorage()
+
     init() {
-        // the container variant is the designated init — it constructs the
-        // TextKit 1 stack (NSTextStorage/NSLayoutManager), which matches
-        // CoreText's word wrapping and line metrics
-        super.init(frame: .zero, textContainer: nil)
+        // TextKit 1 matches CoreText's word wrapping and line metrics. The
+        // stack is built by hand: a nil container here gives a view with no
+        // storage at all, which swallows every keystroke and stays empty
+        let layout = NSLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: NSSize(width: 1e7, height: 1e7))
+        layout.addTextContainer(container)
+        super.init(frame: .zero, textContainer: container)
         isRichText = false
         drawsBackground = false
         allowsUndo = true
