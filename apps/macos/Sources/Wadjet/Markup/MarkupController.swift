@@ -1037,15 +1037,16 @@ final class MarkupController {
             // an end over another Annotation snaps to its attach spot
             let (attached, hover) = attaching(moved, point: moved.attachPoint(for: h), constrained: constrained && shiftConstrained)
             attachHover = hover
-            stack.replace(attached)
+            // an edit of an Annotation attached whole keeps it attached where it lands
+            stack.replaceRebasing(attached)
         case let .recrop(h, start, from):
             guard assets.canRecrop(start),
                   let source = assets.source(for: start)?.bounds else { return }
-            stack.replace(start.recropping(h, from: from, to: p, source: source))
+            stack.replaceRebasing(start.recropping(h, from: from, to: p, source: source))
         case let .pan(start, from):
             guard assets.canRecrop(start),
                   let source = assets.source(for: start)?.bounds else { return }
-            stack.replace(start.panning(from: from, to: p, source: source))
+            stack.replaceRebasing(start.panning(from: from, to: p, source: source))
         case .group, .groupHandle, .marqueeSelect:
             dragGroup(to: p, constrained: constrained)
         case nil:
