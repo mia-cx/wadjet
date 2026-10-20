@@ -25,14 +25,13 @@ using namespace metal;
 
 // Dispersion over a transparent layer: each channel's sample carries its own
 // coverage. Taking alpha from the green sample alone leaves r or b without
-// matching coverage (additive halos, dark edges). Instead unpremultiply each
-// channel by its own sample's alpha and re-premultiply by their mean, so the
-// result stays valid premultiplied colour (every channel <= alpha).
+// matching coverage (additive halos). Keep each channel's premultiplied value
+// as sampled and take the largest of the three alphas: every channel stays
+// <= alpha, and both are continuous as an edge's coverage falls to zero (no
+// per-channel normalisation, which jumps at zero). Where only one channel is
+// covered the others read dark, which is the fringe.
 static half4 disperse(half4 r, half4 g, half4 b) {
-    half a = (r.a + g.a + b.a) / 3.0h;
-    return half4(r.a > 0.0h ? r.r / r.a * a : 0.0h,
-                 g.a > 0.0h ? g.g / g.a * a : 0.0h,
-                 b.a > 0.0h ? b.b / b.a * a : 0.0h, a);
+    return half4(r.r, g.g, b.b, max(max(r.a, g.a), b.a));
 }
 
 [[ stitchable ]] half4 lens(float2 position, SwiftUI::Layer layer,
