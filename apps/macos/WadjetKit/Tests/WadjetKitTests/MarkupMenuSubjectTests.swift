@@ -21,4 +21,13 @@ struct MarkupMenuSubjectTests {
     func subject(armed: ToolID?, kind: AnnotationKind?, expected: MarkupMenuSubject) {
         #expect(MarkupMenuSubject(armed: armed, selected: kind) == expected)
     }
+
+    // Proves several selected Annotations show their kind's Tool when they
+    // share it, and Select's style-only controls when their kinds differ.
+    @Test func several() {
+        let line = AnnotationKind.line(start: .zero, end: CGPoint(x: 10, y: 10))
+        #expect(MarkupMenuSubject(armed: .shapes, selected: [line, .path(PathData())]) == .selected(.draw))
+        #expect(MarkupMenuSubject(armed: .draw, selected: [line, .shape(.ellipse, rect: Self.rect)]) == .selected(nil))
+        #expect(MarkupMenuSubject(armed: .draw, selected: [AnnotationKind]()) == .armed(.draw))
+    }
 }
