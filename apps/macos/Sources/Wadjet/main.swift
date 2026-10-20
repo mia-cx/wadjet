@@ -2869,6 +2869,8 @@ struct ToolbarView: View {
     // is sized from the *measured* row — never a hand-coded width — so the
     // buttons can never be clipped.
     @State var rowSize = CGSize(width: 520, height: 66)
+    /// the expanded row (or Recording controls) has reported its real size
+    @State var rowMeasured = false
     // The row sits rowGap below the menu bar on every display. Notched display:
     // the shape hangs from the top edge and its top band holds the notch.
     // Island: the expanded shape drops below the menu bar, covering none of it.
@@ -2924,7 +2926,8 @@ struct ToolbarView: View {
         // or a non-Markup Tool releases it.
         let pointerOnScreen = screen.map { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? false
         let h = hoverInside || lensActive || (s.openMenu != nil && s.expandedDisplay == displayIndex)
-            || (MarkupController.shared.armed != nil && (s.expandedDisplay == displayIndex || (s.expandedDisplay == nil && pointerOnScreen)))
+            || (MarkupController.shared.armed != nil && rowMeasured
+                && (s.expandedDisplay == displayIndex || (s.expandedDisplay == nil && pointerOnScreen)))
         if h != expanded { AppLog.line("hover d\(displayIndex) -> \(h)") }
         if h { s.expandedDisplay = displayIndex }
         else if s.expandedDisplay == displayIndex { s.expandedDisplay = nil }
@@ -2976,6 +2979,10 @@ struct ToolbarView: View {
                 if MarkupController.shared.armed != nil { syncExpanded() }
             }
             .onChange(of: rowSize) { syncHit(); syncLensBg() }
+            // an armed bar expands only once its row is measured and the panel
+            // sized to it, as on hover: a resize mid-spring re-crops lensBg and
+            // the glass texture jumps
+            .onChange(of: rowMeasured) { if MarkupController.shared.armed != nil { syncExpanded() } }
             .onChange(of: expanded) {
                 if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
                 else {
@@ -3117,7 +3124,7 @@ struct ToolbarView: View {
         RecControlsView(displayIndex: displayIndex, ctrl: ctrl,
                         screenRect: { ctrl.panelScreenRect($0, on: displayIndex) })
             .padding(.top, contentTop)
-            .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0 }
+            .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0; rowMeasured = true }
     }
 
     let toolD: CGFloat = 72
@@ -3611,7 +3618,10 @@ struct ToolbarView: View {
         .fixedSize()
         .contentShape(Rectangle()) // press anywhere in the row, gaps included
         .animation(.smooth(duration: 0.15), value: lensActive) // lens on/off
-        .onGeometryChange(for: CGSize.self) { $0.size } action: { if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH, on: displayIndex); AppLog.line("rowSize d\(displayIndex) -> \($0.debugDescription)") } }
+        .onGeometryChange(for: CGSize.self) { $0.size } action: {
+            if rowSize != $0 { rowSize = $0; ctrl.resizeToolbar(panelW, panelH, on: displayIndex); syncLensBg(); AppLog.line("rowSize d\(displayIndex) -> \($0.debugDescription)") }
+            rowMeasured = true
+        }
         // press = lens pops in under the finger, flick = drag it, hold = menu
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
             .onChanged { v in
