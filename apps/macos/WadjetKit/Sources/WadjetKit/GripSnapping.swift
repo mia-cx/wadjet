@@ -37,7 +37,11 @@ extension Annotation {
     /// right-angle rotations — flips don't change axes
     private func freeAxes(_ handle: SelectionHandle) -> SnapAxes {
         if case .vertex = handle { return .both } // an end moves anywhere
-        guard case let .resize(x, y) = handle else { return [] }
+        let x: Int, y: Int
+        switch handle {
+        case let .resize(hx, hy), let .source(hx, hy): (x, y) = (hx, hy)
+        default: return []
+        }
         let local: SnapAxes
         switch (x != 0, y != 0) {
         case (true, true): return .both
