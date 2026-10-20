@@ -401,7 +401,12 @@ final class EditorCanvasView: NSView {
            e.charactersIgnoringModifiers?.count == 1,
            let key = e.charactersIgnoringModifiers?.first.flatMap(MarkupToolKey.key(typing:)),
            doc.markup.press(key) {
-            markupView.setToolCursor()
+            // only when the pointer rests on the Markup surface, not a toolbar or scroller
+            if let content = window?.contentView,
+               let hit = content.hitTest(content.convert(window!.mouseLocationOutsideOfEventStream, from: nil)),
+               hit === markupView || hit.isDescendant(of: markupView) {
+                markupView.setToolCursor()
+            }
             return
         }
         super.keyDown(with: e)

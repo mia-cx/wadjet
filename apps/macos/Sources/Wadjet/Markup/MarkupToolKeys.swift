@@ -32,8 +32,11 @@ extension MarkupController {
         }
         // a same-Tool variant switch (E/K) arms nothing, so nothing else
         // swaps the cursor under a resting pointer; the Editor refreshes its own
-        if isScreen, AppDelegate.shared?.overlayCtrl.pointerOverUI != true {
-            panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.view.setToolCursor()
+        // — only when a Markup panel is the frontmost window under the pointer,
+        // so the toolbar, menus, and Layers keep their own cursors
+        if isScreen {
+            let front = NSWindow.windowNumber(at: NSEvent.mouseLocation, belowWindowWithWindowNumber: 0)
+            panels.first { $0.windowNumber == front }?.view.setToolCursor()
         }
         AppLog.line("markup key: \(key.character) -> \(tool.title)")
         return true
