@@ -19,13 +19,13 @@ enum Tool: String, CaseIterable {
     case capRegion = "captureRegion", capWindow = "captureWindow", capScreen = "captureScreen"
     case recRegion = "recordRegion", recWindow = "recordWindow", recScreen = "recordScreen"
     case pickColour = "pickColour", copyText = "copyText", measure = "measure"
-    case select = "select", eraser = "eraser", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", freezeRegion = "freezeRegion", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
+    case select = "select", directSelect = "directSelect", eraser = "eraser", draw = "draw", text = "text", shapes = "shapes", counter = "counter", censor = "censor", magnify = "magnify", freezeRegion = "freezeRegion", clearAnnotations = "clearAnnotations", moreMarkup = "moreMarkup"
     var title: String {
         switch self {
         case .capRegion: "Capture Region"; case .capWindow: "Capture Window"; case .capScreen: "Capture Screen"
         case .recRegion: "Record Region"; case .recWindow: "Record Window"; case .recScreen: "Record Screen"
         case .pickColour: "Pick Colour"; case .copyText: "Copy Text"; case .measure: "Measure"
-        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .freezeRegion: "Freeze Region"; case .clearAnnotations: "Clear Annotations"
+        case .select: "Select"; case .directSelect: "Direct Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Step Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .freezeRegion: "Freeze Region"; case .clearAnnotations: "Clear Annotations"
         case .moreMarkup: "More Markup Tools"
         }
     }
@@ -34,7 +34,7 @@ enum Tool: String, CaseIterable {
         switch self {
         case .capRegion, .recRegion: "Region"; case .capWindow, .recWindow: "Window"; case .capScreen, .recScreen: "Screen"
         case .pickColour: "Colour"; case .copyText: "Text"; case .measure: "Measure"
-        case .select: "Select"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .freezeRegion: "Freeze"; case .clearAnnotations: "Clear"
+        case .select: "Select"; case .directSelect: "Direct"; case .eraser: "Eraser"; case .draw: "Draw"; case .text: "Text"; case .shapes: "Shapes"; case .counter: "Counter"; case .censor: "Censor"; case .magnify: "Magnify"; case .freezeRegion: "Freeze"; case .clearAnnotations: "Clear"
         case .moreMarkup: "More"
         }
     }
@@ -53,7 +53,7 @@ enum Tool: String, CaseIterable {
         case .capRegion: "viewfinder"; case .capWindow: "macwindow"; case .capScreen: "display"
         case .recRegion: "viewfinder.circle"; case .recWindow: "macwindow.badge.plus"; case .recScreen: "record.circle"
         case .pickColour: "eyedropper"; case .copyText: "text.viewfinder"; case .measure: "ruler"
-        case .select: "cursorarrow"; case .eraser: "eraser"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .freezeRegion: "snowflake"; case .clearAnnotations: "trash"
+        case .select: "cursorarrow"; case .directSelect: "point.topleft.down.to.point.bottomright.curvepath"; case .eraser: "eraser"; case .draw: "line.diagonal"; case .text: "textformat"; case .shapes: "square.on.circle"; case .counter: "1.circle"; case .censor: "eye.slash"; case .magnify: "plus.magnifyingglass"; case .freezeRegion: "snowflake"; case .clearAnnotations: "trash"
         case .moreMarkup: "ellipsis"
         }
     }
@@ -2214,7 +2214,7 @@ enum WadjetCursors {
         switch t {
         case .capRegion, .recRegion, .copyText, .measure, .draw, .shapes, .counter, .censor, .magnify: return .crosshair
         case .eraser: return MarkupEraser.cursor(zoom: 1)
-        case .select: return .arrow
+        case .select, .directSelect: return .arrow
         case .text: return .iBeam
         case .capWindow, .capScreen: return symbol("camera.fill", centre: true)
         case .freezeRegion: return symbol("snowflake", centre: true) // its window pick's badge
@@ -2626,7 +2626,7 @@ final class OverlayNSView: NSView {
             t.cycleVariant(by: step)
             if let v = s.config.value.markup.armedVariant(of: .freezeRegion) { setFlash(v.title) }
             ctrl?.markOverlaysDirty() // the pick (and dim) follows the armed variant
-        case .copyText, .select, .eraser, .draw, .text, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
+        case .copyText, .select, .directSelect, .eraser, .draw, .text, .shapes, .counter, .censor, .magnify, .clearAnnotations, .moreMarkup: break
         }
     }
     override func mouseDown(with e: NSEvent) {
