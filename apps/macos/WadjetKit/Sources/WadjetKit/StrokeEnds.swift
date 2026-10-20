@@ -59,20 +59,104 @@ extension PathGeometry {
         return p
     }
 
-    /// `segments` with `d` points cut off the last segment's p3 end
-    static func trimmedEnd(_ segments: [Segment], by d: CGFloat) -> [Segment] {
-        var segs = segments
-        guard let last = segs.last else { return segs }
-        segs[segs.count - 1] = last.straight ? last.clippedEnd(by: d) : last.splitEnd(by: d)
-        return segs
+    /// the outward unit direction at the path's p3 end: the chord from the
+    /// point `reach` of arc length back along the stroke to the tip (or from
+    /// the path's start when it's shorter). A freehand stroke ends in 1-pt
+    /// integer steps, so the last segment's own tangent snaps to an axis; the
+    /// chord follows the stroke the arrowhead covers. A straight Line's chord
+    /// is its own direction. Falls back to the tangent when the chord is degenerate
+    static func endOutward(_ segments: [Segment], reach: CGFloat) -> CGPoint {
+        guard let last = segments.last else { return CGPoint(x: 1, y: 0) }
+        return chordOutward(segments, reach: reach) ?? last.endOutward
     }
 
-    /// `segments` with `d` points cut off the first segment's p0 end
-    static func trimmedStart(_ segments: [Segment], by d: CGFloat) -> [Segment] {
-        var segs = segments
-        guard let first = segs.first else { return segs }
-        segs[0] = first.straight ? first.clippedStart(by: d) : first.splitStart(by: d)
-        return segs
+    /// the outward unit direction at the path's p0 end — endOutward's mirror
+    static func startOutward(_ segments: [Segment], reach: CGFloat) -> CGPoint {
+        guard let first = segments.first else { return CGPoint(x: -1, y: 0) }
+        return chordOutward(reversed(segments), reach: reach) ?? first.startOutward
+    }
+
+    /// endOutward's chord, or nil when it's too short to aim
+    private static func chordOutward(_ segments: [Segment], reach: CGFloat) -> CGPoint? {
+        guard let tip = segments.last?.p3 else { return nil }
+        var walked: CGFloat = 0, here = tip, back = tip
+        outer: for s in segments.reversed() {
+            let steps = s.straight ? 1 : 16
+            for i in stride(from: steps - 1, through: 0, by: -1) {
+                let p = s.point(at: CGFloat(i) / CGFloat(steps))
+                let step = hypot(p.x - here.x, p.y - here.y)
+                if walked + step >= reach, step > 0 {
+                    let f = (reach - walked) / step
+                    back = CGPoint(x: here.x + (p.x - here.x) * f, y: here.y + (p.y - here.y) * f)
+                    break outer
+                }
+                walked += step
+                here = p
+                back = p
+            }
+        }
+        return Segment.unit(CGPoint(x: tip.x - back.x, y: tip.y - back.y))
+    }
+
+    /// the same stroke run from p3 back to p0
+    static func reversed(_ segments: [Segment]) -> [Segment] {
+        segments.reversed().map { Segment(p0: $0.p3, c1: $0.c2, c2: $0.c1, p3: $0.p0, straight: $0.straight) }
+    }
+
+    /// `segments` with the end within `d` points of the path's p3 tip cut
+    /// off, across as many segments as that reaches — a freehand stroke's
+    /// last segment is often shorter than `d`. Walking back from the tip, it
+    /// cuts at whichever comes first: the first point `d` from the tip (the
+    /// crossing nearest the tip, when the curve doubles back), or `reach` of
+    /// arc length. The cap keeps the stem joined to a head aimed by
+    /// endOutward(_:reach:): that chord's far end sits on the head's axis, so
+    /// a stroke that curls inside the d-circle can't lose its curl and leave
+    /// the head floating. A path that ends before either collapses to its start
+    static func trimmedEnd(_ segments: [Segment], by d: CGFloat, within reach: CGFloat) -> [Segment] {
+        guard let tip = segments.last?.p3 else { return segments }
+        func far(_ s: Segment, _ t: CGFloat) -> CGFloat {
+            let v = s.point(at: t)
+            return hypot(v.x - tip.x, v.y - tip.y)
+        }
+        var walked: CGFloat = 0
+        for i in segments.indices.reversed() {
+            let s = segments[i]
+            var near: CGFloat = 1, here = s.p3
+            for k in stride(from: 63, through: 0, by: -1) {
+                let t = CGFloat(k) / 64, p = s.point(at: t)
+                let step = hypot(p.x - here.x, p.y - here.y)
+                var cut: CGFloat?
+                if far(s, t) >= d {
+                    // bisect the step for the radial crossing
+                    var lo = t, hi = near
+                    for _ in 0..<40 {
+                        let mid = (lo + hi) / 2
+                        if far(s, mid) > d { lo = mid } else { hi = mid }
+                    }
+                    cut = hi
+                }
+                if walked + step >= reach, step > 0 {
+                    // the arc cap, if it lands nearer the tip than the crossing
+                    let ta = near - (near - t) * (reach - walked) / step
+                    cut = max(cut ?? ta, ta)
+                }
+                if let cut {
+                    var piece = s.split(at: cut).0
+                    piece.straight = s.straight
+                    return Array(segments[..<i]) + [piece]
+                }
+                walked += step
+                here = p
+                near = t
+            }
+        }
+        let a = segments[0].p0
+        return [Segment(p0: a, c1: a, c2: a, p3: a, straight: true)]
+    }
+
+    /// `segments` with the end near the path's p0 cut off — trimmedEnd's mirror
+    static func trimmedStart(_ segments: [Segment], by d: CGFloat, within reach: CGFloat) -> [Segment] {
+        reversed(trimmedEnd(reversed(segments), by: d, within: reach))
     }
 }
 
@@ -115,63 +199,5 @@ extension Segment {
         let d = lerp(a, b), e = lerp(b, c), f = lerp(d, e)
         return (Segment(p0: p0, c1: a, c2: d, p3: f, straight: false),
                 Segment(p0: f, c1: e, c2: c, p3: p3, straight: false))
-    }
-
-    /// the same straight segment with p3 pulled `d` towards p0 (clamped at p0)
-    func clippedEnd(by d: CGFloat) -> Segment {
-        let u = endOutward, len = hypot(p3.x - p0.x, p3.y - p0.y)
-        let p = CGPoint(x: p3.x - u.x * min(d, len), y: p3.y - u.y * min(d, len))
-        return Segment(p0: p0, c1: p0, c2: p, p3: p, straight: true)
-    }
-
-    /// the same straight segment with p0 pushed `d` towards p3 (clamped at p3)
-    func clippedStart(by d: CGFloat) -> Segment {
-        let u = startOutward, len = hypot(p3.x - p0.x, p3.y - p0.y)
-        let p = CGPoint(x: p0.x - u.x * min(d, len), y: p0.y - u.y * min(d, len))
-        return Segment(p0: p, c1: p, c2: p3, p3: p3, straight: true)
-    }
-
-    /// the [0, t] piece where |B(t) − p3| ≈ d — the tail end trimmed off.
-    /// The distance isn't monotone when the curve doubles back, so march back
-    /// from the end until it first reaches d and bisect only that interval —
-    /// the crossing nearest the tip is the one to keep
-    func splitEnd(by d: CGFloat) -> Segment {
-        var near = 1.0
-        for i in stride(from: 63, through: 0, by: -1) {
-            let t = CGFloat(i) / 64
-            let v = point(at: t)
-            if hypot(v.x - p3.x, v.y - p3.y) >= d {
-                var lo = t, hi = near
-                for _ in 0..<40 {
-                    let mid = (lo + hi) / 2
-                    let v = point(at: mid)
-                    if hypot(v.x - p3.x, v.y - p3.y) > d { lo = mid } else { hi = mid }
-                }
-                return split(at: hi).0
-            }
-            near = t
-        }
-        return split(at: 0).0   // the whole segment is shorter than d: trim it all
-    }
-
-    /// the [t, 1] piece where |B(t) − p0| ≈ d — the head end trimmed off;
-    /// splitEnd's mirror, marching out from the start
-    func splitStart(by d: CGFloat) -> Segment {
-        var near = 0.0
-        for i in 1...64 {
-            let t = CGFloat(i) / 64
-            let v = point(at: t)
-            if hypot(v.x - p0.x, v.y - p0.y) >= d {
-                var lo = near, hi = t
-                for _ in 0..<40 {
-                    let mid = (lo + hi) / 2
-                    let v = point(at: mid)
-                    if hypot(v.x - p0.x, v.y - p0.y) < d { lo = mid } else { hi = mid }
-                }
-                return split(at: lo).1
-            }
-            near = t
-        }
-        return split(at: 1).1   // the whole segment is shorter than d: trim it all
     }
 }

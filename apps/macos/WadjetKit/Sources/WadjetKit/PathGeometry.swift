@@ -161,24 +161,26 @@ public enum PathGeometry {
     /// ends, and a closed path's fill — all in screen coordinates. Closed
     /// paths get no ends and no trim; filled kinds draw nothing here
     public static func drawing(for a: Annotation) -> AnnotationDrawing {
-        let segments = a.kind.segments, w = a.style.width
+        let segments = a.kind.segments, w = a.style.width, reach = headLength(width: w)
         let closed = a.kind.isClosed
         let ends = CGMutablePath()
         var strokeSegments = segments
+        // each end aims along the stroke its arrowhead covers, not the last
+        // control vector — see endOutward(_:reach:)
         if !closed, let last = segments.last {
-            let u = last.endOutward, n = CGPoint(x: -u.y, y: u.x)
+            let u = endOutward(segments, reach: reach), n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.head, at: last.p3, u: u, n: n, width: w))
             if a.style.head == .filledArrow {
-                strokeSegments = trimmedEnd(strokeSegments, by: headLength(width: w) / 2)
+                strokeSegments = trimmedEnd(strokeSegments, by: reach / 2, within: reach)
             }
         }
         // tangents come from the untrimmed geometry, and the tail's mark sits
         // at the untrimmed start even if the head's trim reached it
         if !closed, let first = segments.first {
-            let u = first.startOutward, n = CGPoint(x: -u.y, y: u.x)
+            let u = startOutward(segments, reach: reach), n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.tail, at: first.p0, u: u, n: n, width: w))
             if a.style.tail == .filledArrow {
-                strokeSegments = trimmedStart(strokeSegments, by: headLength(width: w) / 2)
+                strokeSegments = trimmedStart(strokeSegments, by: reach / 2, within: reach)
             }
         }
         var t = a.affineTransform
@@ -192,7 +194,7 @@ public enum PathGeometry {
 
     /// the area an Annotation paints, as one path: its fill when it fills an
     /// area (`fillsArea` — filled kinds and windows), ∪ its stroked outline
-    /// when `strokeColour` is (∪ a Line's filled
+    /// (trimmed as drawn) when `strokeColour` is (∪ a Line's filled
     /// end marks), ∪ for a Magnify the magnifier's silhouette (∪ that
     /// silhouette stroked at style.width when it carries a border). Use it
     /// where "does it paint here" matters — retention, coverage masks — where
@@ -204,10 +206,16 @@ public enum PathGeometry {
             covered = covered.union(p, using: .winding)
         }
         if a.strokeColour != nil {
-            covered = covered.union(p.copy(strokingWithWidth: a.style.width,
+            // a stroke's drawing is trimmed under a filled arrow, whose head
+            // and tail paint past the stroke's path
+            let d = drawing(for: a)
+            let stroke: CGPath = switch a.kind {
+            case .line, .path: d.stroke
+            default: p
+            }
+            covered = covered.union(stroke.copy(strokingWithWidth: a.style.width,
                 lineCap: .round, lineJoin: .round, miterLimit: 10), using: .winding)
-            // a filled arrow's head and tail paint past the stroke's path
-            covered = covered.union(drawing(for: a).ends, using: .winding)
+            covered = covered.union(d.ends, using: .winding)
         }
         if case let .magnify(m) = a.kind {
             let silhouette = m.options.shape.path(in: m.frame)

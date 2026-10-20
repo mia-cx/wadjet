@@ -249,4 +249,74 @@ struct PathGeometryTests {
         #expect(ends.contains(CGPoint(x: 100, y: -4)))
         #expect(!ends.contains(CGPoint(x: 96, y: 0)))
     }
+
+    // a freehand stroke ends in 1-pt integer steps: a diagonal Brush stroke
+    // whose first and last samples step along an axis must still aim both
+    // arrows along the stroke (±(1,1)/√2), not along that final step's axis
+    @Test func freehandArrowsFollowTheStroke() {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        style.head = .filledArrow
+        style.tail = .filledArrow
+        let raw = [CGPoint(x: -1, y: 0)] + (0...60).map { CGPoint(x: $0, y: $0) } + [CGPoint(x: 61, y: 60)]
+        let a = Annotation(kind: .path(PathData.fitted(raw, smoothing: 0.5)!), style: style)
+        let ends = PathGeometry.drawing(for: a).ends
+        let d = 12 / 2.0.squareRoot()
+        // 12 pt back along the diagonal sits inside each head; 12 pt back along
+        // the axis (where the old, axis-aimed head sat) falls outside
+        #expect(ends.contains(CGPoint(x: 61 - d, y: 60 - d)))
+        #expect(!ends.contains(CGPoint(x: 61 - 12, y: 60)))
+        #expect(ends.contains(CGPoint(x: -1 + d, y: d)))
+        #expect(!ends.contains(CGPoint(x: -1 + 12, y: 0)))
+    }
+
+    // a filled arrow's trim reaches past a last segment shorter than the trim:
+    // the stroke stops L/2 = 9 pt from each tip, not 1 pt
+    @Test func filledArrowTrimsAcrossSegments() {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        style.head = .filledArrow
+        style.tail = .filledArrow
+        let a = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: CGPoint(x: -1, y: 0)), PathNode(anchor: .zero),
+            PathNode(anchor: CGPoint(x: 60, y: 60)), PathNode(anchor: CGPoint(x: 61, y: 60)),
+        ])), style: style)
+        let stroke = PathGeometry.drawing(for: a).stroke
+        var first: CGPoint?
+        stroke.applyWithBlock { e in
+            if first == nil { first = e.pointee.points.pointee }
+        }
+        let end = stroke.currentPoint
+        #expect(abs(hypot(end.x - 61, end.y - 60) - 9) < 0.5)
+        #expect(first != nil)
+        #expect(abs(hypot(first!.x + 1, first!.y) - 9) < 0.5)
+    }
+
+    // a stroke that curls inside the trim circle just before its tip: a
+    // purely radial trim would cut the whole curl and leave the stem ending
+    // ~8 pt from a head aimed along the curl. The stem must still reach the
+    // head, at the head (tip (0,0)) and, reversed, at the tail
+    @Test(arguments: [true, false])
+    func curledEndKeepsStemOnTheHead(head: Bool) {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        if head { style.head = .filledArrow } else { style.tail = .filledArrow }
+        let points = [CGPoint(x: 0, y: -20), CGPoint(x: 0, y: -9), CGPoint(x: -8, y: 0),
+                      CGPoint(x: 4, y: 4), CGPoint(x: 0, y: 0)]
+        let nodes = (head ? points : points.reversed()).map { PathNode(anchor: $0) }
+        let d = PathGeometry.drawing(for: Annotation(kind: .path(PathData(nodes: nodes)), style: style))
+        let body = d.stroke.copy(strokingWithWidth: 4, lineCap: .round, lineJoin: .round, miterLimit: 10)
+        #expect(body.intersects(d.ends))
+    }
+
+    // coverage follows what paints: a filled head aimed along the stroke's
+    // last 18 pt trims the stroke at (-4.1, 8), so the corner at (0, 8) —
+    // outside the head — is no longer covered
+    @Test func coverageUsesTheTrimmedStroke() {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        style.head = .filledArrow
+        let a = Annotation(kind: .path(PathData(nodes: [
+            CGPoint(x: -18, y: 8), CGPoint(x: -8, y: 8), CGPoint(x: 0, y: 8), .zero,
+        ].map { PathNode(anchor: $0) })), style: style)
+        let covered = PathGeometry.coverage(for: a)
+        #expect(!covered.contains(CGPoint(x: 0, y: 8)))
+        #expect(covered.contains(CGPoint(x: -8, y: 8)))
+    }
 }
