@@ -432,6 +432,18 @@ final class MarkupController {
     /// above whatever is up — the Freeze Frame included
     func raise() { panels.forEach { $0.orderFrontRegardless() } }
 
+    /// for the log: whether this display's Markup panel sits in front of the
+    /// Freeze panel `freeze`, read from the window server's front-to-back
+    /// order; nil while no Markup panel is up
+    func stackingNote(over freeze: NSWindow) -> String? {
+        guard let mp = panels.first(where: { $0.frame == freeze.frame }) else { return nil }
+        let order = (NSWindow.windowNumbers(options: []) ?? []).map(\.intValue)
+        let m = order.firstIndex(of: mp.windowNumber), f = order.firstIndex(of: freeze.windowNumber)
+        let above = m.flatMap { m in f.map { m < $0 } }
+        return "markup stacking: annotations \(above.map { $0 ? "above" : "BELOW" } ?? "unlisted") the Freeze Frame"
+            + " (levels \(mp.level.rawValue)/\(freeze.level.rawValue), visible=\(mp.isVisible), key=\(NSApp.keyWindow === freeze ? "freeze" : NSApp.keyWindow === mp ? "markup" : "other"))"
+    }
+
     /// display hotplug: rebuild the panels on the new screen set
     func screensChanged() {
         commitEditing()
