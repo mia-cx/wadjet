@@ -5,7 +5,7 @@ import Foundation
 /// A value, so a controller can compare the old and new selection and tell
 /// its observers. The rules for what a press, a marquee, or Select All does
 /// follow Adobe Illustrator's Selection tool.
-public struct AnnotationSelection: Equatable, Sendable, Sequence {
+public struct AnnotationSelection: Equatable, Sendable, Sequence, ExpressibleByArrayLiteral {
     public private(set) var ids: [Annotation.ID]
 
     /// duplicates keep their first place
@@ -13,6 +13,8 @@ public struct AnnotationSelection: Equatable, Sendable, Sequence {
         var seen = Set<Annotation.ID>()
         self.ids = ids.filter { seen.insert($0).inserted }
     }
+
+    public init(arrayLiteral ids: Annotation.ID...) { self.init(ids) }
 
     public var isEmpty: Bool { ids.isEmpty }
     public var count: Int { ids.count }
