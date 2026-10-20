@@ -83,6 +83,19 @@ struct PathInsertionTests {
         #expect(Self.deviation(a, from: b) < 0.05)
     }
 
+    // Proves a press inside a filled closed path adds nothing — the body still
+    // moves it — while a press on its stroke adds a node
+    @Test func filledBodyIsNotTheStroke() {
+        var style = Self.style
+        style.fill = style.colour
+        let square = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero), PathNode(anchor: CGPoint(x: 200, y: 0)),
+            PathNode(anchor: CGPoint(x: 200, y: 200)), PathNode(anchor: CGPoint(x: 0, y: 200))], closed: true)),
+                                style: style)
+        #expect(square.insertingNode(near: CGPoint(x: 40, y: 40), within: 4) == nil)
+        #expect(square.insertingNode(near: CGPoint(x: 40, y: 3), within: 4)?.node == 1)
+    }
+
     // Proves a press on an existing node, or on a kind without nodes, adds nothing
     @Test func nothingToAdd() {
         let line = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: Self.style)

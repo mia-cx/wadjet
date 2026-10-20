@@ -507,8 +507,9 @@ extension Annotation {
         switch set {
         case .frame: frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .placed:
-            frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
-                + handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
+            // the bend first: where it lands on a frame grip, a tie picks it
+            handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
+                + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .points: handles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
     }

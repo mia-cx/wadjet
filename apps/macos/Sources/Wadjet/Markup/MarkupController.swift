@@ -819,7 +819,8 @@ final class MarkupController {
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
             // the node joins the stack now; the press's gesture snapshot makes
             // the insertion and its drag one undo step
-            if insertingNodes, sel.kind.insertsNodes, let (a, i) = sel.insertingNode(near: p) {
+            if insertingNodes, sel.kind.insertsNodes,
+               let (a, i) = sel.insertingNode(near: p, within: Self.hitTolerance / zoom) {
                 stack.replace(a)
                 gesture = .handle(.vertex(i), a, from: p)
                 render()
@@ -840,7 +841,8 @@ final class MarkupController {
         if sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
                       rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil { return .arrow }
         guard PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) else { return nil }
-        return armed == .draw && sel.kind.insertsNodes ? .openHand : .arrow
+        return armed == .draw && sel.kind.insertsNodes
+            && sel.insertingNode(near: p, within: Self.hitTolerance / zoom) != nil ? .openHand : .arrow
     }
 
     /// a Step counter click places on the spot — there's no drag. ⌥-click on a

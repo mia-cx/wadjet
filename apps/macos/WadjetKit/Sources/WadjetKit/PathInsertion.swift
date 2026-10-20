@@ -17,8 +17,10 @@ extension Annotation {
     /// Casteljau, so the curve keeps its shape. A Line turns into an open
     /// path with the same ends; a Brush stroke drops its samples, because a
     /// refit would discard the node. nil for kinds without nodes, or when the
-    /// nearest spot is an existing node.
-    public func insertingNode(near point: CGPoint) -> (annotation: Annotation, node: Int)? {
+    /// nearest spot is an existing node, or more than `tolerance` past the
+    /// stroke's edge.
+    public func insertingNode(near point: CGPoint,
+                              within tolerance: CGFloat = .infinity) -> (annotation: Annotation, node: Int)? {
         var data: PathData
         switch kind {
         case let .line(start, end, .none):
@@ -40,6 +42,12 @@ extension Annotation {
         let q = point.applying(affineTransform.inverted())
         let segs = AnnotationKind.path(data).segments
         guard let (i, t) = Self.nearest(on: segs, to: q) else { return nil }
+        // only a press on the stroke adds one: not inside a filled path's body
+        let seg0 = segs[i]
+        let onStroke = (seg0.straight
+            ? CGPoint(x: seg0.p0.x + (seg0.p3.x - seg0.p0.x) * t, y: seg0.p0.y + (seg0.p3.y - seg0.p0.y) * t)
+            : seg0.point(at: t)).applying(affineTransform)
+        guard hypot(onStroke.x - point.x, onStroke.y - point.y) <= tolerance + style.width / 2 else { return nil }
         // a spot on an existing node adds nothing
         let tEnd: CGFloat = 1e-3
         guard t > tEnd, t < 1 - tEnd else { return nil }

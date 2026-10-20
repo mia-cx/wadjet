@@ -247,13 +247,21 @@ struct AnnotationTransformTests {
     @Test func placedLineGrips() {
         let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 40)), style: style)
         let hs = a.handles(.placed, minExtent: 12, rotateOffset: 20)
-        #expect(hs.map(\.handle) == [.resize(x: -1, y: -1), .resize(x: -1, y: 1), .resize(x: 1, y: -1),
+        #expect(hs.map(\.handle) == [.bend, .resize(x: -1, y: -1), .resize(x: -1, y: 1), .resize(x: 1, y: -1),
                                       .resize(x: 1, y: 1), .resize(x: 0, y: -1), .resize(x: 0, y: 1),
-                                      .resize(x: -1, y: 0), .resize(x: 1, y: 0), .rotate, .bend])
-        #expect(near(hs.last!.at, CGPoint(x: 50, y: 20)))
+                                      .resize(x: -1, y: 0), .resize(x: 1, y: 0), .rotate])
+        #expect(near(hs[0].at, CGPoint(x: 50, y: 20)))
         let bent = a.dragging(.bend, from: CGPoint(x: 50, y: 20), to: CGPoint(x: 50, y: 60))
         guard case let .line(_, _, b) = bent.kind else { Issue.record(); return }
         #expect(b.map { near($0, CGPoint(x: 50, y: 60)) } == true)
+    }
+
+    // Proves a bent Line's bend stays reachable where it sits on the frame's
+    // top-midpoint grip: (0,0)→(100,0) bent through (50,40) puts both there
+    @Test func placedBendWinsATieWithAFrameGrip() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0), bend: CGPoint(x: 50, y: 40)),
+                           style: style)
+        #expect(a.handle(at: CGPoint(x: 50, y: 40), radius: 6, minExtent: 12, rotateOffset: 20, set: .placed) == .bend)
     }
 
     // dragging a vertex moves only that end; the press needn't land dead-on —
