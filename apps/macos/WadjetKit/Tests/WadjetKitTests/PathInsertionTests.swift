@@ -71,6 +71,22 @@ struct PathInsertionTests {
         #expect(d.nodes.allSatisfy { $0.anchor.y == 0 && $0.handleIn == nil && $0.handleOut == nil })
     }
 
+    // Proves a node added inside a filled arrowhead's trim leaves the drawn
+    // arrow as it was: the stem still stops short of the tip, the head is the same
+    @Test func nearEndInsertionKeepsTheArrow() throws {
+        var style = Self.style
+        style.width = 24
+        style.head = .filledArrow
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let (b, _) = try #require(a.insertingNode(near: CGPoint(x: 93, y: 0)))
+        let before = PathGeometry.drawing(for: a), after = PathGeometry.drawing(for: b)
+        func same(_ r: CGRect, _ s: CGRect) -> Bool {
+            abs(r.minX - s.minX) < 0.01 && abs(r.maxX - s.maxX) < 0.01 && abs(r.minY - s.minY) < 0.01 && abs(r.maxY - s.maxY) < 0.01
+        }
+        #expect(same(before.stroke.boundingBoxOfPath, after.stroke.boundingBoxOfPath))
+        #expect(same(before.ends.boundingBoxOfPath, after.ends.boundingBoxOfPath))
+    }
+
     // Proves a Brush stroke drops its samples, so the Smoothing slider can't
     // refit the new node away
     @Test func brushDropsSamples() throws {
