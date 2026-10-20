@@ -47,7 +47,9 @@ extension Annotation {
         let onStroke = (seg0.straight
             ? CGPoint(x: seg0.p0.x + (seg0.p3.x - seg0.p0.x) * t, y: seg0.p0.y + (seg0.p3.y - seg0.p0.y) * t)
             : seg0.point(at: t)).applying(affineTransform)
-        guard hypot(onStroke.x - point.x, onStroke.y - point.y) <= tolerance + style.width / 2 else { return nil }
+        // a stroke switched off paints no width, as hitTest counts it
+        let halfWidth = strokeColour == nil ? 0 : style.width / 2
+        guard hypot(onStroke.x - point.x, onStroke.y - point.y) <= tolerance + halfWidth else { return nil }
         // a spot on an existing node adds nothing
         let tEnd: CGFloat = 1e-3
         guard t > tEnd, t < 1 - tEnd else { return nil }

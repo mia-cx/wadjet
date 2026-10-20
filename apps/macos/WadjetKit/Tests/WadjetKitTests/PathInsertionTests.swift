@@ -110,6 +110,11 @@ struct PathInsertionTests {
                                 style: style)
         #expect(square.insertingNode(near: CGPoint(x: 40, y: 40), within: 4) == nil)
         #expect(square.insertingNode(near: CGPoint(x: 40, y: 3), within: 4)?.node == 1)
+        // Stroke off keeps its stored width, but that width paints nothing
+        var fillOnly = square
+        fillOnly.style.width = 24
+        fillOnly.style.stroked = false
+        #expect(fillOnly.insertingNode(near: CGPoint(x: 40, y: 12), within: 4) == nil)
     }
 
     // Proves a press on an existing node, or on a kind without nodes, adds nothing
