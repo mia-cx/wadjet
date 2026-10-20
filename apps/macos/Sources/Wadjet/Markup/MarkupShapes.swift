@@ -7,40 +7,54 @@ import WadjetKit
 @MainActor enum MarkupShapes {
     private static var config: ConfigStore<WadjetConfig> { AppState.shared.config }
 
-    /// the selected shape's variant, else the configured one, else .rectangle
+    /// the selected shapes' kinds, back to front
+    static var selectedShapes: [ShapeKind] {
+        MarkupController.active.selectedAnnotations.compactMap {
+            if case let .shape(k, _) = $0.kind { k } else { nil }
+        }
+    }
+    /// the selected shapes are of different variants — no variant tile is lit
+    static var variantMixed: Bool { Mixed(selectedShapes.map(\.variant))?.isMixed == true }
+
+    /// the first selected shape's variant, else the configured one, else .rectangle
     static var variant: ShapeVariant {
-        if case let .shape(k, _) = MarkupController.active.selected?.kind { return k.variant }
+        if let k = selectedShapes.first { return k.variant }
         return config.value.markup.tools["shapes"]?.variant.flatMap(ShapeVariant.init) ?? .rectangle
     }
 
-    /// a selected shape turns into the variant (keeping its rect and style);
-    /// with no shape selected it becomes the variant new shapes draw
+    /// every selected shape turns into the variant (keeping its rect and
+    /// style); with no shape selected it becomes the variant new shapes draw
     static func pick(_ v: ShapeVariant) {
-        guard var a = MarkupController.active.selected,
-              case let .shape(_, rect) = a.kind else {
+        guard !selectedShapes.isEmpty else {
             config.update { $0.markup.tools["shapes", default: .init()].variant = v.rawValue }
             return
         }
-        a.kind = .shape(shape(for: v), rect: rect)
-        MarkupController.active.transformSelection { _ in a }
+        let k = shape(for: v)
+        setEach { $0.variant == v ? $0 : k }
     }
 
-    /// the selected shape's kind if it's this variant, else
+    /// the first selected shape's kind if it's this variant, else
     /// `markup.tools.<v>.shape`, else v.defaultShape
     static func shape(for v: ShapeVariant) -> ShapeKind {
-        if case let .shape(k, _) = MarkupController.active.selected?.kind, k.variant == v { return k }
+        if let k = selectedShapes.first(where: { $0.variant == v }) { return k }
         return config.value.markup.tools[v.rawValue]?.shape ?? v.defaultShape
     }
 
-    /// edits the selected shape's option (via
+    /// edits every selected shape's option (via
     /// MarkupController.transformSelection), or the remembered one for its variant
     static func setShape(_ k: ShapeKind) {
-        if var a = MarkupController.active.selected, case let .shape(_, rect) = a.kind {
-            a.kind = .shape(k, rect: rect)
-            MarkupController.active.transformSelection { _ in a }
-            return
-        }
+        guard selectedShapes.isEmpty else { setEach { _ in k }; return }
         config.update { $0.markup.tools[k.variant.rawValue, default: .init()].shape = k }
+    }
+
+    /// each selected shape's kind replaced, its rect kept — one undo step
+    private static func setEach(_ change: (ShapeKind) -> ShapeKind) {
+        MarkupController.active.transformSelection { a in
+            guard case let .shape(k, rect) = a.kind else { return a }
+            var a = a
+            a.kind = .shape(change(k), rect: rect)
+            return a
+        }
     }
 }
 
@@ -61,7 +75,7 @@ struct ShapeVariantControls: View {
             HStack(spacing: 0) {
                 ForEach(ShapeVariant.allCases, id: \.self) { v in
                     MenuTile(icon: v.symbol, caption: v.title,
-                             on: MarkupShapes.variant == v) {
+                             on: !MarkupShapes.variantMixed && MarkupShapes.variant == v) {
                         MarkupShapes.pick(v)
                         ctrl.fitMenu() // the option sliders change with the variant
                     }
@@ -126,21 +140,29 @@ struct ShapePaintControls: View {
     let ctrl: OverlayController
     var styles: MarkupStyles { .shared }
     var style: AnnotationStyle { styles.style(for: tool) }
+    var shared: AnnotationStyle.Shared? { MarkupController.active.sharedStyle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Rectangle().fill(.white.opacity(0.15)).frame(height: 0.5)
                 .padding(.horizontal, 20).padding(.vertical, 3)
-            MenuRow(title: "Stroke", icon: "square", on: style.stroked, isToggle: true) {
+            // a mixed toggle reads off, and turns every selected shape's on
+            let strokeMixed = shared?.stroked.isMixed == true
+            let fillMixed = Mixed((MarkupController.active.selectedAnnotations).map { $0.style.fill != nil })?.isMixed == true
+            MenuRow(title: "Stroke", subtitle: strokeMixed ? "Mixed" : nil, icon: "square",
+                    on: !strokeMixed && style.stroked, isToggle: true) {
+                let on = strokeMixed || !style.stroked
                 styles.restyle(tool) { st in
-                    st.stroked.toggle()
+                    st.stroked = on
                     if !st.stroked, st.fill == nil { st.fill = st.colour }
                 }
                 ctrl.fitMenu() // dropping the stroke can bring in the fill colour row
             }
-            MenuRow(title: "Fill", icon: "square.fill", on: style.fill != nil, isToggle: true) {
+            MenuRow(title: "Fill", subtitle: fillMixed ? "Mixed" : nil, icon: "square.fill",
+                    on: !fillMixed && style.fill != nil, isToggle: true) {
+                let on = fillMixed || style.fill == nil
                 styles.restyle(tool) { st in
-                    if st.fill == nil { st.fill = st.colour }
+                    if on { if st.fill == nil { st.fill = st.colour } }
                     else { st.fill = nil; st.stroked = true }
                 }
                 ctrl.fitMenu() // the fill colour row appears or leaves below

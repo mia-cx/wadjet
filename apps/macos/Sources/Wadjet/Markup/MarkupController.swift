@@ -78,6 +78,13 @@ final class MarkupController {
         case anchors([Annotation.ID: (start: Annotation, indices: Set<Int>)], from: CGPoint)
         /// Direct Select's marquee; release selects the anchors inside
         case marquee(from: CGPoint, to: CGPoint, adding: Bool)
+        /// selected Annotations dragged together, each at its drag-start state;
+        /// `duplicate` (⌥ at the press) copies them once the pointer moves
+        case group([Annotation], from: CGPoint, duplicate: Bool)
+        /// a grip on a multi-selection's shared bounding box
+        case groupHandle(SelectionHandle, [Annotation], from: CGPoint)
+        /// Select's marquee over empty canvas; release selects what it touches
+        case marqueeSelect(from: CGPoint, to: CGPoint, adding: Bool)
     }
     /// an in-progress Pen path and the pointer's latest position for its preview
     @ObservationIgnored private var pen: (builder: PenBuilder, id: Annotation.ID, style: AnnotationStyle)?
@@ -106,24 +113,35 @@ final class MarkupController {
     /// the image-kind Annotation in recrop mode — a double-click enters, Escape
     /// or a click outside ends; `nil` unless it is also the selection
     private(set) var cropping: Annotation.ID?
-    private(set) var selection: Annotation.ID? {
+    /// the selected Annotations' ids, in the order they joined — a click,
+    /// Shift-click, marquee, Select All, or the Layers window builds it.
+    /// Every change re-renders and reaches `onSelectionChange`.
+    private(set) var selection = AnnotationSelection() {
         didSet {
             if selection != oldValue { cropping = nil }
-            if selection == nil { nodes.clear() }
-            if isScreen, selection == nil, AppState.shared.openMenu?.kind == .markup {
+            if selection.isEmpty { nodes.clear() }
+            if isScreen, selection.isEmpty, AppState.shared.openMenu?.kind == .markup {
                 AppState.shared.openMenu = nil
                 AppDelegate.shared?.overlayCtrl.syncMenu()
-            } else if isScreen, selection != nil, selection != oldValue,
+            } else if isScreen, !selection.isEmpty, selection != oldValue,
                       AppState.shared.openMenu?.kind == .markup {
-                // the menu's rows follow the new selection's kind — refit the panel
+                // the menu's rows follow the new selection's kinds — refit the panel
                 AppDelegate.shared?.overlayCtrl.fitMenu()
             }
+            if selection != oldValue { selectionChanged() }
             render()
         }
     }
     /// Direct Select's shown and selected anchors — MarkupDirectSelect.swift
     @ObservationIgnored var nodes = NodeSelection()
-    var selected: Annotation? { selection.flatMap { id in stack.annotations.first { $0.id == id } } }
+    /// selection observers by token — `observeSelection` in MarkupSelection.swift
+    @ObservationIgnored var selectionObservers: [UUID: (AnnotationSelection) -> Void] = [:]
+    /// the first selected Annotation — what a Tool menu seeds its controls
+    /// from; with several selected, `shared` tells where they disagree
+    var selected: Annotation? { selection.ids.first.flatMap { id in stack.annotations.first { $0.id == id } } }
+    /// the one selected Annotation, nil when none or several are — grips,
+    /// recrop, re-editing text, and Magnify's scroll work on one at a time
+    var single: Annotation? { selection.single.flatMap { id in stack.annotations.first { $0.id == id } } }
     /// the text Annotation being edited in place, if any — the editor logic
     /// lives in MarkupTextEditor.swift; the menu reads this
     private(set) var editing: Annotation.ID?
@@ -133,7 +151,7 @@ final class MarkupController {
         didSet {
             guard cmdHeld != oldValue else { return }
             showSelectionAnchors() // what ⌘ selected shows its anchors on release
-            if selection != nil { render() } // the grips follow
+            if !selection.isEmpty { render() } // the grips follow
         }
     }
     var selecting: Bool { armed == .select || armed == .directSelect || cmdHeld }
@@ -145,7 +163,7 @@ final class MarkupController {
     var gripSet: GripSet { directSelecting ? .points : selecting ? .frame : .placed }
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
-    @ObservationIgnored private var snapper: MarkupSnapper?
+    @ObservationIgnored var snapper: MarkupSnapper?
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
@@ -259,8 +277,9 @@ final class MarkupController {
     }
     private func restore(_ s: LayerStack) {
         stack = s
-        // gone, hidden, or locked: none of those can stay the selection
-        if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
+        // gone, hidden, or locked: none of those can stay selected
+        let kept = selection.pruned(to: s.annotations)
+        if kept != selection { selection = kept }
         if let id = cropping, !s.annotations.contains(where: { $0.id == id }) { cropping = nil }
         nodes.prune(to: s.annotations)
         syncPanels(); render()
@@ -274,7 +293,7 @@ final class MarkupController {
         commitGesture(); gesture = nil
         // a Tool switch commits a Pen path or a text session in progress
         if tool != armed { finishPen(); commitEditing() }
-        if tool == nil { selection = nil; cmdHeld = false }
+        if tool == nil { selection = []; cmdHeld = false }
         if tool != armed { nodes.clear() } // anchors belong to Direct Select
         armed = tool
         showSelectionAnchors()
@@ -308,7 +327,7 @@ final class MarkupController {
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
             closeScroll() // an open phased scroll is its own step too
-            gesture = nil; selection = nil; cmdHeld = false; snapper = nil
+            gesture = nil; selection = []; cmdHeld = false; snapper = nil
             counterNext = nil; cropping = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
@@ -321,8 +340,11 @@ final class MarkupController {
                 if AppDelegate.shared?.overlayCtrl.pointerOverUI != true {
                     self.panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.view.setToolCursor()
                 }
-                // ⇧/⌥ mid-drag reshape a Shapes draft without the pointer moving
+                // ⇧/⌥ mid-drag reshape a Shapes draft or a group resize without the pointer moving
                 if case .drawing = self.gesture { self.drag(to: NSEvent.mouseLocation) }
+                if case .groupHandle = self.gesture {
+                    self.drag(to: NSEvent.mouseLocation, constrained: e.modifierFlags.contains(.shift))
+                }
                 // ⇧ snaps the Knife's cut to 45° mid-drag, and releases it
                 if case .cutting = self.gesture {
                     self.drag(to: NSEvent.mouseLocation,
@@ -336,7 +358,9 @@ final class MarkupController {
                 if e.keyCode == 36 || e.keyCode == 76, self.finishPen() { return nil }
                 // arrows nudge Direct Select's anchors
                 if let d = Self.nudge(for: e), self.editing == nil, self.nudgeAnchors(by: d) { return nil }
-                guard e.keyCode == 51 || e.keyCode == 117, self.selection != nil, self.editing == nil else { return e }
+                                // ⌘A, ⌘C/⌘X/⌘D, arrows nudging — MarkupSelection.swift
+                if self.editing == nil, self.handleSelectionKey(e) { return nil }
+                guard e.keyCode == 51 || e.keyCode == 117, !self.selection.isEmpty, self.editing == nil else { return e }
                 self.deleteSelection()
                 return nil
             }
@@ -404,7 +428,7 @@ final class MarkupController {
         commitEditing()
         textEditStart = nil; textSavedDuringSession = false
         commitGesture()
-        gesture = nil; snapper = nil; selection = nil; counterNext = nil
+        gesture = nil; snapper = nil; selection = []; counterNext = nil
         // the Pen preview dies with the stack it wasn't part of — clear it
         // before the edit renders
         pen = nil; penHover = nil
@@ -419,19 +443,9 @@ final class MarkupController {
         syncPanels(); render()
     }
 
-    /// the selected Annotation's style; setting restyles it alone — the seam the
-    /// Tool menu's style tiles hook into
-    var selectedStyle: AnnotationStyle? {
-        get { selected?.style }
-        set {
-            guard var a = selected, let newValue else { return }
-            a = a.restyled(newValue)
-            // a mid-edit restyle folds into the text session's one undo step
-            if editing != nil { mutateUnrecorded { $0.replace(a) } }
-            else { edit { $0.replace(a) } }
-            AppLog.line("markup: restyled selection")
-        }
-    }
+    /// the first selected Annotation's style — the seam the Tool menu's
+    /// style tiles read; `sharedStyle` says which fields the selection disagrees on
+    var selectedStyle: AnnotationStyle? { selected?.style }
 
     /// restyles one Annotation by id — the eyedropper's target, whose selection
     /// Pick Colour's disarm cleared; `colourPicked` turns an image kind's border on
@@ -455,58 +469,52 @@ final class MarkupController {
         AppLog.line("markup: restyled selection")
     }
 
-    /// edits the selection's ImagePlacement (corner radius, border) — one undo step
+    /// edits every selected image kind's ImagePlacement (corner radius, border) — one undo step
     func updateSelectedPlacement(_ change: (inout ImagePlacement) -> Void) {
-        guard var a = selected, var p = a.placement else { return }
-        change(&p)
-        a.placement = p
-        edit { $0.replace(a) }
+        transformSelection { a in
+            guard var p = a.placement else { return a }
+            var a = a
+            change(&p)
+            a.placement = p
+            return a
+        }
     }
 
-    /// apply a value transform (rotate/flip) to the selection
+    /// applies a value change to each selected Annotation on its own — one undo step
     func transformSelection(_ f: (Annotation) -> Annotation) {
-        guard let a = selected else { return }
-        edit { $0.replace(f(a)) }
+        let changed = selectedAnnotations.map(f)
+        guard !changed.isEmpty else { return }
+        edit { s in changed.forEach { s.replace($0) } }
         AppLog.line("markup: transformed selection")
     }
 
-    /// ⌘] / ⌘[ / ⇧⌘] / ⇧⌘[ move the selection through the stack
+    /// ⌘] / ⌘[ / ⇧⌘] / ⇧⌘[ move the selection through the stack, keeping
+    /// the selected Annotations' order among themselves
     func restackSelection(_ move: LayerStack.Restack) {
-        guard let id = selection else { return }
-        edit { $0.restack(id, move) }
+        guard !selection.isEmpty else { return }
+        edit { $0.restack(selection.set, move) }
         AppLog.line("markup: restacked selection \(move)")
     }
 
-    /// the Layers window's drag: `index` is back-to-front
-    func moveLayer(_ id: Annotation.ID, to index: Int) {
-        edit { $0.move(id, to: index) }
+    /// the Layers window's drag: the stack's new back-to-front order, one undo step
+    func reorderLayers(_ order: [Annotation.ID]) {
+        edit { s in for (i, id) in order.enumerated() { s.move(id, to: i) } }
     }
 
-    /// hide/lock from the Layers window — a hidden or locked selection can't stay selected
+    /// hide/lock from the Layers window — a hidden or locked Annotation can't stay selected
     func update(_ a: Annotation) {
         edit { $0.replace(a) }
-        if a.hidden || a.locked, selection == a.id { selection = nil }
-    }
-
-    /// the Layers window's row tap: nil deselects; a real id arms Select first
-    /// if nothing is armed, then selects — hidden and locked Annotations refuse
-    func select(_ id: Annotation.ID?) {
-        guard let id else { deselect(); return }
-        guard let a = stack.annotations.first(where: { $0.id == id }), !a.hidden, !a.locked else { return }
-        if armed == nil { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
-        guard armed != nil else { return }
-        // the anchors first: the selection's didSet renders
-        nodes.clear()
-        if directSelecting, a.kind.hasAnchors { nodes.show(id, adding: false) }
-        selection = id
+        if a.hidden || a.locked, selection.contains(a.id) { selection = selection.removing(a.id) }
     }
 
     /// the clipboard's image or Canvas centred on `p`, selected, Select armed —
     /// ⌘V routes here while the toolbar is open; the panels forward drops too
     @discardableResult
     func paste(from pb: NSPasteboard, at p: CGPoint) -> Bool {
-        guard (isScreen ? AppState.shared.toolbarOpen : true),
-              let content = MarkupPasteboard.read(pb) else {
+        guard isScreen ? AppState.shared.toolbarOpen : true else { return false }
+        // Annotations copied with ⌘C come back as Annotations
+        if pasteAnnotations(from: pb, at: p) { return true }
+        guard let content = MarkupPasteboard.read(pb) else {
             AppLog.line("markup: nothing readable on the clipboard")
             return false
         }
@@ -525,7 +533,7 @@ final class MarkupController {
         let a = imageAnnotation(content, frame: Self.centred(size, at: p, within: limit))
         edit { $0.add(a) }
         syncPanels()
-        selection = a.id
+        selection = [a.id]
         if armed != .select { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
         AppLog.line("markup: pasted \(content.label)")
         return true
@@ -598,7 +606,7 @@ final class MarkupController {
             // so its commitGesture can't re-record the region into the path's step
             gestureStart?.addAtBottom(a)
             syncPanels()
-            if armed == .select { selection = a.id }
+            if armed == .select { selection = [a.id] }
             AppLog.line("markup: froze region \(canvas.crop.debugDescription) as \(name)")
             return
         }
@@ -624,18 +632,18 @@ final class MarkupController {
     /// true when there was a selection to drop
     @discardableResult
     func deselect() -> Bool {
-        guard selection != nil || !nodes.isEmpty else { return false }
+        guard !selection.isEmpty || !nodes.isEmpty else { return false }
         nodes.clear()
-        selection = nil
+        selection = []
         AppLog.line("markup: deselected")
         return true
     }
 
     func deleteSelection() {
         if deleteAnchors() { return }
-        guard let id = selection else { return }
-        edit { $0.remove(id: id) }
-        selection = nil
+        guard !selection.isEmpty else { return }
+        edit { $0.remove(ids: selection.ids) }
+        selection = []
         AppLog.line("markup: deleted selection")
     }
 
@@ -687,7 +695,9 @@ final class MarkupController {
         textSavedDuringSession = true
     }
     func setEditing(_ id: Annotation.ID?) { editing = id }
-    func setSelection(_ id: Annotation.ID?) { selection = id }
+    func setSelection(_ ids: AnnotationSelection) { selection = ids }
+    /// a drag in flight rewrites these Annotations; its gesture snapshot records the step
+    func replaceDuringGesture(_ annotations: [Annotation]) { for a in annotations { stack.replace(a) } }
     /// the panel whose screen holds `p`
     func panel(containing p: CGPoint) -> MarkupPanel? {
         panels.first { $0.screen?.frame.contains(p) == true }
@@ -706,12 +716,12 @@ final class MarkupController {
         gestureStart = stack
         if cropping != nil {
             // recrop in flight: grips resize the crop, inside pans, outside ends it
-            if let sel = selected, let h = sel.handle(at: p, radius: Self.handleHitRadius,
+            if let sel = single, let h = sel.handle(at: p, radius: Self.handleHitRadius,
                     minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset), case .resize = h {
                 gesture = .recrop(h, sel, from: p)
                 return
             }
-            if let sel = selected, PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
+            if let sel = single, PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance) {
                 gesture = .pan(sel, from: p)
                 return
             }
@@ -733,7 +743,7 @@ final class MarkupController {
                 startEditing(hit.id)
                 return
             }
-            if let sel = selected {
+            if let sel = single {
                 // a double-click inside an image kind enters recrop — unless
                 // its source is gone and only the persisted snapshot shows
                 if clickCount == 2, sel.placement != nil, assets.canRecrop(sel),
@@ -742,31 +752,41 @@ final class MarkupController {
                     render()
                     return
                 }
-                if grabSelection(at: p) { return }
+                // ⇧ on a grip constrains its drag; ⇧ on the body toggles it out below
+                if !constrained || sel.handle(at: p, radius: Self.handleHitRadius / zoom,
+                                              minExtent: Self.handleMinExtent / zoom,
+                                              rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil,
+                   grabSelection(at: p) { return }
             }
-            if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom) {
-                selection = hit.id
-                AppLog.line("markup: selected")
-                snapper = MarkupSnapper(stack: stack, excluding: hit.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-                gesture = Self.moveGesture(hit, at: p)
-            } else {
-                selection = nil
+            // the shared box's grips, or the body of any selected Annotation
+            if grabGroup(at: p, shift: constrained) { return }
+            // Illustrator's press: ⇧ toggles the hit in or out, a plain press
+            // selects it alone; on empty canvas a marquee starts, adding under ⇧
+            let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom)
+            selection = selection.clicking(hit?.id, shift: constrained)
+            guard let hit else {
+                gesture = .marqueeSelect(from: p, to: p, adding: constrained)
+                return
             }
+            AppLog.line("markup: \(selection.contains(hit.id) ? "selected" : "deselected") (\(selection.count))")
+            guard !constrained, let sel = single else { return }
+            snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
+            gesture = optionDuplicateGesture([sel], at: p) ?? Self.moveGesture(sel, at: p)
             return
         }
         // what a placing Tool just placed stays selected: a press on its grips
         // or body adjusts it; a press anywhere else deselects and places anew
         if editsSelection() {
-            if clickCount == 2, let sel = selected, case .text = sel.kind,
+            if clickCount == 2, let sel = single, case .text = sel.kind,
                PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
                 gestureStart = nil // the text session records its own one step
                 startEditing(sel.id)
                 return
             }
-            if grabSelection(at: p, insertingNodes: armed == .draw) { return }
+            if grabSelection(at: p, insertingNodes: armed == .draw) || grabGroup(at: p, shift: false) { return }
         }
         // a new Annotation takes the Tool's style and options, not the selection's
-        selection = nil
+        selection = []
         if armed == .draw, MarkupStyles.shared.drawVariant.isBrush {
             // Brush: collect samples while the pointer is down; the preview
             // draws them as an open polyline of corner nodes
@@ -837,7 +857,7 @@ final class MarkupController {
     /// not mid Pen path (its presses add nodes), not for the Eraser (it places
     /// nothing), and not for a Counter's ⌥-click (it picks a sequence)
     private func editsSelection() -> Bool {
-        guard selection != nil, pen == nil, armed != nil, armed != .eraser else { return false }
+        guard !selection.isEmpty, pen == nil, armed != nil, armed != .eraser else { return false }
         return !(armed == .counter && NSEvent.modifierFlags.contains(.option))
     }
 
@@ -845,7 +865,7 @@ final class MarkupController {
     /// it; false when the press missed it. `insertingNodes` (the Draw Tool):
     /// a press on a Line's or path's stroke adds a node there and drags it
     func grabSelection(at p: CGPoint, insertingNodes: Bool = false) -> Bool {
-        guard let sel = selected else { return false }
+        guard let sel = single else { return false }
         if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                               minExtent: Self.handleMinExtent / zoom,
                               rotateOffset: Self.rotateOffset / zoom, set: gripSet) {
@@ -865,17 +885,19 @@ final class MarkupController {
                 AppLog.line("markup: added a node")
                 return true
             }
-            gesture = Self.moveGesture(sel, at: p)
+            gesture = (selecting ? optionDuplicateGesture([sel], at: p) : nil) ?? Self.moveGesture(sel, at: p)
             return true
         }
         return false
     }
 
     /// the cursor over the selection where a placing Tool's press adjusts it
-    /// rather than placing: the arrow on its grips and body, the open hand on
-    /// a stroke the Draw Tool adds nodes to; nil elsewhere
+    /// rather than placing: the arrow on its grips and body (a multi-selection's
+    /// shared box and members included), the open hand on a stroke the Draw
+    /// Tool adds nodes to; nil elsewhere
     func selectionCursor(at p: CGPoint) -> NSCursor? {
-        guard !selecting, editing == nil, editsSelection(), let sel = selected else { return nil }
+        guard !selecting, editing == nil, editsSelection() else { return nil }
+        guard let sel = single else { return overGroup(at: p) ? .arrow : nil }
         if sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
                       rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil { return .arrow }
         guard PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) else { return nil }
@@ -903,7 +925,7 @@ final class MarkupController {
                                           value: value, format: format),
                            style: MarkupStyles.shared.style(for: .counter))
         stack.add(a)
-        selection = a.id // stays selected for editing; selection's didSet renders
+        selection = [a.id] // stays selected for editing; selection's didSet renders
         AppLog.line("markup: placed counter \(format.label(value))")
     }
     /// `constrained` = Shift held: drawing and end drags snap to 45°
@@ -1004,6 +1026,8 @@ final class MarkupController {
             guard assets.canRecrop(start),
                   let source = assets.source(for: start)?.bounds else { return }
             stack.replace(start.panning(from: from, to: p, source: source))
+        case .group, .groupHandle, .marqueeSelect:
+            dragGroup(to: p, constrained: constrained)
         case nil:
             return
         }
@@ -1018,7 +1042,7 @@ final class MarkupController {
                 var a = d
                 a.kind = .path(fitted)
                 stack.add(a)
-                selection = a.id // stays selected for editing, the Tool still armed
+                selection = [a.id] // stays selected for editing, the Tool still armed
             }
             commitGesture() // the stroke's whole drag is its one undo step
             render()
@@ -1027,6 +1051,12 @@ final class MarkupController {
         if case .pen = gesture {
             gesture = nil
             if pen?.builder.path.closed == true { finishPen() } else { render() }
+            return
+        }
+        if case let .marqueeSelect(from, to, adding) = gesture {
+            gesture = nil
+            gestureStart = nil // a marquee changes the selection, not the stack
+            endMarqueeSelect(from: from, to: to, adding: adding)
             return
         }
         if case let .erasing(sweep) = gesture {
@@ -1071,7 +1101,7 @@ final class MarkupController {
             }
             if drawn {
                 stack.add(d)
-                selection = d.id // stays selected for editing, the Tool still armed
+                selection = [d.id] // stays selected for editing, the Tool still armed
             }
         }
         commitGesture()
@@ -1091,7 +1121,8 @@ final class MarkupController {
         switch gesture {
         case nil, .pen, .brush: break
         case .drawing, .moving, .movingSource, .handle, .recrop, .pan, .erasing, .cutting,
-             .anchors, .marquee: commitGesture()
+             .anchors, .marquee,
+             .group, .groupHandle, .marqueeSelect: commitGesture()
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
@@ -1100,7 +1131,7 @@ final class MarkupController {
             // carry this one
             edit { $0.add(a) }
             // stays selected for editing while a Tool is armed
-            if armed != nil { selection = a.id }
+            if armed != nil { selection = [a.id] }
             AppLog.line("markup: finished pen path (\(data.nodes.count) nodes)")
         }
         gestureStart = nil // the path's presses left no drag to commit
@@ -1113,8 +1144,10 @@ final class MarkupController {
     /// the Smoothing slider's selection seam: refits a selected Brush stroke
     /// from its kept samples, in place
     func refitSelection(smoothing: CGFloat) {
-        guard let a = selected, case let .path(d) = a.kind, d.rawPoints != nil else { return }
-        edit { $0.replace(a.refitted(smoothing: smoothing)) }
+        transformSelection { a in
+            guard case let .path(d) = a.kind, d.rawPoints != nil else { return a }
+            return a.refitted(smoothing: smoothing)
+        }
     }
 
     /// the pointer moved: only the Pen rubber-band preview cares
@@ -1160,7 +1193,7 @@ final class MarkupController {
             }
             return applyScroll(e, to: a)
         }
-        guard gesture == nil, let a = selected, case .magnify(let m) = a.kind,
+        guard gesture == nil, let a = single, case .magnify(let m) = a.kind,
               m.options.shape.path(in: m.frame).contains(p) else { return false }
         if e.momentumPhase != [] { return true } // a trackpad fling isn't input — swallow it
         if e.phase == .began { gestureStart = stack; scrollResidual = 0; scrolling = a.id }
@@ -1199,8 +1232,8 @@ final class MarkupController {
         let dimmed: Set<Annotation.ID> = if case let .erasing(s) = gesture { s.marked } else { [] }
         let shown = stack.annotations.filter { !$0.hidden } + [draft].compactMap { $0 }
         guard isScreen else {
-            surface?.show(shown, selection: selected, editing: editing,
-                          cropping: cropping, dimmed: dimmed)
+            surface?.show(shown, selection: single, editing: editing,
+                          cropping: cropping, dimmed: dimmed, group: groupChrome)
             surface?.showGuides(guides)
             syncEditor()
             return
@@ -1218,8 +1251,8 @@ final class MarkupController {
         AppDelegate.shared?.recOutput?.overlay?.refresh() // a still recorded window sends no new frame
         ScreenSamples.shared.watch(shown.compactMap(\.sampledRect))
         for p in panels {
-            p.view.show(shown, selection: selected, editing: editing,
-                        cropping: cropping, dimmed: dimmed)
+            p.view.show(shown, selection: single, editing: editing,
+                        cropping: cropping, dimmed: dimmed, group: groupChrome)
             p.view.showGuides(guides)
         }
         PeerThrough.shared.sync()

@@ -30,8 +30,10 @@ final class LayersPanel: NSPanel {
 /// LayerStack's back-to-front order
 struct LayersView: View {
     let annotations: [Annotation]                 // back to front, as LayerStack holds them
-    @Binding var selection: Annotation.ID?
-    let move: (Annotation.ID, Int) -> Void        // to a back-to-front index
+    /// ⌘-click and ⇧-click pick several rows, as in Finder
+    @Binding var selection: Set<Annotation.ID>
+    /// the stack's new back-to-front order after a row drag — every selected row moves together
+    let reorder: ([Annotation.ID]) -> Void
     let update: (Annotation) -> Void
     /// a `.window` row's name and thumbnail come from the layer it names
     var windowLayers: [UUID: CanvasWindowLayer] = [:]
@@ -49,11 +51,9 @@ struct LayersView: View {
                         .selectionDisabled(a.hidden || a.locked)
                 }
                 .onMove { from, to in
-                    guard let i = from.first else { return }
                     var ids = rows.map(\.id)
                     ids.move(fromOffsets: from, toOffset: to)
-                    guard let f = ids.firstIndex(of: rows[i].id) else { return }
-                    move(rows[i].id, rows.count - 1 - f)
+                    reorder(ids.reversed())
                 }
             }
             .listStyle(.inset)
@@ -246,8 +246,8 @@ private struct MarkupLayersList: View {
     var body: some View {
         let c = MarkupController.shared
         LayersView(annotations: c.stack.annotations,
-                   selection: Binding(get: { c.selection }, set: { c.select($0) }),
-                   move: c.moveLayer,
+                   selection: Binding(get: { c.selection.set }, set: { c.select($0) }),
+                   reorder: c.reorderLayers,
                    update: c.update)
     }
 }

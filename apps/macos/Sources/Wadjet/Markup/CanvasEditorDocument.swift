@@ -194,7 +194,7 @@ final class CanvasEditorDocument: NSDocument {
         // Copy is the Canvas's only while no Annotation is selected — a selected
         // Annotation's Copy belongs to its view
         if item.action == #selector(CanvasEditorDocument.copy(_:)) {
-            return markupCached?.selection == nil
+            return markupCached?.selection.isEmpty ?? true
         }
         if isStorePackage,
            item.action == #selector(NSDocument.rename(_:))

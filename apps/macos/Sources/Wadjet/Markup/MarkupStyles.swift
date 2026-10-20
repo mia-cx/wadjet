@@ -33,8 +33,8 @@ final class MarkupStyles {
     /// coloured border on); with nothing selected the change becomes the
     /// Tool's default for new Annotations.
     func restyle(_ tool: Tool, colourPicked: Bool = false, _ change: (inout AnnotationStyle) -> Void) {
-        if let id = MarkupController.active.selection {
-            MarkupController.active.restyle(id, colourPicked: colourPicked, change)
+        if !MarkupController.active.selection.isEmpty {
+            MarkupController.active.restyleSelection(colourPicked: colourPicked, change)
             return
         }
         config.update {
@@ -62,7 +62,7 @@ final class MarkupStyles {
     /// with a Brush stroke selected the slider refits it; otherwise it sets
     /// the variant's default for new strokes
     func setSmoothing(_ s: Double, for tool: Tool) {
-        if let a = MarkupController.active.selected, case let .path(d) = a.kind, d.rawPoints != nil {
+        if MarkupController.active.selectedAnnotations.contains(where: \.isBrushStroke) {
             MarkupController.active.refitSelection(smoothing: CGFloat(s))
             return
         }
@@ -102,7 +102,7 @@ final class MarkupStyles {
     /// colour, which Annotation it restyles (the selection Pick Colour's disarm
     /// clears), and whether it started on the live toolbar (a Freeze Frame it
     /// must drop)
-    private(set) var eyedropper: (tool: Tool, target: ColourTarget, annotation: Annotation.ID?, live: Bool)?
+    private(set) var eyedropper: (tool: Tool, target: ColourTarget, annotations: AnnotationSelection, live: Bool)?
 
     /// hands the pointer to Pick Colour: from .frozen it switches Tool on the
     /// same Freeze Frame, from .toolbar it takes one and opens Pick Colour.
@@ -124,7 +124,7 @@ final class MarkupStyles {
         // the menu's Tool follows the selection (Select's menu shows a selected
         // Line's Draw controls); the pick returns to the Tool actually armed
         let armed = MarkupController.active.armed ?? tool
-        eyedropper = (armed, target, annotation: MarkupController.active.selection, live: s.phase == .toolbar)
+        eyedropper = (armed, target, annotations: MarkupController.active.selection, live: s.phase == .toolbar)
         s.openMenu = nil; AppDelegate.shared?.overlayCtrl.syncMenu()
         AppDelegate.shared?.trigger(.pickColour)
     }
@@ -133,11 +133,11 @@ final class MarkupStyles {
     func pick(_ c: RGB8) -> Bool {
         guard let e = eyedropper else { return false }
         let colour = RGBAColour(red: Double(c.r) / 255, green: Double(c.g) / 255, blue: Double(c.b) / 255, alpha: 1)
-        if let id = e.annotation {
+        if !e.annotations.isEmpty {
             if e.target == .border {
-                MarkupMagnify.setOptions(of: id) { $0.border = colour }
+                for id in e.annotations { MarkupMagnify.setOptions(of: id) { $0.border = colour } }
             } else {
-                MarkupController.active.restyle(id, colourPicked: true) { $0.setColour(colour, for: e.target) }
+                MarkupController.active.restyle(e.annotations, colourPicked: true) { $0.setColour(colour, for: e.target) }
             }
             config.update { $0.markup.recordColour(colour.hex) }
         } else {
@@ -181,6 +181,14 @@ final class MarkupStyles {
             eyedropper = nil
         default: break
         }
+    }
+}
+
+extension Annotation {
+    /// a fitted Brush stroke that kept its samples — Smoothing refits it
+    var isBrushStroke: Bool {
+        if case let .path(d) = kind { return d.rawPoints != nil }
+        return false
     }
 }
 

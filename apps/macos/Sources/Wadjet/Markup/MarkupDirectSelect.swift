@@ -37,7 +37,7 @@ extension MarkupController {
             return
         case let .grip(id, h)?:
             guard let a = stack.annotations.first(where: { $0.id == id }) else { return }
-            setSelection(id)
+            setSelection([id])
             gesture = .handle(h, a, from: p)
             return
         case nil:
@@ -47,13 +47,13 @@ extension MarkupController {
         if let sel = selected, !sel.kind.hasAnchors, grabSelection(at: p) { return }
         guard let hit = stack.topmost(at: p, tolerance: tol) else {
             // empty space: a marquee, which keeps the selection only with Shift
-            if !adding { nodes.clear(); setSelection(nil) }
+            if !adding { nodes.clear(); setSelection([]) }
             gesture = .marquee(from: p, to: p, adding: adding)
             return
         }
         guard hit.kind.hasAnchors else {
             nodes.clear()
-            setSelection(hit.id)
+            setSelection([hit.id])
             gesture = Self.moveGesture(hit, at: p)
             return
         }
@@ -65,7 +65,7 @@ extension MarkupController {
             return
         }
         nodes.show(hit.id, adding: adding)
-        setSelection(hit.id)
+        setSelection(adding ? selection.adding([hit.id]) : [hit.id])
         // a segment drags its two anchors; anywhere else in the body, the whole
         if let seg = hit.segment(at: p, tolerance: tol) {
             gesture = .anchors([hit.id: (hit, seg.anchors)], from: p)
@@ -78,7 +78,7 @@ extension MarkupController {
     /// Illustrator's anchor press, then a drag that carries every selected anchor
     private func pressAnchor(_ ref: AnchorRef, at p: CGPoint, adding: Bool) {
         nodes.press(ref, adding: adding)
-        setSelection(ref.id)
+        setSelection(adding ? selection.adding([ref.id]) : [ref.id])
         if nodes.anchors.contains(ref) {
             var starts: [Annotation.ID: (start: Annotation, indices: Set<Int>)] = [:]
             for a in stack.annotations where nodes.shown.contains(a.id) {
@@ -127,7 +127,8 @@ extension MarkupController {
         nodes.prune(to: stack.annotations)
         // the anchor indices shifted: nothing stays selected, the paths stay shown
         nodes.deselectAnchors()
-        if let id = selection, !stack.annotations.contains(where: { $0.id == id }) { setSelection(nodes.shown.last) }
+        let kept = selection.pruned(to: stack.annotations)
+        setSelection(kept.isEmpty ? AnnotationSelection(nodes.shown.last.map { [$0] } ?? []) : kept)
         render()
         AppLog.line("markup: deleted anchors")
         return true
