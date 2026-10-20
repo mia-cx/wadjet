@@ -35,6 +35,8 @@ struct CanvasEditorToolbar: View {
     @State var menuTool: Tool? = nil
     /// the slider's drag-start value — the undo step's before
     @State var radiusStart: CGFloat = 0
+    /// bumped by each Clear with nothing to clear — the Clear cell shakes
+    @State var clearRefusals = 0
 
     var markup: MarkupController { doc.markup }
     /// the screen toolbar's catalogue without More (its menu arms screen
@@ -106,7 +108,8 @@ struct CanvasEditorToolbar: View {
         let armed = markup.armed == t
         return Button {
             if t.isAction {
-                markup.clear()
+                // the Annotations fade out, then clear as one undo step
+                if markup.fadeOutThenClear() == .nothingToClear { clearRefusals += 1 }
             } else if armed {
                 if t.hasMenu { menuTool = t }
             } else {
@@ -120,6 +123,7 @@ struct CanvasEditorToolbar: View {
             }
             .foregroundStyle(armed ? Color.wadjetAccent : .white)
             .frame(width: 64, height: 64)
+            .modifier(NothingToClearCue(refusals: t.isAction ? clearRefusals : 0))
             // colour icons can't take the accent, so an accent ring marks the armed Tool
             .background {
                 if armed {

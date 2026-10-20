@@ -6,7 +6,8 @@ import WadjetKit
 /// ⌘V paste) as Carbon hot keys — the same seam Escape uses — and the
 /// unmodified Markup Tool Keys (V Select, P Pen, R Rectangle, …) as a local
 /// key monitor, so the apps underneath keep their own keys the rest of the
-/// time. Command keys are live while the toolbar is open; the letters only
+/// time. Command keys are live while the toolbar is open (⌘Z alone also
+/// for a few seconds after a Clear closes it); the letters only
 /// while a Freeze Frame is up or a Markup Tool is armed. Both suspend while
 /// typing lives on a Markup surface. Keys follow the current keyboard layout:
 /// a character means wherever that character is typed, not the ANSI key
@@ -32,7 +33,10 @@ final class MarkupKeys {
     ]
     private var commandRefs: [EventHotKeyRef] = []
     private var toolMonitor: Any?
-    private var commandsRegistered = false
+    /// which command keys are registered: none, ⌘Z alone (a Clear's undo
+    /// grace after the toolbar closed), or all of them
+    private enum CommandSet { case none, undo, all }
+    private var commandSet = CommandSet.none
     private var toolsRegistered = false
     private var handlerInstalled = false
     private init() {
@@ -45,9 +49,11 @@ final class MarkupKeys {
     }
 
     /// the two sets register and unregister independently — command keys with
-    /// the toolbar, tool keys while a Freeze Frame or an armed Markup Tool is up
-    func sync(commands: Bool, tools: Bool) {
-        if commands != commandsRegistered { commands ? registerCommands() : unregisterCommands() }
+    /// the toolbar, tool keys while a Freeze Frame or an armed Markup Tool is up.
+    /// `undo` keeps ⌘Z alone bound while the toolbar is closed
+    func sync(commands: Bool, undo: Bool = false, tools: Bool) {
+        let want: CommandSet = commands ? .all : undo ? .undo : .none
+        if want != commandSet { unregisterCommands(); registerCommands(want) }
         if tools != toolsRegistered { tools ? registerTools() : unregisterTools() }
     }
 
@@ -90,10 +96,11 @@ final class MarkupKeys {
         }, 1, &type, nil, nil)
     }
 
-    private func registerCommands() {
+    private func registerCommands(_ set: CommandSet) {
+        guard set != .none else { return }
         installHandler()
         var failed: [String] = []
-        for (i, k) in Self.keys.enumerated() {
+        for (i, k) in Self.keys.enumerated() where set == .all || i == 0 { // row 0 is ⌘Z
             var ref: EventHotKeyRef?
             let err = RegisterEventHotKey(UInt32(Self.keyCode(typing: k.character) ?? k.fallback), UInt32(k.modifiers),
                                           EventHotKeyID(signature: Self.signature, id: UInt32(i)),
@@ -101,15 +108,16 @@ final class MarkupKeys {
             if let ref { commandRefs.append(ref) }
             if err != noErr { failed.append("\(i) err=\(err)") }
         }
-        commandsRegistered = true
-        AppLog.line(failed.isEmpty ? "markup keys registered"
+        commandSet = set
+        AppLog.line(failed.isEmpty ? "markup keys registered\(set == .undo ? " (undo only)" : "")"
                     : "markup keys: \(failed.count) of \(Self.keys.count) failed (\(failed.joined(separator: ", ")))")
     }
 
     private func unregisterCommands() {
+        guard commandSet != .none else { return }
         for r in commandRefs { UnregisterEventHotKey(r) }
         commandRefs = []
-        commandsRegistered = false
+        commandSet = .none
         AppLog.line("markup keys unregistered")
     }
 
@@ -162,7 +170,8 @@ final class MarkupKeys {
     /// the keyboard layout changed: re-resolve the command keys (the tool
     /// keys read each event's characters, so they follow on their own)
     private func relayout() {
-        if commandsRegistered { unregisterCommands(); registerCommands() }
+        let set = commandSet
+        if set != .none { unregisterCommands(); registerCommands(set) }
     }
 
     fileprivate func fire(_ id: Int) {
