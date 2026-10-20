@@ -443,7 +443,7 @@ final class EditorCanvasView: NSView {
     override func flagsChanged(with e: NSEvent) {
         doc.markup.cmdHeld = e.modifierFlags.contains(.command)
         markupView.setToolCursor()
-        if doc.markup.draft != nil || doc.markup.reshapesOnModifiers {
+        if doc.markup.draft != nil || doc.markup.reshapesOnModifiers || doc.markup.attachDragInFlight {
             doc.markup.drag(to: markupView.canvasPoint(fromScreen: NSEvent.mouseLocation),
                             constrained: e.modifierFlags.contains(.shift))
         }

@@ -164,6 +164,10 @@ final class MarkupController {
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored var snapper: MarkupSnapper?
+    /// what a dragged end is over and would attach to (MarkupAttach.swift)
+    @ObservationIgnored var attachHover: AttachHover?
+    /// a grip drag on an end that can attach is in flight
+    var draggingAttachable: Bool { draggedAttachPoint != nil }
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
@@ -349,6 +353,10 @@ final class MarkupController {
                 if case .cutting = self.gesture {
                     self.drag(to: NSEvent.mouseLocation,
                               constrained: e.modifierFlags.contains(.shift))
+                }
+                // Control/⌘ suppress attaching and ⇧ constrains an end mid-drag
+                if self.attachDragInFlight {
+                    self.drag(to: NSEvent.mouseLocation, constrained: e.modifierFlags.contains(.shift))
                 }
                 return e
             }
@@ -870,7 +878,8 @@ final class MarkupController {
                               minExtent: Self.handleMinExtent / zoom,
                               rotateOffset: Self.rotateOffset / zoom, set: gripSet) {
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-            gesture = .handle(h, sel, from: p)
+            // dragging an attached end carries it away; the drop may attach it again
+            gesture = .handle(h, sel.attachPoint(for: h).map { sel.detaching($0) } ?? sel, from: p)
             return true
         }
         if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
@@ -1010,15 +1019,19 @@ final class MarkupController {
             // would leave the ray — vertex ends and Pen tangents both;
             // on an image kind's resize grip ⇧ stretches the aspect instead
             let shiftConstrained = switch h { case .vertex, .tangent: true; default: false }
-            if constrained, shiftConstrained {
-                stack.replace(start.dragging(h, from: from, to: p, constrained: true))
+            let moved = if constrained, shiftConstrained {
+                start.dragging(h, from: from, to: p, constrained: true)
             } else {
                 // the grip follows the pointer's delta whether or not it snaps
-                stack.replace(snapper?.dragging(start, h, from: from, to: p, stretch: constrained)
+                snapper?.dragging(start, h, from: from, to: p, stretch: constrained)
                     ?? start.dragging(h, from: from, to: p, stretch: constrained,
                                       minExtent: Self.handleMinExtent, rotateOffset: Self.rotateOffset,
-                                      targets: [], range: 0, skip: true).annotation)
+                                      targets: [], range: 0, skip: true).annotation
             }
+            // an end over another Annotation snaps to its attach spot
+            let (attached, hover) = attaching(moved, point: moved.attachPoint(for: h), constrained: constrained && shiftConstrained)
+            attachHover = hover
+            stack.replace(attached)
         case let .recrop(h, start, from):
             guard assets.canRecrop(start),
                   let source = assets.source(for: start)?.bounds else { return }
@@ -1105,6 +1118,12 @@ final class MarkupController {
                 selection = [d.id] // stays selected for editing, the Tool still armed
             }
         }
+        // a dragged end dropped on an attach spot attaches there, in the drag's undo step
+        if let (id, point) = draggedAttachPoint, let spot = attachHover?.snapped, !attachSuppressed {
+            stack.attach(id, point, to: spot.target, at: spot.anchor)
+            AppLog.line("markup: attached \(point)")
+        }
+        attachHover = nil
         commitGesture()
         gesture = nil
         snapper = nil
@@ -1164,7 +1183,10 @@ final class MarkupController {
     /// a press on a Magnify outside its magnifier box drags the source, not the frame
     static func moveGesture(_ a: Annotation, at p: CGPoint) -> Gesture {
         guard case let .magnify(m) = a.kind,
-              !m.options.shape.path(in: m.frame).contains(p) else { return .moving(a, from: p) }
+              !m.options.shape.path(in: m.frame).contains(p) else {
+            // moved on its own, an Annotation lets go of what it was attached to
+            return .moving(a.freed, from: p)
+        }
         return .movingSource(a, from: p)
     }
 
@@ -1239,6 +1261,7 @@ final class MarkupController {
             surface?.show(shown, selection: single, editing: editing,
                           cropping: cropping, dimmed: dimmed, group: groupChrome)
             surface?.showGuides(guides)
+            surface?.showAttach(attachHover)
             syncEditor()
             return
         }
@@ -1258,6 +1281,7 @@ final class MarkupController {
             p.view.show(shown, selection: single, editing: editing,
                         cropping: cropping, dimmed: dimmed, group: groupChrome)
             p.view.showGuides(guides)
+            p.view.showAttach(attachHover)
         }
         PeerThrough.shared.sync()
         syncEditor()
