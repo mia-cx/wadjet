@@ -339,7 +339,7 @@ final class EditorCanvasView: NSView {
     }
 
     /// Magnifies in an Editor sample what flatten draws: the Canvas's displays
-    /// plus the windows beneath each one, at the window's backing scale so
+    /// plus the layers beneath each one, at the window's backing scale so
     /// they stay crisp
     private func magnifierSource() -> MagnifierLayers? {
         let canvas = doc.canvas
@@ -348,9 +348,10 @@ final class EditorCanvasView: NSView {
         }
         guard !sources.isEmpty else { return nil }
         return MagnifierLayers(staticSources: sources, scale: window?.backingScaleFactor ?? 2) {
-            windows, rect, scale in
+            [weak doc = self.doc] layers, rect, scale in
             do {
-                return try canvas.beneathSource(windows: windows, rect: rect, scale: scale)
+                // the live document: its images and Canvases as edited so far
+                return try doc?.current.beneathSource(layers: layers, rect: rect, scale: scale)
             } catch {
                 AppLog.line("magnifier source: \(error.localizedDescription)")
                 return nil

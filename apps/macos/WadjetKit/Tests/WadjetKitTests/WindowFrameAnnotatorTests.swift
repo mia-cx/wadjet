@@ -89,34 +89,61 @@ struct WindowFrameAnnotatorTests {
         #expect(miss.a == 0, "\(row.name): expected clear at (\(row.clear.x), \(row.clear.y)), got \(miss)")
     }
 
-    // Proves a Magnify samples the clean frame, not only a Blur/Pixelate
-    // Censor: the magnifier over the buffer's empty half picks up the detail.
-    @Test func magnifySamplesTheCleanSource() throws {
-        let source = Self.buffer(width: 400, height: 200)
-        CVPixelBufferLockBaseAddress(source, [])
-        // left half red, right half blue (B,G,R,A order)
+    /// a 400×200 frame, left half red and right half blue (B,G,R,A order)
+    static func splitFrame() -> CVPixelBuffer {
+        let pb = buffer(width: 400, height: 200)
+        CVPixelBufferLockBaseAddress(pb, [])
         for y in 0..<200 { for x in 0..<400 {
-            let p = CVPixelBufferGetBaseAddress(source)!
-                .advanced(by: y * CVPixelBufferGetBytesPerRow(source) + x * 4)
+            let p = CVPixelBufferGetBaseAddress(pb)!
+                .advanced(by: y * CVPixelBufferGetBytesPerRow(pb) + x * 4)
                 .assumingMemoryBound(to: UInt8.self)
             p[0] = x < 200 ? 0 : 255; p[1] = 0; p[2] = x < 200 ? 255 : 0; p[3] = 255
         } }
-        CVPixelBufferUnlockBaseAddress(source, [])
-        let pb = Self.buffer(width: 400, height: 200)
-        let annotator = try #require(WindowFrameAnnotator(
-            window: CGRect(x: 100, y: 100, width: 200, height: 100), primaryHeight: 1000,
-            contentRect: CGRect(x: 0, y: 0, width: 200, height: 100),
-            scaleFactor: 2, frame: CGSize(width: 400, height: 200)))
-        let m = Magnifier(source: CGRect(x: 110, y: 815, width: 10, height: 10),
-                          frame: CGRect(x: 150, y: 830, width: 40, height: 20), zoom: 2,
-                          options: .init(shape: .rectangle, leader: false, glass: false))
-        let a = Annotation(kind: .magnify(m),
-            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))
-        annotator.draw([a], on: pb, source: source)
-        // the magnifier's centre — global (170, 840) → pixel (140, 120) —
-        // takes the viewport's red, not the blue it sits on
+        CVPixelBufferUnlockBaseAddress(pb, [])
+        return pb
+    }
+
+    /// the split frame's window at 2×, a Magnify of global (110,815)-(120,825)
+    /// into (150,830)-(190,850) — pixel (140, 120) is the magnifier's centre
+    static let splitAnnotator = WindowFrameAnnotator(
+        window: CGRect(x: 100, y: 100, width: 200, height: 100), primaryHeight: 1000,
+        contentRect: CGRect(x: 0, y: 0, width: 200, height: 100),
+        scaleFactor: 2, frame: CGSize(width: 400, height: 200))
+    static let splitMagnify = Annotation(
+        kind: .magnify(Magnifier(source: CGRect(x: 110, y: 815, width: 10, height: 10),
+                                 frame: CGRect(x: 150, y: 830, width: 40, height: 20), zoom: 2,
+                                 options: .init(shape: .rectangle, leader: false, glass: false))),
+        style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))
+
+    // Proves a Magnify samples the frame, not only a Blur/Pixelate Censor:
+    // the magnifier over the frame's blue half picks up the red detail.
+    @Test func magnifySamplesTheFrame() throws {
+        let source = Self.splitFrame(), pb = Self.splitFrame()
+        let annotator = try #require(Self.splitAnnotator)
+        annotator.draw([Self.splitMagnify], on: pb, source: source)
         let px = Self.pixel(pb, x: 140, yFromTop: 120)
         #expect(px.r > 200 && px.b < 30, "expected the sampled red, got \(px)")
+    }
+
+    // Proves a recorded Magnify shows the Annotations beneath it and not the
+    // ones above: a green block below its viewport turns the magnifier green,
+    // the same block above it leaves the frame's red.
+    @Test func magnifySamplesAnnotationsBeneath() throws {
+        let green = RGBAColour(red: 0, green: 1, blue: 0, alpha: 1)
+        let block = Annotation(kind: .shape(.rectangle(cornerRadius: 0),
+                                            rect: CGRect(x: 105, y: 810, width: 20, height: 20)),
+                               style: .init(colour: green, width: 1, fill: green, stroked: false))
+        let annotator = try #require(Self.splitAnnotator)
+        for (layers, expectGreen) in [([block, Self.splitMagnify], true), ([Self.splitMagnify, block], false)] {
+            let source = Self.splitFrame(), pb = Self.splitFrame()
+            annotator.draw(layers, on: pb, source: source)
+            let px = Self.pixel(pb, x: 140, yFromTop: 120)
+            if expectGreen {
+                #expect(px.g > 200 && px.r < 30, "expected the green beneath, got \(px)")
+            } else {
+                #expect(px.r > 200 && px.g < 30, "expected the frame's red, got \(px)")
+            }
+        }
     }
 
     // Proves a Text Annotation lands in a recorded frame: the white pill over

@@ -4,9 +4,10 @@ import CoreImage
 extension CanvasDocument {
     /// Composites displays, backdrop windows, then Annotations back to front.
     /// Crop and radius are global points; scale is output pixels per point. HDR
-    /// pixels stay extended. Black out fills opaque black; Blur, Pixelate and
-    /// Magnify sample each display's image beneath them plus the visible
-    /// window layers stacked beneath them. A `.window` Annotation draws the
+    /// pixels stay extended. Black out fills opaque black; Blur and Pixelate
+    /// sample each display's image beneath them plus the visible window layers
+    /// stacked beneath them, a Magnify every visible layer stacked beneath it
+    /// (`sampledBeneath`). A `.window` Annotation draws the
     /// window layer it names — layers without an id form the backdrop beneath
     /// every Annotation.
     /// Black out fills opaque black; Blur and Pixelate sample each display's
@@ -15,6 +16,19 @@ extension CanvasDocument {
     /// its asset through its crop, `.canvas` its `linkedDocuments` or
     /// `embeddedCanvases` entry, else its persisted snapshot.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
+        try flatten(crop: override, scale: scale, cache: BeneathCache())
+    }
+
+    /// what one flatten has already rendered beneath each Magnify, by id and
+    /// scale: nested flattens keep a Magnify's whole lower prefix, so its
+    /// beneath render is the same wherever it recurs — without this, stacked
+    /// Magnifies re-render their prefixes exponentially
+    final class BeneathCache {
+        struct Key: Hashable { let id: Annotation.ID; let scale: CGFloat }
+        var sources: [Key: CensorSource?] = [:]
+    }
+
+    func flatten(crop override: CGRect?, scale: CGFloat, cache: BeneathCache) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
               cornerRadius.isFinite, cornerRadius >= 0 else { throw CanvasDocumentError.invalidGeometry }
@@ -84,13 +98,22 @@ extension CanvasDocument {
             }
             var sources = displaySources
             if let box = annotation.sampledRect {
-                let below = layerStack.annotations[..<index].filter {
-                    if case .window = $0.kind { return !$0.hidden }
-                    return false
+                let below = Self.sampledBeneath(annotation, in: layerStack.annotations[..<index])
+                let b: CensorSource?
+                if below.isEmpty {
+                    b = nil
+                } else if case .magnify = annotation.kind {
+                    let key = BeneathCache.Key(id: annotation.id, scale: scale)
+                    if let hit = cache.sources[key] {
+                        b = hit
+                    } else {
+                        b = try beneathSource(layers: below, rect: box, scale: scale, cache: cache)
+                        cache.sources[key] = .some(b)
+                    }
+                } else {
+                    b = try beneathSource(layers: below, rect: box, scale: scale, cache: cache)
                 }
-                if !below.isEmpty, let b = try beneathSource(windows: below, rect: box, scale: scale) {
-                    sources = [b]
-                }
+                if let b { sources = [b] }
             }
             context.draw(annotation, sources: sources, images: images,
                          linkedDocuments: linkedDocuments, embeddedCanvases: embeddedCanvases,
@@ -102,22 +125,43 @@ extension CanvasDocument {
         return image
     }
 
-    /// The pixels a sampling Annotation reads when windows sit beneath it: the
-    /// displays plus `windows` (visible `.window` Annotations, back to front;
-    /// backdrop layers stay out) rendered over `rect` snapped outward to the
+    /// What a sampling Annotation sees above the displays, from the layers
+    /// `below` it, back to front: a Magnify sees every visible Annotation —
+    /// never itself or anything above it — a Blur or Pixelate Censor only the
+    /// visible window layers
+    public static func sampledBeneath(_ annotation: Annotation,
+                                      in below: ArraySlice<Annotation>) -> [Annotation] {
+        below.filter {
+            guard !$0.hidden else { return false }
+            if case .magnify = annotation.kind { return true }
+            if case .window = $0.kind { return true }
+            return false
+        }
+    }
+
+    /// The pixels a sampling Annotation reads when layers sit beneath it: the
+    /// displays plus `layers` (visible Annotations from `sampledBeneath`, back
+    /// to front; backdrop layers stay out) rendered over `rect` snapped outward to the
     /// pixel grid at `scale` — at least `scale` pixels per point, and the
     /// captured displays' own density where higher, so magnifying never starts
     /// from a downsampled source. The frame's size comes from the rendered
     /// image. Moved windows are sampled where they sit, not where the flat
     /// displays froze them — the filters only read inside their sampled rect.
-    /// Returns nil when no window paints on `rect` or the snapped rect isn't
+    /// Returns nil when no layer paints on `rect` or the snapped rect isn't
     /// valid — callers then keep the display sources unchanged.
-    public func beneathSource(windows: [Annotation], rect: CGRect,
+    public func beneathSource(layers: [Annotation], rect: CGRect,
                             scale: CGFloat) throws -> CensorSource? {
-        let touching = windows.filter {
-            PathGeometry.path(for: $0).boundingBox.intersects(rect)
-        }
-        guard !touching.isEmpty else { return nil }
+        try beneathSource(layers: layers, rect: rect, scale: scale, cache: BeneathCache())
+    }
+
+    func beneathSource(layers: [Annotation], rect: CGRect, scale: CGFloat,
+                       cache: BeneathCache) throws -> CensorSource? {
+        let paints = layers.map { PathGeometry.coverage(for: $0).boundingBoxOfPath.intersects(rect) }
+        guard paints.contains(true) else { return nil }
+        // a sampling layer that paints here reads the layers beneath it
+        // wherever they sit, so everything under the topmost one stays
+        let sampler = layers.indices.last { paints[$0] && layers[$0].sampledRect != nil } ?? -1
+        let touching = layers.indices.filter { $0 < sampler || paints[$0] }.map { layers[$0] }
         let density = max(scale, layout.filter { $0.frame.intersects(rect) }
             .map(\.scaleFactor).max() ?? 0)
         // snap outward to the output pixel grid: flatten allocates
@@ -137,7 +181,7 @@ extension CanvasDocument {
         beneath.layerStack = LayerStack(touching)
         beneath.cornerRadius = 0
         beneath.windowLayers = windowLayers.filter { $0.id != nil }
-        let image = try beneath.flatten(crop: snapped, scale: density)
+        let image = try beneath.flatten(crop: snapped, scale: density, cache: cache)
         return CensorSource(image: image, frame: CGRect(
             origin: snapped.origin,
             size: CGSize(width: CGFloat(image.width) / density,

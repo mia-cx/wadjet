@@ -67,6 +67,23 @@ struct ScreenshotCanvasTests {
         #expect(canvas.layerStack.annotations == [kept])
     }
 
+    // Proves a window capture keeps the off-crop layers beneath a Magnify it
+    // keeps, since the Magnify samples them, and still drops those above it.
+    @Test func windowCaptureKeepsWhatAKeptMagnifySamples() throws {
+        let crop = CGRect(x: 0, y: 0, width: 10, height: 10)
+        let style = AnnotationStyle(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2)
+        let off = CGRect(x: -20, y: -20, width: 4, height: 4)
+        let beneath = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: off), style: style)
+        let above = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: off), style: style)
+        let magnify = Annotation(kind: .magnify(.init(
+                source: off, frame: CGRect(x: 2, y: 2, width: 6, height: 6),
+                zoom: nil, options: .init(leader: false, glass: false))),
+            style: style)
+        let canvas = CanvasDocument(capturedDisplays: try capturedDisplays(), crop: crop,
+            annotations: LayerStack([beneath, magnify, above]), windowCapture: true)
+        #expect(canvas.layerStack.annotations == [beneath, magnify])
+    }
+
     // Proves a capture keeps only the assets and links its kept Annotations
     // name, deduplicating links so retention holds each target once.
     @Test func capturesReferencedImagesAndCanvasLinks() throws {
