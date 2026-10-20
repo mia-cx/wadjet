@@ -319,5 +319,24 @@ struct AttachingTests {
         stack.replace(t1.moved(by: CGVector(dx: 0, dy: 20)))
         #expect(near(current(stack, p.id).position(of: .node(1)), CGPoint(x: 40, y: 20)))
     }
+
+    // Proves adding a node keeps attachments on the same physical spots: a
+    // follower at 75% of the first segment stays at x = 75, and an attached
+    // node keeps steering the node it held, before and after its target moves.
+    @Test func insertingANodeKeepsAttachments() throws {
+        let path = Annotation(kind: .path(PathData(nodes: [0, 100, 200, 300].map {
+            PathNode(anchor: CGPoint(x: $0, y: 0)) })), style: red4)
+        let follower = arrow(from: CGPoint(x: 75, y: 50), to: CGPoint(x: 75, y: 10))
+        let target = box(CGRect(x: 200, y: 0, width: 5, height: 5))
+        var stack = LayerStack([path, follower, target])
+        stack.attach(follower.id, .end, to: path.id, at: .segment(0, t: 0.75))
+        stack.attach(path.id, .node(2), to: target.id, at: .frame(.zero))
+        let (inserted, _) = try #require(current(stack, path.id).insertingNode(near: CGPoint(x: 50, y: 0)))
+        stack.replaceReshaping(inserted)
+        #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 75, y: 0)))
+        stack.replace(target.moved(by: CGVector(dx: 0, dy: 30)))
+        #expect(near(current(stack, path.id).position(of: .node(3)), CGPoint(x: 200, y: 30)))
+        #expect(near(current(stack, path.id).position(of: .node(2)), CGPoint(x: 100, y: 0)))
+    }
 }
 
