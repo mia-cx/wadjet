@@ -279,14 +279,15 @@ final class MarkupController {
         closeScroll()
         // while a text is being typed ⌘Z is the editor's own undo
         if editing != nil { editor?.undoManager?.undo(); return }
-        guard gesture == nil, let s = history.undo(from: stack) else { return }
+        // a Clear's fade is about to land: undo it once it has
+        guard gesture == nil, !clearInFlight, let s = history.undo(from: stack) else { return }
         restore(s); AppLog.line("markup: undo")
         undidInGrace()
     }
     func redo() {
         closeScroll()
         if editing != nil { editor?.undoManager?.redo(); return }
-        guard gesture == nil, let s = history.redo(from: stack) else { return }
+        guard gesture == nil, !clearInFlight, let s = history.redo(from: stack) else { return }
         restore(s); AppLog.line("markup: redo")
     }
     private func restore(_ s: LayerStack) {
@@ -441,7 +442,8 @@ final class MarkupController {
         render(); raise()
     }
 
-    func clear() {
+    /// `keeping` spares Annotations added while a Clear's fade ran (MarkupClear.swift)
+    func clear(keeping: Set<Annotation.ID> = []) {
         // a live text session commits as its own step before Clear's
         commitEditing()
         textEditStart = nil; textSavedDuringSession = false
@@ -450,7 +452,10 @@ final class MarkupController {
         // the Pen preview dies with the stack it wasn't part of — clear it
         // before the edit renders
         pen = nil; penHover = nil
-        edit { $0.clear() }
+        edit { s in
+            if keeping.isEmpty { s.clear() }
+            else { for a in s.annotations where !keeping.contains(a.id) { s.remove(id: a.id) } }
+        }
         syncPanels()
     }
 

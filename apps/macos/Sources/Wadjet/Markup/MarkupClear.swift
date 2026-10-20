@@ -51,22 +51,24 @@ extension MarkupController {
 
     /// Clear with its fade: every view fades, then `beforeClear`, the clear
     /// itself (one undo step), and `afterClear` run once the fade has settled.
-    /// Returns what happened — `.nothingToClear` does nothing — or nil while
-    /// an earlier Clear is still fading.
+    /// The clear removes what was there at the tap: anything added during the
+    /// fade (a paste) stays. Returns what happened — `.nothingToClear` does
+    /// nothing — or nil while an earlier Clear is still fading.
     @discardableResult
     func fadeOutThenClear(beforeClear: @escaping @MainActor () -> Void = {},
                           afterClear: @escaping @MainActor () -> Void = {}) -> ClearFeedback.Response? {
         guard !clearInFlight else { return nil }
-        let r = ClearFeedback.response(annotationCount: stack.annotations.count,
+        // an unfinished Pen path is on screen too, though not yet in the stack
+        let r = ClearFeedback.response(annotationCount: stack.annotations.count + (draft == nil ? 0 : 1),
                                        reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         guard case .fadeOut(let fade) = r else { return r }
         clearInFlight = true
-        let views = markupViews
+        let views = markupViews, tapped = Set(stack.annotations.map(\.id))
         views.forEach { $0.fadeOut(fade, annotations: stack.annotations) }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(fade.settle))
             beforeClear()
-            clear()
+            clear(keeping: Set(stack.annotations.map(\.id)).subtracting(tapped))
             views.forEach { $0.resetFade() }
             clearInFlight = false
             afterClear()
@@ -109,9 +111,12 @@ extension AppDelegate {
     /// toolbar and island go once the screen is empty; a Freeze Frame keeps
     /// its Tool and stays, and a Recording keeps its island (IslandRule).
     func clearAnnotationsWithFeedback() {
-        let s = AppState.shared, mc = MarkupController.shared
+        let s = AppState.shared, mc = MarkupController.shared, armed = s.tool
         let r = mc.fadeOutThenClear(beforeClear: {
-            if s.phase == .toolbar, s.tool?.kind == .markup { s.tool = nil; AppLog.line("markup: Clear disarmed") }
+            // only the Tool armed at the tap — not one armed during the fade (a paste arms Select)
+            if s.phase == .toolbar, let t = armed, t.kind == .markup, s.tool == t {
+                s.tool = nil; AppLog.line("markup: Clear disarmed")
+            }
             mc.openUndoGrace()
         }, afterClear: { [self] in
             AppLog.line("markup: cleared")
@@ -142,7 +147,7 @@ extension ToolbarView {
     /// Annotations fade. With no visible selection the highlight just lands.
     func clearTap() {
         let mc = MarkupController.shared
-        if !mc.stack.isEmpty, !mc.clearInFlight, let c = cellCentres[.clearAnnotations],
+        if !mc.stack.isEmpty || mc.draft != nil, !mc.clearInFlight, let c = cellCentres[.clearAnnotations],
            let sel = s.tool, visibleTools.contains(sel), let from = cellCentres[sel] {
             if !travelling { snapLens(to: from) }
             travelling = true; travelStart = .now
