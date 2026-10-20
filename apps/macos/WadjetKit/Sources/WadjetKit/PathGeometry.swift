@@ -105,7 +105,7 @@ public enum PathGeometry {
                                                width: 2 * radius, height: 2 * radius),
                              transform: nil))
         case let .magnify(m):
-            p.addRect(m.source)
+            p.addPath(m.options.shape.path(in: m.source))
             if m.options.leader, let l = m.leader {
                 p.move(to: l.start); p.addLine(to: l.end)
             }

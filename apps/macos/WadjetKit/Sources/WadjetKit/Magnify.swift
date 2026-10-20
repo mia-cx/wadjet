@@ -76,7 +76,7 @@ public struct MagnifierOptions: Codable, Equatable, Sendable {
 /// magnifier box that shows it enlarged. One flat JSON object — the geometry
 /// keys and `options`' keys share the object.
 public struct Magnifier: Codable, Equatable, Sendable {
-    /// the outlined area, global points
+    /// the area the source outline is inscribed in, drawn in `options.shape`, global points
     public var source: CGRect
     /// the magnifier's box, global points
     public var frame: CGRect
@@ -115,9 +115,9 @@ public struct Magnifier: Codable, Equatable, Sendable {
                       width: size.width, height: size.height)
     }
     /// the leader line, edge to edge along the centre line: where the ray from
-    /// the source's centre exits the source rect, and where the ray back exits
-    /// the magnifier's shape. nil when the centres coincide or the magnifier
-    /// and the source overlap along the ray
+    /// the source's centre exits the source's shape, and where the ray back
+    /// exits the magnifier's shape. nil when the centres coincide or the
+    /// magnifier and the source overlap along the ray
     public var leader: (start: CGPoint, end: CGPoint)? {
         let sc = CGPoint(x: source.midX, y: source.midY)
         let fc = CGPoint(x: frame.midX, y: frame.midY)
@@ -129,7 +129,7 @@ public struct Magnifier: Codable, Equatable, Sendable {
             if n.isInfinite { return 1 / max(x, y) }
             return 1 / pow(pow(x, n) + pow(y, n), 1 / n)
         }
-        let start = exit(source.width / 2, source.height / 2, .infinity)
+        let start = exit(source.width / 2, source.height / 2, options.shape.exponent)
         let end = exit(frame.width / 2, frame.height / 2, options.shape.exponent)
         guard start.isFinite, end.isFinite, start < 1 - end else { return nil }
         return (CGPoint(x: sc.x + d.dx * start, y: sc.y + d.dy * start),
