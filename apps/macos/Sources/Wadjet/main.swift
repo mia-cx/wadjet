@@ -1960,7 +1960,7 @@ final class OverlayController {
         closeAllPanelsOnly()
         for (i, fd) in Freeze.shared.displays.enumerated() {
             let p = OverlayPanel(contentRect: fd.screen.frame, styleMask: [.borderless, .nonactivatingPanel], backing: .buffered, defer: false)
-            p.level = .screenSaver; p.hasShadow = false
+            p.level = MarkupPanel.freezeFrameLevel; p.hasShadow = false
             p.animationBehavior = .none // no system scale-in: the Freeze Frame must sit exactly on the screen it copies
             p.isOpaque = false; p.backgroundColor = .clear // live desktop shows through when the Freeze Frame is off
             p.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
@@ -2677,6 +2677,7 @@ final class OverlayNSView: NSView {
                     dragStart = pt; sel = CGRect(origin: pt, size: .zero)
                 }
             } else { dragStart = pt; sel = CGRect(origin: pt, size: .zero) }
+            if let w = window, let note = MarkupController.shared.stackingNote(over: w) { AppLog.line(note) }
         }
         needsDisplay = true
     }

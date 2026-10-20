@@ -5,6 +5,11 @@ import WadjetKit
 /// borderless and non-activating, but keyable so it can own the pointer's
 /// cursor while a Markup Tool is armed
 final class MarkupPanel: NSPanel {
+    /// the Freeze Frame panels' level, one below the Markup panels' — the
+    /// Annotations stay above the frozen picture and the selection dim
+    /// whatever AppKit reorders (a click on a Freeze panel that isn't key
+    /// brings it to the front of its level)
+    static let freezeFrameLevel = NSWindow.Level(rawValue: NSWindow.Level.screenSaver.rawValue - 1)
     let view: MarkupView
     init(screen: NSScreen) {
         view = MarkupView(frame: NSRect(origin: .zero, size: screen.frame.size), screen: screen)
