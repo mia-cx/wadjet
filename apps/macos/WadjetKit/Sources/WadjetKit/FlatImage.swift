@@ -32,16 +32,20 @@ extension CanvasDocument {
 
 extension CanvasStore {
     /// Files a Canvas as a new Screenshot under a new ID: the flattened image
-    /// in `files`, the editable package in the store. The Editor's Run Workflow
+    /// in `files`, the editable package in the store, both under one base name
+    /// that is also free in `pairedWith` (the folder Save file copies the image
+    /// to), so the Canvas and its saved image pair up. The Editor's Run Workflow
     /// uses it so the new History entry gets its own Canvas.
     @discardableResult
     public func addScreenshot(_ canvas: CanvasDocument, files: CaptureFiles, scale: CGFloat? = nil,
-                              createdAt: Date) throws -> (id: UUID, file: URL, package: URL) {
+                              createdAt: Date, pairedWith: [URL] = []) throws -> (id: UUID, file: URL, package: URL) {
         let flat = try canvas.flatImage(scale: scale)
-        let file = try files.newFile(ext: flat.type.preferredFilenameExtension!)
+        let taken = CaptureName.takenBaseNames(in: [directory, files.directory] + pairedWith)
+        let name = CaptureName.unique(CaptureName.base(for: createdAt), isTaken: taken.contains)
+        let file = try files.newFile(ext: flat.type.preferredFilenameExtension!, name: name)
         try flat.data.write(to: file, options: .atomic)
         let id = UUID()
-        let package = try add(canvas, for: id, createdAt: createdAt)
+        let package = try add(canvas, for: id, createdAt: createdAt, name: name)
         return (id, file, package)
     }
 }

@@ -107,9 +107,12 @@ enum SettingsPanes: String, CaseIterable {
 
 @MainActor struct GeneralPane: View {
     var body: some View {
-        Section("Save folders") {
+        Section {
             LabeledContent("Screenshots") { FolderRow(key: \.screenshots) }
             LabeledContent("Recordings") { FolderRow(key: \.recordings) }
+        } header: { Text("Save folders") } footer: {
+            Text("Each Screenshot keeps its editable Canvas in original and its image in flattened, under one name.")
+                .foregroundStyle(.secondary)
         }
         Section("Capture") {
             Toggle("Freeze the screen while selecting", isOn: cfgBinding(\.capture.freeze))

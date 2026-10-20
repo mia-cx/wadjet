@@ -104,7 +104,7 @@ extension AppDelegate {
     func writeScreenshot(_ canvas: CanvasDocument, scale: CGFloat, capturedAt: Date, clear: Bool,
                          label: String, workflow: String) throws -> URL {
         let shot = try canvasStore.addScreenshot(canvas, files: captureFiles, scale: scale,
-            createdAt: capturedAt)
+            createdAt: capturedAt, pairedWith: [screenshotFolders.flattened])
         if clear { clearAnnotations() }
         runCapture(file: shot.file, kind: .screenshot, label: label, workflow: workflow,
             runID: shot.id, capturedAt: capturedAt, canvas: shot.package)

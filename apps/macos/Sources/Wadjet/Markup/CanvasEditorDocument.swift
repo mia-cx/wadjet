@@ -174,11 +174,12 @@ final class CanvasEditorDocument: NSDocument {
         markupCached?.textSessionSaved()
     }
 
-    /// packages in the CanvasStore are History's — their UUID names are how
-    /// History finds them, so renaming or moving them is refused
+    /// History's packages in original/ — other Canvases link to them by path,
+    /// so renaming or moving them is refused. A user's own Canvas saved into
+    /// original/ isn't one of them and saves like any other permanent file.
     private var isStorePackage: Bool {
-        guard let dir = AppDelegate.shared?.canvasStore.directory else { return false }
-        return fileURL?.deletingLastPathComponent().standardizedFileURL == dir
+        guard let url = fileURL, let store = AppDelegate.shared?.canvasStore else { return false }
+        return store.owns(url)
     }
 
     override func move(to url: URL, completionHandler: (((any Error)?) -> Void)? = nil) {
@@ -203,17 +204,13 @@ final class CanvasEditorDocument: NSDocument {
         return super.validateUserInterfaceItem(item)
     }
 
-    /// store packages are UUID-named; title them by when the Screenshot was taken
+    /// an unsaved edit of an image is titled by that image
     override var displayName: String! {
         get {
             if fileURL == nil, let sourceImage {
                 return FileManager.default.displayName(atPath: sourceImage.path)
             }
-            guard isStorePackage, let url = fileURL,
-                  let created = try? url.resourceValues(forKeys: [.creationDateKey]).creationDate else {
-                return super.displayName
-            }
-            return "Screenshot \(created.formatted(date: .abbreviated, time: .shortened))"
+            return super.displayName
         }
         set { super.displayName = newValue }
     }
