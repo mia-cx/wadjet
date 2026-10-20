@@ -2980,7 +2980,7 @@ struct ToolbarView: View {
                 }
             }
             .onChange(of: hoverInside) { syncExpanded(); refitOnLeave() }
-            .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded() }
+            .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded(); refitOnLeave() }
             .onAppear { syncHit(); syncLensBg()
                 // a Markup Tool armed by a Shortcut or the menu expands the new
                 // bar; unarmed bars wait for hover so they don't collapse under

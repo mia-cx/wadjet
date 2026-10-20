@@ -39,6 +39,18 @@ struct ToolbarLayoutTests {
         #expect(o - after.width / 2 + x1 == 0 - before.width / 2 + x0) // same screen x
     }
 
+    // Proves Steady's held slots never grow the row past the screen: on a 1280 pt display
+    // (1240 pt budget), a sweep across every group releases just enough held width to fit,
+    // widest hold first, and the open group keeps its full spread.
+    @Test func steadyHoldFitsTheScreen() {
+        let counts = [7, 3, 3, 3], held: [CGFloat] = [560, 232, 232, 232] // all visited, Utilities open
+        #expect(Self.bar.row(counts: counts, open: 3, style: .steady, reserve: held).width == 1395)
+        let fitted = Self.bar.fitReserve(counts: counts, open: 3, reserve: held, budget: 1240)
+        #expect(fitted == [405, 232, 232, 232])
+        #expect(Self.bar.row(counts: counts, open: 3, style: .steady, reserve: fitted).width == 1240)
+        #expect(Self.bar.fitReserve(counts: counts, open: 3, reserve: held, budget: 1500) == held) // fits: untouched
+    }
+
     // Proves the shift never pushes the bar off screen or off a notch it hangs around.
     @Test(arguments: [
         (width: 1147.0, screen: 1200.0, keep: 0.0, limit: 18.5),  // screen edge binds

@@ -53,8 +53,11 @@ extension ToolbarView {
         let kinds = Tool.Kind.allCases, counts = groupCounts
         var held = reserve // the closing group keeps its width until the pointer leaves
         held[openGroup] = max(held[openGroup] ?? 0, rowGeo.openWidth(counts[groupIndex(openGroup)]))
+        // held slots give way as far as the row must to fit the screen, so no Tool is clipped
+        let fitted = rowGeo.fitReserve(counts: counts, open: groupIndex(k), reserve: kinds.map { held[$0] ?? 0 }, budget: limit)
+        for (i, kind) in kinds.enumerated() { held[kind] = fitted[i] }
         let before = rowGeo.row(counts: counts, open: groupIndex(openGroup), style: .steady, reserve: kinds.map { reserve[$0] ?? 0 })
-        let after = rowGeo.row(counts: counts, open: groupIndex(k), style: .steady, reserve: kinds.map { held[$0] ?? 0 })
+        let after = rowGeo.row(counts: counts, open: groupIndex(k), style: .steady, reserve: fitted)
         // the bar may shift only as far as keeps it on screen and around the notch
         let lim = SteadyAnchor.limit(width: min(limit, after.width), screenWidth: screenWidth, margin: 8,
                                      keep: hasNotch ? notchW + 32 : 0)

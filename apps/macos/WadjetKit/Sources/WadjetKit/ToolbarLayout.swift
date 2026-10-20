@@ -69,6 +69,21 @@ public struct ToolbarRowGeometry: Equatable, Sendable {
                           centresOpen: style == .uniform, cell: cell, gap: gap)
     }
 
+    /// Steady's held widths, released (widest hold first) only as far as needed for the row to
+    /// fit `budget`; a row whose natural width is over budget releases every hold.
+    public func fitReserve(counts: [Int], open: Int, reserve: [CGFloat], budget: CGFloat) -> [CGFloat] {
+        var held = reserve
+        var excess = row(counts: counts, open: open, style: .steady, reserve: held).width - budget
+        while excess > 0 {
+            // the hold furthest past its group's natural slot gives way first
+            let spare = held.indices.map { held[$0] - (open == $0 ? openWidth(counts[$0]) : cell) }
+            guard let g = spare.indices.max(by: { spare[$0] < spare[$1] }), spare[g] > 0 else { break }
+            let cut = min(spare[g], excess)
+            held[g] -= cut; excess -= cut
+        }
+        return held
+    }
+
     /// Two Rows' header strip: one `cell` per group, `gap` apart, `edge` at both ends. It never
     /// depends on which group is shown, so it never moves while the bar is expanded.
     public func strip(headers n: Int) -> (width: CGFloat, centres: [CGFloat]) {
