@@ -1,6 +1,6 @@
 /// A Markup Tool Key: one unmodified letter that arms a Markup Tool or one of
-/// its variants, like design apps. `all` is the one table the screen's Carbon
-/// hot keys, the Editor's keyDown, and Settings › Shortcuts read.
+/// its variants, like design apps. `all` is the one table the screen's key
+/// monitor, the Editor's keyDown, and Settings › Shortcuts read.
 public struct MarkupToolKey: Equatable, Sendable {
     /// lowercase; means wherever the current keyboard layout types it
     public let character: Character
@@ -39,7 +39,12 @@ public struct MarkupToolKey: Equatable, Sendable {
         all.first { $0.character == Character(character.lowercased()) }
     }
 
-    /// the ANSI key code for `character` (KeyCombo.keys), the fallback when
-    /// the layout has no key typing it
-    public var ansiKeyCode: Int? { KeyCombo.keys[String(character)] }
+    /// the key a key press arms: `characters` is the event's
+    /// charactersIgnoringModifiers (so the current layout decides), `modified`
+    /// whether ⌘, ⌥, ⌃, or ⇧ was held. A held modifier, or a press typing
+    /// more or less than one character, arms nothing.
+    public static func key(pressed characters: String?, modified: Bool) -> MarkupToolKey? {
+        guard !modified, let characters, characters.count == 1, let c = characters.first else { return nil }
+        return key(typing: c)
+    }
 }

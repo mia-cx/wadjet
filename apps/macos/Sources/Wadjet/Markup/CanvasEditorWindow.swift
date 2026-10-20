@@ -398,9 +398,8 @@ final class EditorCanvasView: NSView {
         // the Markup Tool Keys: one unmodified letter arms a Tool or variant —
         // never while a text is being typed
         if !state.recrop, doc.markup.editing == nil,
-           e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
-           e.charactersIgnoringModifiers?.count == 1,
-           let key = e.charactersIgnoringModifiers?.first.flatMap(MarkupToolKey.key(typing:)),
+           let key = MarkupToolKey.key(pressed: e.charactersIgnoringModifiers,
+                                       modified: !e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty),
            doc.markup.press(key) {
             // only when the pointer rests on the Markup surface, not a toolbar or scroller
             if let content = window?.contentView,

@@ -47,7 +47,7 @@ struct MarkupToolKeyTests {
     }
 
     // Proves the table is unambiguous: no letter or (tool, variant) pair
-    // repeats, and every letter is one lowercase ASCII with an ANSI fallback.
+    // repeats, and every letter is one lowercase ASCII letter.
     @Test func noDuplicates() {
         #expect(Set(MarkupToolKey.all.map(\.character)).count == MarkupToolKey.all.count)
         #expect(Set(MarkupToolKey.all.map { "\($0.tool?.rawValue ?? "select"):\($0.variant?.id ?? "-")" })
@@ -55,7 +55,21 @@ struct MarkupToolKeyTests {
         for key in MarkupToolKey.all {
             #expect(String(key.character) == key.character.lowercased())
             #expect(key.character.isASCII && key.character.isLetter)
-            #expect(key.ansiKeyCode != nil)
         }
+    }
+
+    // Proves a key press arms a Tool only unmodified and typing one
+    // character: ⌘V stays paste, ⇧V types a capital, a dead key arms nothing.
+    @Test(arguments: [
+        ("v" as String?, false, "v" as Character?),
+        ("V", false, "v"),
+        ("v", true, nil),
+        ("q", false, nil),
+        ("", false, nil),
+        (nil, false, nil),
+        ("vv", false, nil),
+    ])
+    func pressed(characters: String?, modified: Bool, want: Character?) {
+        #expect(MarkupToolKey.key(pressed: characters, modified: modified)?.character == want)
     }
 }
