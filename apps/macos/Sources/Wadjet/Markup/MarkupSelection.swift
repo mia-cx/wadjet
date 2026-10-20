@@ -269,6 +269,8 @@ extension MarkupController {
         let copies = annotations.map { a -> Annotation in
             var c = a.moved(by: offset)
             c.id = UUID()
+            // a linked Canvas whose package is gone draws from the snapshot kept under its id
+            if let snapshot = assets.images[a.id] { assets.images[c.id] = snapshot }
             return c
         }
         let top = annotations.compactMap { a in stack.annotations.firstIndex { $0.id == a.id } }.max()
@@ -286,7 +288,7 @@ extension MarkupController {
     @discardableResult
     func copySelection() -> Bool {
         guard !selection.isEmpty else { return false }
-        AnnotationClipboard.copy(selectedAnnotations, assets: assets)
+        AnnotationClipboard.copy(selectedAnnotations, assets: assets, windowLayers: windowLayers)
         AppLog.line("markup: copied \(selection.count)")
         return true
     }
@@ -309,12 +311,24 @@ extension MarkupController {
         for (k, v) in clip.embedded { assets.embedded[k] = v }
         let box = AnnotationGroup.bounds(of: clip.annotations)
         let d = CGVector(dx: p.x - box.midX, dy: p.y - box.midY)
-        let pasted = clip.annotations.map { a -> Annotation in
+        let pasted = clip.annotations.compactMap { a -> Annotation? in
             var c = a.moved(by: d)
             c.id = UUID()
             c.hidden = false; c.locked = false
+            if let snapshot = clip.snapshots[a.id] { assets.images[c.id] = snapshot }
+            // a window from another Canvas lands as an image of its pixels:
+            // this Canvas has no layer for it to name
+            if case let .window(layerID, frame) = c.kind, windowLayers[layerID] == nil {
+                guard let image = clip.windowImages[layerID] else { return nil }
+                let asset = UUID()
+                assets.images[asset] = image
+                c.kind = .image(asset: asset, ImagePlacement(
+                    frame: frame, crop: CGRect(x: 0, y: 0, width: image.width, height: image.height),
+                    border: .hidden))
+            }
             return c
         }
+        guard !pasted.isEmpty else { return false }
         edit { s in pasted.forEach { s.add($0) } }
         syncPanels()
         setSelection(AnnotationSelection(pasted.map(\.id)))
@@ -327,7 +341,10 @@ extension MarkupController {
     /// the arrows; true when the key was Markup's
     func handleSelectionKey(_ e: NSEvent) -> Bool {
         let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
-        guard !textHasFocus else { return false }
+        // only keys aimed at the screen's Markup: not an Editor, Settings, or a text field
+        guard !textHasFocus, e.window is MarkupPanel
+                || (e.window != nil && e.window?.windowNumber == LayersWindow.shared.windowNumber)
+        else { return false }
         if mods == .command {
             switch e.charactersIgnoringModifiers?.lowercased() {
             case "a": selectAll(); return true
@@ -364,18 +381,26 @@ enum AnnotationClipboard {
         var images: [UUID: CGImage] = [:]
         var canvases: [URL: CanvasDocument] = [:]
         var embedded: [String: CanvasDocument] = [:]
+        /// linked Canvases' persisted snapshots, by the copied Annotation's id
+        var snapshots: [UUID: CGImage] = [:]
+        /// captured windows' pixels, by layer id — another Canvas has no such layer
+        var windowImages: [UUID: CGImage] = [:]
     }
     private static var clip: Clip?
     private static var changeCount = -1
 
-    static func copy(_ annotations: [Annotation], assets: MarkupAssets) {
+    static func copy(_ annotations: [Annotation], assets: MarkupAssets,
+                     windowLayers: [UUID: CanvasWindowLayer]) {
         var c = Clip(annotations: annotations)
         for a in annotations {
             switch a.kind {
             case let .image(asset, _): c.images[asset] = assets.images[asset]
-            case let .canvas(.linked(link), _): c.canvases[link.url] = assets.canvases[link.url]
+            case let .canvas(.linked(link), _):
+                c.canvases[link.url] = assets.canvases[link.url]
+                c.snapshots[a.id] = assets.images[a.id]
             case let .canvas(.embedded(name), _): c.embedded[name] = assets.embedded[name]
-            case .line, .path, .censor, .shape, .counter, .magnify, .text, .window: break
+            case let .window(id, _): c.windowImages[id] = windowLayers[id]?.image
+            case .line, .path, .censor, .shape, .counter, .magnify, .text: break
             }
         }
         let pb = NSPasteboard.general
