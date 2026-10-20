@@ -341,8 +341,9 @@ extension MarkupController {
     /// the arrows; true when the key was Markup's
     func handleSelectionKey(_ e: NSEvent) -> Bool {
         let mods = e.modifierFlags.intersection([.command, .option, .control, .shift])
-        // only keys aimed at the screen's Markup: not an Editor, Settings, or a text field
-        guard !textHasFocus, e.window is MarkupPanel
+        // only keys aimed at the screen's Markup — its panels, the Freeze Frame
+        // under them, or the Layers window — not an Editor, Settings, or a text field
+        guard !textHasFocus, e.window is MarkupPanel || e.window is OverlayPanel
                 || (e.window != nil && e.window?.windowNumber == LayersWindow.shared.windowNumber)
         else { return false }
         if mods == .command {
