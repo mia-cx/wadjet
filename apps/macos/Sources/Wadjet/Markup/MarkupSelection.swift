@@ -60,14 +60,7 @@ extension MarkupController {
         guard armed != nil else { return }
         let kept = selection.ids.filter(pickable.contains)
         let added = stack.annotations.map(\.id).filter { pickable.contains($0) && !kept.contains($0) }
-        // under Direct Select the picked paths show their anchors, none selected;
-        // the anchors go first because the selection's didSet renders
-        nodes.clear()
-        if directSelecting {
-            for a in stack.annotations where pickable.contains(a.id) && a.kind.hasAnchors {
-                nodes.show(a.id, adding: true)
-            }
-        }
+        showAnchors(of: pickable)
         setSelection(AnnotationSelection(kept + added))
     }
 
@@ -77,8 +70,22 @@ extension MarkupController {
         finishPen(); commitEditing()
         guard !stack.isEmpty else { return }
         if armed == nil { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
-        setSelection(.all(in: stack.annotations))
+        let all = AnnotationSelection.all(in: stack.annotations)
+        showAnchors(of: all.set)
+        setSelection(all)
         AppLog.line("markup: selected all (\(selection.count))")
+    }
+
+    /// a selection made outside Direct Select's own presses (the Layers
+    /// window, Select All) resets its anchors: under Direct Select — armed,
+    /// whatever ⌘ is doing — every picked path shows its anchors, none
+    /// selected. The anchors go first because the selection's didSet renders.
+    private func showAnchors(of ids: Set<Annotation.ID>) {
+        nodes.clear()
+        guard armed == .directSelect else { return }
+        for a in stack.annotations where ids.contains(a.id) && a.kind.hasAnchors {
+            nodes.show(a.id, adding: true)
+        }
     }
 
     // MARK: the shared bounding box

@@ -19,6 +19,12 @@ extension MarkupController {
         nodes.show(sel.id, adding: false)
     }
 
+    /// the paths with a selected anchor, back to front — the Annotation
+    /// selection follows them, so whole-Annotation commands reach every one
+    var anchoredPaths: [Annotation.ID] {
+        stack.annotations.map(\.id).filter { !nodes.indices(of: $0).isEmpty }
+    }
+
     /// the marquee in flight, for the views to draw
     var marqueeRect: CGRect? {
         guard case let .marquee(from, to, _) = gesture else { return nil }
@@ -78,7 +84,9 @@ extension MarkupController {
     /// Illustrator's anchor press, then a drag that carries every selected anchor
     private func pressAnchor(_ ref: AnchorRef, at p: CGPoint, adding: Bool) {
         nodes.press(ref, adding: adding)
-        setSelection(adding ? selection.adding([ref.id]) : [ref.id])
+        // every path with a selected anchor stays in the Annotation selection
+        let ids = [ref.id] + anchoredPaths
+        setSelection(adding ? selection.adding(ids) : AnnotationSelection(ids))
         if nodes.anchors.contains(ref) {
             var starts: [Annotation.ID: (start: Annotation, indices: Set<Int>)] = [:]
             for a in stack.annotations where nodes.shown.contains(a.id) {
@@ -106,7 +114,8 @@ extension MarkupController {
         let rect = CGRect(x: min(from.x, to.x), y: min(from.y, to.y),
                           width: abs(to.x - from.x), height: abs(to.y - from.y))
         nodes.marquee(rect, in: stack.annotations, adding: adding)
-        setSelection(AnnotationSelection(nodes.shown.last.map { [$0] } ?? []))
+        let ids = anchoredPaths.isEmpty ? Array(nodes.shown.suffix(1)) : anchoredPaths
+        setSelection(adding ? selection.adding(ids) : AnnotationSelection(ids))
         commitGesture()
         render()
         AppLog.line("markup: marquee selected \(nodes.anchors.count) anchors")
