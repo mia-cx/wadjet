@@ -8,10 +8,25 @@ extension OverlayController {
     /// Hovering it expands the toolbar unarmed.
     func syncDesktopChrome() {
         let s = AppState.shared
+        dismissIdleToolbar()
         guard s.phase == .desktop else { return }
         s.tool = nil
         chromeScreens = s.recActive || !MarkupController.shared.stack.isEmpty ? NSScreen.screens : []
         refreshToolbars()
+    }
+    /// the live toolbar ends once no Markup Tool is armed and no Annotation is
+    /// left, whatever disarmed it or removed the last one (IslandRule)
+    func dismissIdleToolbar() {
+        let s = AppState.shared
+        guard s.phase == .toolbar, !IslandRule.keepsLiveToolbar(
+            toolArmed: s.tool != nil, hasAnnotations: !MarkupController.shared.stack.isEmpty) else { return }
+        AppLog.line("chrome: live toolbar idle, back to desktop")
+        closeAll()
+    }
+    /// checks after the state change in flight settles: arming from the desktop
+    /// passes through the live toolbar with no Tool for a moment
+    func scheduleIdleToolbarCheck() {
+        DispatchQueue.main.async { [weak self] in self?.dismissIdleToolbar() }
     }
     /// a display plugged in or out: the live chrome follows the new screen set,
     /// keeping whatever Markup Tool is armed on the live toolbar. Display
@@ -27,7 +42,7 @@ extension OverlayController {
 }
 
 extension AppDelegate {
-    /// Clear removes every Annotation; on the desktop the island goes with them
+    /// Clear removes every Annotation; with no Tool armed the island goes with them
     func clearAnnotations() {
         MarkupController.shared.clear()
         AppLog.line("markup: cleared")
