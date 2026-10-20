@@ -161,12 +161,14 @@ public enum PathGeometry {
     /// ends, and a closed path's fill — all in screen coordinates. Closed
     /// paths get no ends and no trim; filled kinds draw nothing here
     public static func drawing(for a: Annotation) -> AnnotationDrawing {
-        let segments = a.kind.segments, w = a.style.width
+        let segments = a.kind.segments, w = a.style.width, reach = headLength(width: w)
         let closed = a.kind.isClosed
         let ends = CGMutablePath()
         var strokeSegments = segments
+        // each end aims along the stroke its arrowhead covers, not the last
+        // control vector — see endOutward(_:reach:)
         if !closed, let last = segments.last {
-            let u = last.endOutward, n = CGPoint(x: -u.y, y: u.x)
+            let u = endOutward(segments, reach: reach), n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.head, at: last.p3, u: u, n: n, width: w))
             if a.style.head == .filledArrow {
                 strokeSegments = trimmedEnd(strokeSegments, by: headLength(width: w) / 2)
@@ -175,7 +177,7 @@ public enum PathGeometry {
         // tangents come from the untrimmed geometry, and the tail's mark sits
         // at the untrimmed start even if the head's trim reached it
         if !closed, let first = segments.first {
-            let u = first.startOutward, n = CGPoint(x: -u.y, y: u.x)
+            let u = startOutward(segments, reach: reach), n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.tail, at: first.p0, u: u, n: n, width: w))
             if a.style.tail == .filledArrow {
                 strokeSegments = trimmedStart(strokeSegments, by: headLength(width: w) / 2)
