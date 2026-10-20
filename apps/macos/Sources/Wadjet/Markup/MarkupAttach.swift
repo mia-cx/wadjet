@@ -10,6 +10,11 @@ extension MarkupController {
     /// how near, in on-screen points, a dragged end snaps to an attach spot or outline
     static let attachRadius: CGFloat = 8
 
+    /// a held or released modifier changes what a drag in flight does
+    /// (Control and ⌘ suppress attaching, ⇧ constrains), so the drag re-runs
+    /// at the same pointer — true for the drags that attach
+    var attachDragInFlight: Bool { attachHover != nil || draggingAttachable }
+
     /// whether the keys held now keep a dragged end from attaching
     var attachSuppressed: Bool {
         let f = NSEvent.modifierFlags
@@ -18,9 +23,10 @@ extension MarkupController {
 
     /// `moved`, the grip drag's result, with the dragged end snapped onto the
     /// attach spot it's over, and what it's over — nil for grips that don't
-    /// attach, and while attaching is suppressed
-    func attaching(_ moved: Annotation, grip h: SelectionHandle) -> (Annotation, AttachHover?) {
-        guard !attachSuppressed, let point = moved.attachPoint(for: h),
+    /// attach, while attaching is suppressed, and while Shift holds the end
+    /// on its 45° ray — a spot would pull it off
+    func attaching(_ moved: Annotation, grip h: SelectionHandle, constrained: Bool) -> (Annotation, AttachHover?) {
+        guard !attachSuppressed, !constrained, let point = moved.attachPoint(for: h),
               let at = moved.position(of: point),
               let hover = AttachFinder.hover(at: at, in: stack, attaching: moved.id, point,
                                              radius: Self.attachRadius / zoom) else { return (moved, nil) }
@@ -41,9 +47,10 @@ extension MarkupView {
             l.name = "attach"
             l.anchorPoint = .zero
             l.position = .zero
-            l.bounds = guidesLayer.bounds
             layer?.insertSublayer(l, above: guidesLayer)
         }
+        // an Editor's recrop moves the Canvas region; follow the guides' space
+        l.bounds = guidesLayer.bounds
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         defer { CATransaction.commit() }

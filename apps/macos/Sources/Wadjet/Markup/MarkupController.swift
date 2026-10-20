@@ -165,7 +165,12 @@ final class MarkupController {
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored var snapper: MarkupSnapper?
     /// what a dragged end is over and would attach to (MarkupAttach.swift)
-    @ObservationIgnored private var attachHover: AttachHover?
+    @ObservationIgnored private(set) var attachHover: AttachHover?
+    /// a grip drag on an end that can attach is in flight
+    var draggingAttachable: Bool {
+        if case let .handle(h, start, _) = gesture { return start.attachPoint(for: h) != nil }
+        return false
+    }
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
@@ -351,6 +356,10 @@ final class MarkupController {
                 if case .cutting = self.gesture {
                     self.drag(to: NSEvent.mouseLocation,
                               constrained: e.modifierFlags.contains(.shift))
+                }
+                // Control/⌘ suppress attaching and ⇧ constrains an end mid-drag
+                if self.attachDragInFlight {
+                    self.drag(to: NSEvent.mouseLocation, constrained: e.modifierFlags.contains(.shift))
                 }
                 return e
             }
@@ -1023,7 +1032,7 @@ final class MarkupController {
                                       targets: [], range: 0, skip: true).annotation
             }
             // an end over another Annotation snaps to its attach spot
-            let (attached, hover) = attaching(moved, grip: h)
+            let (attached, hover) = attaching(moved, grip: h, constrained: constrained && shiftConstrained)
             attachHover = hover
             stack.replace(attached)
         case let .recrop(h, start, from):
