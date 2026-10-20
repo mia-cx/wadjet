@@ -136,17 +136,27 @@ final class MarkupKeys {
         AppLog.line("markup tool keys off")
     }
 
-    /// true when `e` pressed a Markup Tool Key and armed it; text fields and
-    /// the in-place Text editor type the letter instead, and an Editor
-    /// window's own keyDown arms its own Markup
+    /// true when `e` pressed a Markup Tool Key and armed it. Only the screen
+    /// session's own windows take the letters — Settings, Editors (which arm
+    /// their own Markup), and Layers keep them — and text fields and the
+    /// in-place Text editor type the letter instead
     private func pressToolKey(_ e: NSEvent) -> Bool {
         let modified = !e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
         guard let key = MarkupToolKey.key(pressed: e.charactersIgnoringModifiers, modified: modified),
               MarkupController.shared.editing == nil,
-              !(e.window?.firstResponder is NSText),
-              e.window?.windowController?.document == nil else { return false }
+              isScreenSession(e.window),
+              !(e.window?.firstResponder is NSText) else { return false }
         MarkupController.shared.press(key)
         return true
+    }
+
+    /// a Markup panel, a Freeze Frame, the toolbar, or its Tool menu — or no
+    /// key window at all while wadjet is active for the session
+    private func isScreenSession(_ window: NSWindow?) -> Bool {
+        guard let window else { return true }
+        if window is MarkupPanel || window is OverlayPanel { return true }
+        guard let oc = AppDelegate.shared?.overlayCtrl else { return false }
+        return oc.toolbarPanels.values.contains { $0 === window } || oc.menuPanel === window
     }
 
     /// the keyboard layout changed: re-resolve the command keys (the tool
