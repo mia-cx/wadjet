@@ -126,9 +126,8 @@ struct CanvasStoreTests {
                 frame: CGRect(x: Int(id - 1) * 100, y: 0, width: 64, height: 64), scaleFactor: 4))
             target.displayImages[id] = target.displayImages[1]
         }
-        let id = UUID()
-        let url = directory.appendingPathComponent("\(id).wadjet")
-        if !embeddedTarget { try store.add(target, for: id, createdAt: created) }
+        let url = embeddedTarget ? directory.appendingPathComponent("target.wadjet")
+            : try store.add(target, for: UUID(), createdAt: created)
         var host = try fixtureCanvas()
         let source: NestedCanvas
         if embeddedTarget {

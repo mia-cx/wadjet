@@ -1,14 +1,19 @@
 import CoreGraphics
 import Foundation
+import Synchronization
 
 /// Persisted in canvas.json, independently of filesystem creation/modification dates.
+/// `id` is the History entry's; packages from before it existed carry it in their name.
 struct CanvasStoreMetadata: Codable {
     var createdAt: Date
     var state: CanvasRetentionState = []
+    var id: UUID?
 }
 
-/// Owns History's UUID-named .wadjet packages in one directory. Save file copies live
-/// elsewhere; links never grant this store ownership of another directory.
+/// Owns History's .wadjet packages in one directory, the screenshots folder's
+/// `original/`. Packages are named by capture date and found by the History
+/// id in their canvas.json. Save file copies carry no store metadata, so the
+/// store never owns them; links never grant it another directory.
 /// Store mutations coordinate directory access with each other and NSDocument
 /// Editors, so a background sweep cannot overwrite a simultaneous package save.
 public struct CanvasStore: Sendable {
@@ -16,23 +21,35 @@ public struct CanvasStore: Sendable {
     /// ImageIO quality used for the irreversible lossy retention stage.
     public static let lossyHEICQuality = 0.65
     private let now: @Sendable () -> Date
+    private let index = Index()
 
     public init(directory: URL, now: @escaping @Sendable () -> Date = Date.init) {
         self.directory = directory.standardizedFileURL
         self.now = now
     }
 
+    /// id → package, rebuilt when the directory's entries change, so lookups
+    /// for Recordings and deleted Canvases don't rescan every manifest.
+    private final class Index: Sendable {
+        let state = Mutex<(stamp: Date?, urls: [UUID: URL])>((nil, [:]))
+    }
+
     /// Adds a new History Canvas, using the entry's ID and capture date. Existing
     /// entries are never overwritten; Editor changes can write to the returned URL.
+    /// Named `name`, else by `createdAt` (`Wadjet 2026-10-20 at 12.30.00.wadjet`),
+    /// with ` 2`, ` 3`, … when the name is taken.
     @discardableResult
-    public func add(_ canvas: CanvasDocument, for entryID: UUID, createdAt: Date) throws -> URL {
+    public func add(_ canvas: CanvasDocument, for entryID: UUID, createdAt: Date,
+                    name: String? = nil) throws -> URL {
         let fm = FileManager.default
         try fm.createDirectory(at: directory, withIntermediateDirectories: true)
         return try coordinateMutation {
-            let url = packageURL(for: entryID)
-            guard !fm.fileExists(atPath: url.path) else { throw CocoaError(.fileWriteFileExists) }
+            guard try url(for: entryID) == nil else { throw CocoaError(.fileWriteFileExists) }
+            let taken = CaptureName.takenBaseNames(in: [directory])
+            let base = CaptureName.unique(name ?? CaptureName.base(for: createdAt), isTaken: taken.contains)
+            let url = directory.appendingPathComponent("\(base).wadjet", isDirectory: false)
             var canvas = canvas
-            canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt)
+            canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt, id: entryID)
             try canvas.write(to: url)
             return url
         }
@@ -40,10 +57,13 @@ public struct CanvasStore: Sendable {
 
     /// Finds an owned Canvas while its package still exists. History outlives it.
     public func url(for entryID: UUID) throws -> URL? {
-        let url = packageURL(for: entryID)
-        guard FileManager.default.fileExists(atPath: url.path), try isPackage(url),
-              try manifest(at: url).store != nil else { return nil }
-        return url
+        let stamp = directoryStamp()
+        let (cached, fresh) = index.state.withLock { ($0.urls[entryID], $0.stamp == stamp && stamp != nil) }
+        if let cached, (try? ownedID(at: cached)) == entryID { return cached }
+        guard !fresh, stamp != nil else { return nil }
+        let urls = try ownedPackages(packageURLs()).mapValues(\.url)
+        index.state.withLock { $0 = (stamp, urls) }
+        return urls[entryID]
     }
 
     /// Opens a History Canvas without resolving any of its links.
@@ -96,33 +116,54 @@ public struct CanvasStore: Sendable {
         return queue
     }()
 
-    private func packageURLs() throws -> [URL] {
-        try FileManager.default.contentsOfDirectory(at: directory,
+    func packageURLs() throws -> [URL] {
+        guard FileManager.default.fileExists(atPath: directory.path) else { return [] }
+        return try FileManager.default.contentsOfDirectory(at: directory,
             includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey])
-            .filter { url in
-                guard UUID(uuidString: url.deletingPathExtension().lastPathComponent) != nil else { return false }
-                return try isPackage(url)
-            }
+            .filter(isPackage)
             .sorted { $0.path < $1.path }
+    }
+
+    private func directoryStamp() -> Date? {
+        (try? FileManager.default.attributesOfItem(atPath: directory.path))?[.modificationDate] as? Date
+    }
+
+    /// The History id a package belongs to: its metadata's, else its legacy UUID name.
+    func ownedID(at url: URL, manifest: CanvasDocument.Manifest? = nil) throws -> UUID? {
+        guard try isPackage(url), let store = try (manifest ?? self.manifest(at: url)).store else { return nil }
+        return store.id ?? UUID(uuidString: url.deletingPathExtension().lastPathComponent)
+    }
+
+    /// The store's packages by id. A Finder duplicate carries its original's id;
+    /// the earliest-created package keeps it and the copies stay unowned, so
+    /// retention never touches them. A package without metadata isn't History's.
+    func ownedPackages(_ urls: [URL]) throws
+        -> [UUID: (url: URL, manifest: CanvasDocument.Manifest, created: Date)] {
+        var owned: [UUID: (url: URL, manifest: CanvasDocument.Manifest, created: Date)] = [:]
+        for url in urls {
+            let manifest = try manifest(at: url)
+            guard let id = try ownedID(at: url, manifest: manifest) else { continue }
+            let created = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.creationDate]
+                as? Date ?? .distantFuture
+            if let other = owned[id], (other.created, other.url.path) <= (created, url.path) { continue }
+            // the same form `add` returns: enumeration adds a trailing slash to packages
+            owned[id] = (directory.appendingPathComponent(url.lastPathComponent, isDirectory: false), manifest, created)
+        }
+        return owned
     }
 
     private func sweepCoordinated(settings: CanvasRetentionSettings,
                                   coordinator: NSFileCoordinator) throws -> [CanvasRetentionDecision] {
         let fm = FileManager.default
         guard fm.fileExists(atPath: directory.path) else { return [] }
-        let urls = try fm.contentsOfDirectory(at: directory,
-            includingPropertiesForKeys: [.isDirectoryKey, .isSymbolicLinkKey]).sorted { $0.path < $1.path }
         var records: [CanvasRetentionRecord] = []
         var packages: [UUID: URL] = [:]
         var links: [UUID: [CanvasLink]] = [:]
         var linkedCrops: [String: [CGRect]] = [:]
-        for url in urls {
-            guard let id = UUID(uuidString: url.deletingPathExtension().lastPathComponent),
-                  try isPackage(url) else { continue }
-            let manifest = try manifest(at: url)
-            guard let metadata = manifest.store else { continue }
-            packages[id] = url.standardizedFileURL
-            links[id] = try linkedCanvases(in: manifest, at: url, crops: &linkedCrops)
+        for (id, package) in try ownedPackages(packageURLs()).sorted(by: { $0.value.url.path < $1.value.url.path }) {
+            guard let metadata = package.manifest.store else { continue }
+            packages[id] = package.url
+            links[id] = try linkedCanvases(in: package.manifest, at: package.url, crops: &linkedCrops)
             records.append(.init(id: id, createdAt: metadata.createdAt, state: metadata.state))
         }
         // Directory enumeration adds a trailing slash; file URL equality would
@@ -237,7 +278,7 @@ public struct CanvasStore: Sendable {
         replace("canvas.json", with: try encoder.encode(manifest), in: wrapper)
     }
 
-    private func manifest(at url: URL) throws -> CanvasDocument.Manifest {
+    func manifest(at url: URL) throws -> CanvasDocument.Manifest {
         let file = try FileWrapper(url: url.appendingPathComponent("canvas.json"), options: .immediate)
         guard file.isRegularFile, let data = file.regularFileContents else {
             throw CanvasDocumentError.invalidPackage("canvas.json")
@@ -281,18 +322,14 @@ public struct CanvasStore: Sendable {
         return links
     }
 
-    private func isPackage(_ url: URL) throws -> Bool {
+    func isPackage(_ url: URL) throws -> Bool {
         let values = try url.resourceValues(forKeys: [.isDirectoryKey, .isSymbolicLinkKey])
         return url.pathExtension == "wadjet" && values.isDirectory == true && values.isSymbolicLink != true
     }
 
-    private func packageURL(for id: UUID) -> URL {
-        directory.appendingPathComponent(id.uuidString).appendingPathExtension("wadjet")
-    }
-
     // Coordinate the directory, including link planning, rather than separate
     // packages: adding a newer linker must not race deletion of its target.
-    private func coordinateMutation<T>(_ operation: () throws -> T) throws -> T {
+    func coordinateMutation<T>(_ operation: () throws -> T) throws -> T {
         var result: Result<T, Error>?
         var error: NSError?
         NSFileCoordinator().coordinate(writingItemAt: directory, options: [], error: &error) { _ in

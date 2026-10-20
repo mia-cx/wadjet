@@ -22,6 +22,8 @@ extension CanvasDocument {
 
     /// Copies a package and full dependencies without reencoding its image bytes.
     /// The parent read keeps retention out while traversing History dependencies.
+    /// The copy drops History's store metadata: a Save file Canvas is the user's,
+    /// so no Canvas store ever owns it, even one saved into `original/`.
     static func saveCopy(from source: URL, to destination: URL) throws {
         var outcome: Result<Void, Error>?
         var error: NSError?
@@ -30,6 +32,13 @@ extension CanvasDocument {
             outcome = Result {
                 var retained: [URL: CanvasDocument] = [:]
                 let wrapper = try preservedPackage(at: source, known: nil, visiting: [], retained: &retained)
+                if let data = wrapper.fileWrappers?["canvas.json"]?.regularFileContents {
+                    var manifest = try JSONDecoder().decode(Manifest.self, from: data)
+                    manifest.store = nil
+                    let encoder = JSONEncoder()
+                    encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+                    replace("canvas.json", with: try encoder.encode(manifest), in: wrapper)
+                }
                 try wrapper.write(to: destination, options: .atomic, originalContentsURL: nil)
             }
         }

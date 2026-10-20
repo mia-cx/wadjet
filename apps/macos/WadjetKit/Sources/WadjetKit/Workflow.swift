@@ -155,8 +155,11 @@ public protocol WorkflowEffects: Sendable {
 public struct WorkflowRunner: Sendable {
     let effects: any WorkflowEffects
     public init(effects: any WorkflowEffects) { self.effects = effects }
-    public func run(_ file: URL, through workflow: Workflow, defaultFolder: URL, id: UUID = UUID(),
-                    canvas: URL? = nil) -> AsyncStream<RunEvent> {
+    /// `defaultFolder` takes Save file's images; `canvasFolder`, when given,
+    /// takes its Canvases (a Screenshot's image goes to `flattened/`, a saved
+    /// Canvas to the screenshots folder itself).
+    public func run(_ file: URL, through workflow: Workflow, defaultFolder: URL, canvasFolder: URL? = nil,
+                    id: UUID = UUID(), canvas: URL? = nil) -> AsyncStream<RunEvent> {
         AsyncStream { continuation in
             Task {
                 var saved: [URL] = [], errors: [String] = []
@@ -167,12 +170,13 @@ public struct WorkflowRunner: Sendable {
                     do {
                         switch step {
                         case .saveFile(let folder, let format):
-                            let directory = folder.map { expandingTilde($0) } ?? defaultFolder
                             if format == .canvas {
+                                let directory = folder.map { expandingTilde($0) } ?? canvasFolder ?? defaultFolder
                                 guard let canvas else { throw CanvasDocumentError.invalidPackage("Screenshot has no Canvas") }
                                 saved.append(try Self.save(canvas, into: directory,
                                     name: file.deletingPathExtension().lastPathComponent + ".wadjet", preserveCanvasLinks: true))
                             } else {
+                                let directory = folder.map { expandingTilde($0) } ?? defaultFolder
                                 currentImage = try Self.save(file, into: directory)
                                 saved.append(currentImage)
                             }
