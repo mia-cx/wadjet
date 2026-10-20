@@ -384,4 +384,20 @@ struct MagnifyTests {
         #expect(n.source == m.source)
         #expect(r.affineTransform == .identity)
     }
+
+    // Proves a corner grip keeps each axis on the pointer's side on its own:
+    // crossing the anchor horizontally only never drops the lens below it,
+    // and a tiny move across the dominant-scale tie doesn't jump it.
+    @Test func lensCornerCrossingKeepsEachAxis() {
+        let m = Self.magnifier(source: CGRect(x: 0, y: 0, width: 40, height: 20),
+                               frame: CGRect(x: 100, y: 100, width: 80, height: 40))
+        func frame(_ p: CGPoint) -> CGRect? {
+            let r = Self.annotation(m).dragging(.resize(x: 1, y: 1), from: CGPoint(x: 180, y: 140), to: p)
+            if case let .magnify(n) = r.kind { return n.frame }
+            return nil
+        }
+        #expect(frame(CGPoint(x: 40, y: 130)) == CGRect(x: 40, y: 100, width: 60, height: 30))
+        let before = frame(CGPoint(x: 40.1, y: 130)), after = frame(CGPoint(x: 40, y: 130))
+        #expect(before?.minY == 100 && after?.minY == 100)
+    }
 }

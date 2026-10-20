@@ -300,13 +300,15 @@ extension Annotation {
             var sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
             if case let .magnify(m) = kind {
                 // the lens keeps the source's aspect; only the zoom changes.
-                // The scale keeps its sign, so a grip dragged past the anchor
-                // puts the lens on the pointer's side — the box re-standardizes
-                // and a Magnify never flips its content
-                let u = Self.uniform(x, y, sx, sy)
+                // One magnitude for both axes, but each moving axis keeps its
+                // own sign, so a grip dragged past the anchor on that axis puts
+                // the lens on the pointer's side — the box re-standardizes and
+                // a Magnify never flips its content
+                let u = x == 0 ? abs(sy) : y == 0 ? abs(sx) : max(abs(sx), abs(sy))
+                let ux = x != 0 && sx < 0 ? -u : u, uy = y != 0 && sy < 0 ? -u : u
                 var new = self
                 new.kind = .magnify(m.resizingLens(to: m.frame.mapCorners {
-                    CGPoint(x: anchor.x + ($0.x - anchor.x) * u, y: anchor.y + ($0.y - anchor.y) * u)
+                    CGPoint(x: anchor.x + ($0.x - anchor.x) * ux, y: anchor.y + ($0.y - anchor.y) * uy)
                 }))
                 return new
             }
@@ -352,12 +354,6 @@ extension Annotation {
                                                             width: maxX - minX, height: maxY - minY)))
             return new
         }
-    }
-
-    /// one scale for both axes: the grip's moving axis on an edge drag, the
-    /// larger on a corner, sign kept
-    static func uniform(_ x: Int, _ y: Int, _ sx: CGFloat, _ sy: CGFloat) -> CGFloat {
-        x == 0 ? sy : y == 0 ? sx : (abs(sx) >= abs(sy) ? sx : sy)
     }
 
     /// a resize-handle drag that moves the crop edges with the frame edges: the
