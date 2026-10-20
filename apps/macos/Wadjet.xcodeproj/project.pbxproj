@@ -59,6 +59,7 @@
 			buildPhases = (
 				A10000000000000000000009 /* Sources */,
 				A10000000000000000000004 /* Frameworks */,
+				A10000000000000000000020 /* Resources */,
 				B30000000000000000000001 /* Embed App Extensions */,
 			);
 			buildRules = (
@@ -120,6 +121,13 @@
 /* End PBXProject section */
 
 /* Begin PBXResourcesBuildPhase section */
+		A10000000000000000000020 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
 /* End PBXResourcesBuildPhase section */
 
 /* Begin PBXSourcesBuildPhase section */
