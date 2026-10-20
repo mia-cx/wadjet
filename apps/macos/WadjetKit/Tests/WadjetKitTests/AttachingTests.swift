@@ -428,5 +428,54 @@ struct AttachingTests {
         }
         #expect(near(results[0], results[1], 1e-6))
     }
+
+    // Proves a group resize keeps a selected whole follower where the resize
+    // put it: doubling a box at the origin with its label (centre x 125, on
+    // the anchor at x 100) leaves the label's centre at x 250, and it still
+    // follows the box afterwards.
+    @Test func groupResizeKeepsSelectedFollowers() {
+        let target = box(), label = box(CGRect(x: 120, y: 20, width: 10, height: 10))
+        var stack = LayerStack([target, label])
+        stack.attach(label.id, .whole, to: target.id, at: .frame(CGPoint(x: 1, y: 0.5)))
+        let doubled = AnnotationGroup.dragging([current(stack, target.id), current(stack, label.id)],
+                                               .resize(x: 1, y: 1), from: CGPoint(x: 130, y: 50),
+                                               to: CGPoint(x: 260, y: 100))
+        stack.replaceGroup(doubled)
+        var b = current(stack, label.id).kind.bounds
+        #expect(abs(b.midX - 250) < 1e-6)
+        stack.replace(current(stack, target.id).moved(by: CGVector(dx: 10, dy: 0)))
+        b = current(stack, label.id).kind.bounds
+        #expect(abs(b.midX - 260) < 1e-6)
+        #expect(current(stack, label.id).attachments.count == 1)
+    }
+
+    // Proves deleting an anchor that leaves the stroke unchanged keeps a
+    // follower in place: nodes at x 0, 25, 50, 100 lose the one at 25, and a
+    // label halfway between 25 and 50 stays at x 37.5.
+    @Test func removingAnAnchorKeepsFollowers() throws {
+        let path = Annotation(kind: .path(PathData(nodes: [0, 25, 50, 100].map {
+            PathNode(anchor: CGPoint(x: $0, y: 0)) })), style: red4)
+        let label = box(CGRect(x: 32.5, y: 10, width: 10, height: 10))
+        var stack = LayerStack([path, label])
+        stack.attach(label.id, .whole, to: path.id, at: .segment(1, t: 0.5))
+        let kept = try #require(current(stack, path.id).removingAnchors([1]))
+        stack.replaceReshaping(kept)
+        #expect(abs(current(stack, label.id).kind.bounds.midX - 37.5) < 1e-6)
+    }
+
+    // Proves dragging an attached anchor carries it away free, while an
+    // anchor left where it was stays attached.
+    @Test func draggedAnchorsLetGo() {
+        let path = Annotation(kind: .path(PathData(nodes: [0, 50, 100].map {
+            PathNode(anchor: CGPoint(x: $0, y: 0)) })), style: red4)
+        let t1 = box(CGRect(x: 0, y: 0, width: 5, height: 5)), t2 = box(CGRect(x: 100, y: 0, width: 5, height: 5))
+        var stack = LayerStack([t1, t2, path])
+        stack.attach(path.id, .start, to: t1.id, at: .frame(.zero))
+        stack.attach(path.id, .end, to: t2.id, at: .frame(.zero))
+        let moved = current(stack, path.id).movingAnchors([2], by: CGVector(dx: 0, dy: 30))
+        stack.replaceEditingAnchors([(moved, [2])])
+        #expect(current(stack, path.id).attachments.map(\.point) == [.start])
+        #expect(near(current(stack, path.id).position(of: .end), CGPoint(x: 100, y: 30)))
+    }
 }
 

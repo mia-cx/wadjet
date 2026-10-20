@@ -45,14 +45,9 @@ extension LayerStack {
               let t = annotations.first(where: { $0.id == target }),
               let p = t.position(of: anchor) else { return false }
         var a = annotations[i]
-        var new = Attachment(point: point, target: target, anchor: anchor)
+        let new = Attachment(point: point, target: target, anchor: anchor)
         if point == .whole {
-            let b = a.kind.bounds, th = t.attachRotation
-            let v = CGVector(dx: b.midX - p.x, dy: b.midY - p.y)
-            // the offset in the target's unrotated frame, so it turns with it
-            new.offset = CGVector(dx: v.dx * cos(th) + v.dy * sin(th), dy: -v.dx * sin(th) + v.dy * cos(th))
-            new.turn = a.attachRotation - th
-            a.attachments = [new]
+            a.attachments = [a.rebased(new, on: t, at: p)]
         } else {
             a.attachments.removeAll { $0.point == point || $0.point == .whole }
             a.attachments.append(new)
@@ -82,6 +77,8 @@ extension LayerStack {
     /// once against all of them. Each lets go of whatever doesn't move with
     /// the group: carrying it away detaches it, while an arrow moved with
     /// its target stays attached and lands where the target takes its ends.
+    /// A member attached whole keeps the place the edit gave it: its offset
+    /// and turn are taken anew, so a group resize scales it with the rest.
     public mutating func replaceGroup(_ members: [Annotation]) {
         let rigid = movingTogether(Set(members.map(\.id)))
         var list = annotations
@@ -91,7 +88,40 @@ extension LayerStack {
             list[i] = m
             list[i].attachments.removeAll { !rigid.contains($0.target) }
         }
+        // a follower whose target is a member too: the edit placed both; one
+        // whose target only follows the members moves with it unchanged
+        let ids = Set(members.map(\.id))
+        Self.rebaseWhole(ids, in: &list, index: index, targets: ids)
         annotations = list
+    }
+
+    /// several Annotations edited at once — Direct Select's anchor drags
+    /// and nudges, each with the anchors it moved — in one change. A moved
+    /// anchor lets go of what it was attached to, so dragging it away
+    /// detaches it; one attached whole keeps the place the edit gave it.
+    public mutating func replaceEditingAnchors(_ edits: [(Annotation, Set<Int>)]) {
+        var list = annotations
+        let index = Dictionary(list.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        for (a, moved) in edits {
+            guard let i = index[a.id] else { continue }
+            let freed = Set(moved.compactMap { a.attachPoint(forAnchor: $0) })
+            list[i] = a
+            list[i].attachments.removeAll { freed.contains($0.point) }
+        }
+        Self.rebaseWhole(Set(edits.map(\.0.id)), in: &list, index: index, targets: nil)
+        annotations = list
+    }
+
+    /// `ids`' whole attachments retaken from where they sit in `list` now —
+    /// only those whose target is in `targets`, when given
+    static func rebaseWhole(_ ids: Set<Annotation.ID>, in list: inout [Annotation],
+                            index: [Annotation.ID: Int], targets: Set<Annotation.ID>?) {
+        for id in ids {
+            guard let i = index[id], let w = list[i].attachments.first(where: { $0.point == .whole }),
+                  targets.map({ $0.contains(w.target) }) ?? true,
+                  let j = index[w.target], let p = list[j].position(of: w.anchor) else { continue }
+            list[i].attachments = [list[i].rebased(w, on: list[j], at: p)]
+        }
     }
 
     /// what moves exactly as `ids` do when they move together: the ids,
@@ -250,6 +280,32 @@ extension LayerStack {
 }
 
 extension Annotation {
+    /// `at`, a whole attachment, with the offset and turn this Annotation
+    /// has now from its anchor at `p` on `target` — the offset in the
+    /// target's unrotated frame, so it turns with it
+    func rebased(_ at: Attachment, on target: Annotation, at p: CGPoint) -> Attachment {
+        var at = at
+        let b = kind.bounds, th = target.attachRotation
+        let v = CGVector(dx: b.midX - p.x, dy: b.midY - p.y)
+        at.offset = CGVector(dx: v.dx * cos(th) + v.dy * sin(th), dy: -v.dx * sin(th) + v.dy * cos(th))
+        at.turn = attachRotation - th
+        return at
+    }
+
+    /// the attachable point Direct Select's anchor `i` is: a Line's ends, an
+    /// open path's ends and the nodes between, a closed path's nodes; nil
+    /// for a Shape's vertices and anything else
+    public func attachPoint(forAnchor i: Int) -> AttachPoint? {
+        switch kind {
+        case .line: return i == 0 ? .start : i == 1 ? .end : nil
+        case let .path(d):
+            guard d.nodes.indices.contains(i) else { return nil }
+            if d.closed { return .node(i) }
+            return i == 0 ? .start : i == d.nodes.count - 1 ? .end : .node(i)
+        default: return nil
+        }
+    }
+
     /// whether this moves exactly as `rigid` does: attached whole to one of
     /// them, or a Line or path whose every point is attached to them
     func followsRigidly(_ rigid: Set<Annotation.ID>) -> Bool {
