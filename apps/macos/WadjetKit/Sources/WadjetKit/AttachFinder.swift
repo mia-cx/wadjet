@@ -181,14 +181,12 @@ extension Annotation {
         placing(point, at: p)
     }
 
-    /// the attachable point a grip drags: a Line's ends, an open Pen path's
-    /// first and last nodes — nil for every other grip
+    /// the attachable point a grip drags: a Line's bend, or a vertex grip's
+    /// anchor (as Direct Select's anchors name them) — nil for every other grip
     public func attachPoint(for handle: SelectionHandle) -> AttachPoint? {
-        guard case let .vertex(i) = handle else { return nil }
-        switch kind {
-        case .line: return i == 0 ? .start : .end
-        case let .path(d) where !d.closed && d.rawPoints == nil && d.nodes.count > 1:
-            return i == 0 ? .start : i == d.nodes.count - 1 ? .end : nil
+        switch handle {
+        case .bend: if case .line = kind { return .bend } else { return nil }
+        case let .vertex(i): return attachPoint(forAnchor: i)
         default: return nil
         }
     }

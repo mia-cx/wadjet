@@ -1,11 +1,12 @@
 import AppKit
 import WadjetKit
 
-/// Attaching a dragged Line or Pen end to another Annotation: while the grip
-/// drags, the Annotation under it shows its attach spots and the end snaps to
-/// the nearest; the drop attaches it. Control suppresses attaching, as it
-/// suppresses snapping, and so does ⌘ while Select is the armed Tool —
-/// with any other Tool armed, ⌘ is what turns it into Select for the drag.
+/// Attaching a point dragged with Direct Select — a Line's end or bend, a
+/// path's end or node — to another Annotation: while it drags, the
+/// Annotation under it shows its attach spots and the point snaps to the
+/// nearest; the drop attaches it. Control suppresses attaching, as it
+/// suppresses snapping, and so does ⌘ while Select or Direct Select is the
+/// armed Tool — with any other Tool armed, ⌘ is what turns it into Select.
 extension MarkupController {
     /// how near, in on-screen points, a dragged end snaps to an attach spot or outline
     static let attachRadius: CGFloat = 8
@@ -18,15 +19,40 @@ extension MarkupController {
     /// whether the keys held now keep a dragged end from attaching
     var attachSuppressed: Bool {
         let f = NSEvent.modifierFlags
-        return f.contains(.control) || (f.contains(.command) && armed == .select)
+        return f.contains(.control) || (f.contains(.command) && (armed == .select || armed == .directSelect))
+    }
+
+    /// the one attachable point a Direct Select drag carries, if it carries
+    /// exactly one: several anchors moving together attach nothing
+    var draggedAttachPoint: (id: Annotation.ID, point: AttachPoint)? {
+        switch gesture {
+        case let .anchors(starts, _):
+            guard starts.count == 1, let (id, m) = starts.first, m.indices.count == 1, let i = m.indices.first,
+                  let point = m.start.attachPoint(forAnchor: i) else { return nil }
+            return (id, point)
+        case let .handle(h, start, _):
+            return start.attachPoint(for: h).map { (start.id, $0) }
+        default:
+            return nil
+        }
+    }
+
+    /// after an anchor drag's step: the one dragged point snaps onto the
+    /// attach spot it's over
+    func attachAnchorDrag(constrained: Bool) {
+        guard let (id, point) = draggedAttachPoint, let moved = stack.annotations.first(where: { $0.id == id })
+        else { attachHover = nil; return }
+        let (snapped, hover) = attaching(moved, point: point, constrained: constrained)
+        attachHover = hover
+        if snapped != moved { mutateUnrecorded { $0.replace(snapped) } }
     }
 
     /// `moved`, the grip drag's result, with the dragged end snapped onto the
     /// attach spot it's over, and what it's over — nil for grips that don't
     /// attach, while attaching is suppressed, and while Shift holds the end
     /// on its 45° ray — a spot would pull it off
-    func attaching(_ moved: Annotation, grip h: SelectionHandle, constrained: Bool) -> (Annotation, AttachHover?) {
-        guard !attachSuppressed, !constrained, let point = moved.attachPoint(for: h),
+    func attaching(_ moved: Annotation, point: AttachPoint?, constrained: Bool) -> (Annotation, AttachHover?) {
+        guard !attachSuppressed, !constrained, let point,
               let at = moved.position(of: point),
               let hover = AttachFinder.hover(at: at, in: stack, attaching: moved.id, point,
                                              radius: Self.attachRadius / zoom) else { return (moved, nil) }

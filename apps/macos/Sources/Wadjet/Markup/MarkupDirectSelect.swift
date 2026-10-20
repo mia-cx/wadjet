@@ -44,7 +44,8 @@ extension MarkupController {
         case let .grip(id, h)?:
             guard let a = stack.annotations.first(where: { $0.id == id }) else { return }
             setSelection([id])
-            gesture = .handle(h, a, from: p)
+            // dragging an attached bend carries it away; the drop may attach it again
+            gesture = .handle(h, a.attachPoint(for: h).map { a.detaching($0) } ?? a, from: p)
             return
         case nil:
             break
@@ -107,6 +108,8 @@ extension MarkupController {
         mutateUnrecorded { s in
             s.replaceEditingAnchors(starts.values.map { ($0.start.movingAnchors($0.indices, by: d), $0.indices) })
         }
+        // one point dragged alone snaps to an attach spot under it
+        attachAnchorDrag(constrained: constrained)
     }
 
     /// the marquee's release: its anchors join the selection

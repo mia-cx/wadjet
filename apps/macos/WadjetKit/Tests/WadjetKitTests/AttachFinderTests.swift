@@ -56,17 +56,18 @@ struct AttachFinderTests {
         #expect(AttachFinder.hover(at: CGPoint(x: 30, y: 3), in: stack, attaching: arrow.id, .end, radius: 8) == nil)
     }
 
-    // Proves a dragged grip names the point it would attach: a Line's ends,
-    // an open Pen path's ends only.
+    // Proves a dragged grip names the point it would attach: a Line's ends
+    // and bend, an open path's ends and the nodes between.
     @Test func gripsThatAttach() {
         let line = Annotation(kind: .line(start: .zero, end: CGPoint(x: 1, y: 1)), style: red4)
         let pen = Annotation(kind: .path(PathData(nodes: [PathNode(anchor: .zero), PathNode(anchor: CGPoint(x: 5, y: 0)),
                                                           PathNode(anchor: CGPoint(x: 9, y: 0))])), style: red4)
         #expect(line.attachPoint(for: .vertex(0)) == .start)
         #expect(line.attachPoint(for: .vertex(1)) == .end)
-        #expect(line.attachPoint(for: .bend) == nil)
+        #expect(line.attachPoint(for: .bend) == .bend)
         #expect(pen.attachPoint(for: .vertex(0)) == .start)
-        #expect(pen.attachPoint(for: .vertex(1)) == nil)
+        #expect(pen.attachPoint(for: .vertex(1)) == .node(1))
+        #expect(pen.attachPoint(for: .bend) == nil)
         #expect(pen.attachPoint(for: .vertex(2)) == .end)
     }
 }

@@ -165,12 +165,9 @@ final class MarkupController {
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored var snapper: MarkupSnapper?
     /// what a dragged end is over and would attach to (MarkupAttach.swift)
-    @ObservationIgnored private(set) var attachHover: AttachHover?
+    @ObservationIgnored var attachHover: AttachHover?
     /// a grip drag on an end that can attach is in flight
-    var draggingAttachable: Bool {
-        if case let .handle(h, start, _) = gesture { return start.attachPoint(for: h) != nil }
-        return false
-    }
+    var draggingAttachable: Bool { draggedAttachPoint != nil }
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
@@ -1032,7 +1029,7 @@ final class MarkupController {
                                       targets: [], range: 0, skip: true).annotation
             }
             // an end over another Annotation snaps to its attach spot
-            let (attached, hover) = attaching(moved, grip: h, constrained: constrained && shiftConstrained)
+            let (attached, hover) = attaching(moved, point: moved.attachPoint(for: h), constrained: constrained && shiftConstrained)
             attachHover = hover
             stack.replace(attached)
         case let .recrop(h, start, from):
@@ -1122,9 +1119,8 @@ final class MarkupController {
             }
         }
         // a dragged end dropped on an attach spot attaches there, in the drag's undo step
-        if case let .handle(h, start, _) = gesture, let spot = attachHover?.snapped,
-           let point = start.attachPoint(for: h), !attachSuppressed {
-            stack.attach(start.id, point, to: spot.target, at: spot.anchor)
+        if let (id, point) = draggedAttachPoint, let spot = attachHover?.snapped, !attachSuppressed {
+            stack.attach(id, point, to: spot.target, at: spot.anchor)
             AppLog.line("markup: attached \(point)")
         }
         attachHover = nil
