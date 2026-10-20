@@ -4,9 +4,10 @@ import CoreImage
 extension CanvasDocument {
     /// Composites displays, backdrop windows, then Annotations back to front.
     /// Crop and radius are global points; scale is output pixels per point. HDR
-    /// pixels stay extended. Black out fills opaque black; Blur, Pixelate and
-    /// Magnify sample each display's image beneath them plus the visible
-    /// window layers stacked beneath them. A `.window` Annotation draws the
+    /// pixels stay extended. Black out fills opaque black; Blur and Pixelate
+    /// sample each display's image beneath them plus the visible window layers
+    /// stacked beneath them, a Magnify every visible layer stacked beneath it
+    /// (`sampledBeneath`). A `.window` Annotation draws the
     /// window layer it names — layers without an id form the backdrop beneath
     /// every Annotation.
     /// Black out fills opaque black; Blur and Pixelate sample each display's
@@ -84,11 +85,8 @@ extension CanvasDocument {
             }
             var sources = displaySources
             if let box = annotation.sampledRect {
-                let below = layerStack.annotations[..<index].filter {
-                    if case .window = $0.kind { return !$0.hidden }
-                    return false
-                }
-                if !below.isEmpty, let b = try beneathSource(windows: below, rect: box, scale: scale) {
+                let below = Self.sampledBeneath(annotation, in: layerStack.annotations[..<index])
+                if !below.isEmpty, let b = try beneathSource(layers: below, rect: box, scale: scale) {
                     sources = [b]
                 }
             }
@@ -102,22 +100,38 @@ extension CanvasDocument {
         return image
     }
 
-    /// The pixels a sampling Annotation reads when windows sit beneath it: the
-    /// displays plus `windows` (visible `.window` Annotations, back to front;
-    /// backdrop layers stay out) rendered over `rect` snapped outward to the
+    /// What a sampling Annotation sees above the displays, from the layers
+    /// `below` it, back to front: a Magnify sees every visible Annotation —
+    /// never itself or anything above it — a Blur or Pixelate Censor only the
+    /// visible window layers
+    public static func sampledBeneath(_ annotation: Annotation,
+                                      in below: ArraySlice<Annotation>) -> [Annotation] {
+        below.filter {
+            guard !$0.hidden else { return false }
+            if case .magnify = annotation.kind { return true }
+            if case .window = $0.kind { return true }
+            return false
+        }
+    }
+
+    /// The pixels a sampling Annotation reads when layers sit beneath it: the
+    /// displays plus `layers` (visible Annotations from `sampledBeneath`, back
+    /// to front; backdrop layers stay out) rendered over `rect` snapped outward to the
     /// pixel grid at `scale` — at least `scale` pixels per point, and the
     /// captured displays' own density where higher, so magnifying never starts
     /// from a downsampled source. The frame's size comes from the rendered
     /// image. Moved windows are sampled where they sit, not where the flat
     /// displays froze them — the filters only read inside their sampled rect.
-    /// Returns nil when no window paints on `rect` or the snapped rect isn't
+    /// Returns nil when no layer paints on `rect` or the snapped rect isn't
     /// valid — callers then keep the display sources unchanged.
-    public func beneathSource(windows: [Annotation], rect: CGRect,
+    public func beneathSource(layers: [Annotation], rect: CGRect,
                             scale: CGFloat) throws -> CensorSource? {
-        let touching = windows.filter {
-            PathGeometry.path(for: $0).boundingBox.intersects(rect)
-        }
-        guard !touching.isEmpty else { return nil }
+        let paints = layers.map { PathGeometry.coverage(for: $0).boundingBoxOfPath.intersects(rect) }
+        guard paints.contains(true) else { return nil }
+        // a sampling layer that paints here reads the layers beneath it
+        // wherever they sit, so everything under the topmost one stays
+        let sampler = layers.indices.last { paints[$0] && layers[$0].sampledRect != nil } ?? -1
+        let touching = layers.indices.filter { $0 < sampler || paints[$0] }.map { layers[$0] }
         let density = max(scale, layout.filter { $0.frame.intersects(rect) }
             .map(\.scaleFactor).max() ?? 0)
         // snap outward to the output pixel grid: flatten allocates

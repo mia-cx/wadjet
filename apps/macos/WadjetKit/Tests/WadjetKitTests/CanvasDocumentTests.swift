@@ -516,7 +516,7 @@ struct CanvasDocumentTests {
         ])
         let window = try #require(document.layerStack.annotations.last)
         let source = try #require(try document.beneathSource(
-            windows: [window], rect: CGRect(x: 0, y: 0, width: 4, height: 4), scale: 1))
+            layers: [window], rect: CGRect(x: 0, y: 0, width: 4, height: 4), scale: 1))
         #expect(source.image.width == 8 && source.image.height == 8)
         #expect(source.frame == CGRect(x: 0, y: 0, width: 4, height: 4))
     }
@@ -547,7 +547,7 @@ struct CanvasDocumentTests {
                            image: try solidImage([0, 1, 0, 1], width: 4, height: 4)),
         ])
         let window = try #require(withWindow.layerStack.annotations.first)
-        #expect(try withWindow.beneathSource(windows: [window],
+        #expect(try withWindow.beneathSource(layers: [window],
             rect: CGRect(x: 0, y: 0, width: 4, height: 4), scale: 1) == nil)
         #expect(try linearPixels(document.flatten(scale: 1))
                 == linearPixels(withWindow.flatten(scale: 1)))

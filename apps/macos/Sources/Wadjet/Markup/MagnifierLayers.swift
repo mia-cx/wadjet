@@ -7,7 +7,7 @@ import WadjetKit
 /// rims — NSHostingViews inside pass-through wrappers in `container`, views
 /// above the panel's other layers (each masked out where a higher Annotation
 /// paints over the magnifier). An Editor's magnifiers draw the Canvas's own
-/// display images plus the windows stacked beneath each Magnify, and flatten
+/// display images plus the layers stacked beneath each Magnify, and flatten
 /// the glass in — `MagnifyRenderer.glass` stands
 /// in for the live rims so the view shows what a Screenshot will flatten to.
 /// Either way: a content layer per magnifier — the viewport magnified — added
@@ -20,8 +20,8 @@ import WadjetKit
     private let screen: NSScreen?
     /// nil in live mode — an Editor's fixed sources: the Canvas's display images
     private let staticSources: [MagnifyRenderer.Source]?
-    /// static mode's windows-beneath render: `CanvasDocument.beneathSource`,
-    /// so a Magnify samples moved windows where they sit, like flatten
+    /// static mode's layers-beneath render: `CanvasDocument.beneathSource`,
+    /// so a Magnify samples the Annotations and moved windows beneath it, like flatten
     private let beneath: (([Annotation], CGRect, CGFloat) -> CensorSource?)?
     /// static mode renders at the Canvas's own scale; nil means the sync scale
     private let staticScale: CGFloat?
@@ -82,21 +82,26 @@ import WadjetKit
             layer.backgroundColor = CGColor(gray: 0, alpha: 1) // fallback until a sample lands
             var sources: [MagnifyRenderer.Source]
             if let staticSources {
-                // what flatten samples: only the visible windows beneath this
+                // what flatten samples: every visible layer beneath this
                 // Magnify in stack order; none falls back to the displays
-                let below = annotations[..<i].filter {
-                    if case .window = $0.kind { return !$0.hidden }
-                    return false
-                }
-                // `beneath` answers nil when no window paints the viewport —
+                let below = CanvasDocument.sampledBeneath(a, in: annotations[..<i])
+                // `beneath` answers nil when no layer paints the viewport —
                 // fall back to the display sources, like flatten does
-                if let b = beneath?(below, m.viewport, renderScale) {
+                if !below.isEmpty, let b = beneath?(below, m.viewport, renderScale) {
                     sources = [(CIImage(cgImage: b.image), b.frame)]
                 } else {
                     sources = staticSources.filter { $0.rect.intersects(m.viewport) }
                 }
             } else {
+                // the panels never reach the screen samples: draw the
+                // Annotations beneath this Magnify over them
                 sources = ScreenSamples.shared.sources(covering: m.viewport)
+                if let u = MagnifyUnderlay.render(base: sources, below: Array(annotations[..<i]),
+                                                  rect: m.viewport, scale: renderScale,
+                                                  images: MarkupController.onScreen.images,
+                                                  canvasPixels: MarkupController.onScreen.canvasPixels) {
+                    sources = [(CIImage(cgImage: u.image), u.frame)]
+                }
             }
             var content = MagnifyRenderer.content(m, sources: sources, scale: renderScale)
             // static mode is what the Screenshot flattens to: bake the glass in

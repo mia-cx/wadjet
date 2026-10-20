@@ -31,7 +31,8 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
     }
 
     /// draws `annotations` into a 32BGRA pixel buffer in place; no-op for an empty list.
-    /// `source` supplies the clean pixels Blur and Pixelate sample — never the buffer being drawn on.
+    /// `source` supplies the clean pixels Blur and Pixelate sample — never the buffer being drawn on;
+    /// a Magnify samples the buffer as drawn up to it, so it shows the Annotations beneath it.
     /// `images`/`canvasPixels` feed image-kind Annotations: pre-flattened link
     /// pixels, since a live flatten per frame would cost a render every time.
     public func draw(_ annotations: [Annotation], on pixelBuffer: CVPixelBuffer, source: CVPixelBuffer,
@@ -66,7 +67,16 @@ public struct WindowFrameAnnotator: Equatable, Sendable {
         context.clip(to: clip)
         context.concatenate(transform)
         for annotation in annotations {
-            context.draw(annotation, sources: sources, images: images, canvasPixels: canvasPixels)
+            var sampled = sources
+            // a Magnify sees the frame as composited so far: the window plus
+            // every Annotation beneath it, never itself or anything above
+            if !annotation.hidden, case .magnify = annotation.kind,
+               let soFar = context.makeImage(),
+               let cropped = soFar.cropping(to: CGRect(x: clip.minX, y: CGFloat(h) - clip.maxY,
+                                                       width: clip.width, height: clip.height)) {
+                sampled = [CensorSource(image: cropped, frame: clip.applying(transform.inverted()))]
+            }
+            context.draw(annotation, sources: sampled, images: images, canvasPixels: canvasPixels)
         }
     }
 }

@@ -28,18 +28,26 @@ public struct CapturedWindow: Sendable {
 
 extension CanvasDocument {
     /// Keeps every captured display for recropping. Region/screen captures retain
-    /// off-crop Annotations; a window capture retains fills/strokes touching its frame.
+    /// off-crop Annotations; a window capture retains fills/strokes touching its frame,
+    /// and everything beneath a Magnify it retains — the Magnify samples those layers.
     public init(capturedDisplays: [CapturedCanvasDisplay], crop: CGRect, cornerRadius: CGFloat = 0,
                 annotations: LayerStack, windowCapture: Bool = false,
                 images: [UUID: CGImage] = [:], canvases: [URL: CanvasDocument] = [:],
                 embedded: [String: CanvasDocument] = [:]) {
         let frames = windowCapture ? [crop] : capturedDisplays.map(\.display.frame)
-        let kept = annotations.annotations.filter { annotation in
+        let all = annotations.annotations
+        let touches = all.map { annotation in
             let coverage = PathGeometry.coverage(for: annotation)
             return frames.contains { frame in
                 coverage.intersects(CGPath(rect: frame, transform: nil), using: .winding)
             }
         }
+        // a kept Magnify shows every layer beneath it, wherever that sits
+        let magnify = all.indices.last { i in
+            guard touches[i], case .magnify = all[i].kind else { return false }
+            return true
+        } ?? -1
+        let kept = all.indices.filter { $0 < magnify || touches[$0] }.map { all[$0] }
         // assets, links and embedded Canvases only travel with the Annotations
         // that name them; linkedCanvases keeps History retention holding the targets
         var assets: [UUID: CGImage] = [:], links: [CanvasLink] = [], names: Set<String> = []
