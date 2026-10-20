@@ -2,16 +2,17 @@ import Foundation
 import WadjetKit
 
 /// Runs History maintenance off the main thread, shortly after launch and
-/// every elapsed day. Each run takes the latest live config; runs never overlap.
+/// every elapsed day. Each run takes the latest live config, including the
+/// screenshots folder whose original/ it sweeps; runs never overlap.
 @MainActor final class CanvasRetentionRunner {
     static let shared = CanvasRetentionRunner()
     private var timer: Timer?
     private var running = false
 
-    func start(store: CanvasStore) {
+    func start(store: @escaping @MainActor () -> CanvasStore) {
         guard timer == nil else { return }
         let timer = Timer(fire: Date().addingTimeInterval(5), interval: 86_400, repeats: true) { _ in
-            Task { @MainActor in await self.sweep(store: store) }
+            Task { @MainActor in await self.sweep(store: store()) }
         }
         self.timer = timer
         RunLoop.main.add(timer, forMode: .common)

@@ -448,7 +448,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             AppLog.line("history: store failed to open, running without it: \(error.localizedDescription)")
         }
         sweepCaptures()
-        CanvasRetentionRunner.shared.start(store: canvasStore)
+        startCanvasStorage()
         // Entries stay; only the temp files age out. Re-sweep daily while running.
         Timer.scheduledTimer(withTimeInterval: 24 * 3600, repeats: true) { _ in
             Task { @MainActor in self.sweepCaptures() }
@@ -994,7 +994,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
     // capture temp files land in the Captures dir and age out via the sweep
     lazy var captureFiles = CaptureFiles(directory: Self.capturesDir)
-    lazy var canvasStore = CanvasStore(directory: Self.historyURL.deletingLastPathComponent().appendingPathComponent("Canvases"))
+    private var cachedCanvasStore: CanvasStore?
+    /// History's Canvases, in the screenshots folder's original/; follows the folder setting
+    var canvasStore: CanvasStore {
+        let directory = screenshotFolders.original
+        if let store = cachedCanvasStore, store.directory.path == directory.path { return store }
+        let store = CanvasStore(directory: directory)
+        cachedCanvasStore = store
+        return store
+    }
     lazy var workflowEffects = AppWorkflowEffects(toast: toastCtrl)
     lazy var runner = WorkflowRunner(effects: workflowEffects)
 
@@ -1012,13 +1020,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let state = AppState.shared
         let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
             ?? WadjetConfig().workflows.first { $0.takes == kind }!
-        let defaultFolder = expandingTilde(kind.isRecording
-            ? state.config.value.folders.recordings
-            : state.config.value.folders.screenshots)
+        // Screenshot images go to flattened/, beside their Canvases in original/
+        let folders = screenshotFolders
+        let defaultFolder = kind.isRecording ? expandingTilde(state.config.value.folders.recordings) : folders.flattened
         workflowEffects.canvases[runID] = canvas
         AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
         Task { @MainActor in
-            for await e in runner.run(file, through: wf, defaultFolder: defaultFolder, id: runID, canvas: canvas) {
+            for await e in runner.run(file, through: wf, defaultFolder: defaultFolder,
+                                      canvasFolder: folders.root, id: runID, canvas: canvas) {
                 switch e {
                 case .started(let i, let s): AppLog.line("workflow \(wf.name): started \(i) \(s.title)")
                 case .finished(let i, let s): AppLog.line("workflow \(wf.name): finished \(i) \(s.title)")
