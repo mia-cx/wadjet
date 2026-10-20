@@ -276,6 +276,8 @@ final class MarkupView: NSView {
     func setToolCursor() {
         let c = controller
         if c.selecting { NSCursor.arrow.set() }
+        // over the selection a placing Tool's press adjusts it, not places
+        else if c.overSelection(at: canvasPoint(fromScreen: NSEvent.mouseLocation)) { NSCursor.arrow.set() }
         // the eraser ring is drawn at the view's zoom, not screen size
         else if c.armed == .eraser { MarkupEraser.cursor(zoom: c.zoom).set() }
         else if let t = c.armed { WadjetCursors.cursor(for: t).set() }
