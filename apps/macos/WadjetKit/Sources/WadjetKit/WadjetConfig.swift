@@ -23,6 +23,8 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     public var recording = Recording()
     public var capture = Capture()
     public var markup = Markup()
+    /// the expanded toolbar's layout, switched from the Debug menu
+    public var toolbarLayout = ToolbarLayoutStyle.current
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -118,6 +120,7 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         recording = try c.decodeIfPresent(Recording.self, forKey: .recording) ?? Recording()
         capture = try c.decodeIfPresent(Capture.self, forKey: .capture) ?? Capture()
         markup = try c.decodeIfPresent(Markup.self, forKey: .markup) ?? Markup()
+        toolbarLayout = try c.decodeIfPresent(ToolbarLayoutStyle.self, forKey: .toolbarLayout) ?? .current
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -170,9 +173,10 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(recording, forKey: .recording)
         try c.encode(capture, forKey: .capture)
         try c.encode(markup, forKey: .markup)
+        try c.encode(toolbarLayout, forKey: .toolbarLayout)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, markup, canvasRetention
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, markup, canvasRetention, toolbarLayout
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }
