@@ -15,6 +15,16 @@ public struct AnnotationTransform: Codable, Equatable, Sendable {
     }
 }
 
+/// which grips a selection shows: a placing Tool's selection gets the
+/// bounding box, Select's gets each kind's own point grips
+public enum GripSet: Sendable {
+    /// the bounding box's resize grips and the rotate grip
+    case frame
+    /// a Line's ends and bend, a Pen path's nodes and handles; other kinds
+    /// fall back to the bounding box
+    case points
+}
+
 /// a grip on a selected Annotation
 public enum SelectionHandle: Hashable, Sendable {
     /// x and y are each -1, 0 or 1: the min edge, the middle, or the max edge of the untransformed bounds
@@ -488,11 +498,20 @@ extension Annotation {
         return out
     }
 
+    /// the grips `set` shows on this Annotation
+    public func handles(_ set: GripSet, minExtent: CGFloat,
+                        rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+        switch set {
+        case .frame: frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .points: handles(minExtent: minExtent, rotateOffset: rotateOffset)
+        }
+    }
+
     /// the grip nearest `p`, if within `radius` — nearest, not first, so grips
     /// crowded closer than `radius` resolve to the one the press meant
     public func handle(at p: CGPoint, radius: CGFloat, minExtent: CGFloat,
-                       rotateOffset: CGFloat) -> SelectionHandle? {
-        handles(minExtent: minExtent, rotateOffset: rotateOffset)
+                       rotateOffset: CGFloat, set: GripSet = .points) -> SelectionHandle? {
+        handles(set, minExtent: minExtent, rotateOffset: rotateOffset)
             .map { ($0.handle, hypot($0.at.x - p.x, $0.at.y - p.y)) }
             .filter { $0.1 <= radius }
             .min { $0.1 < $1.1 }?.0

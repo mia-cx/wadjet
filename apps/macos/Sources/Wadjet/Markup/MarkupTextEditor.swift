@@ -229,8 +229,8 @@ extension MarkupController {
         }
         // the whole session becomes one undo step — nothing for a dropped box
         recordTextEdit()
-        // the selection only makes sense to Select once editing ends
-        setSelection(armed == .select && kept ? id : nil)
+        // a kept text stays selected for editing while any Tool is armed
+        setSelection(armed != nil && kept ? id : nil)
         render()
         if isScreen {
             syncSession()

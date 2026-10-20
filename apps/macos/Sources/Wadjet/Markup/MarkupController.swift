@@ -121,8 +121,13 @@ final class MarkupController {
     private(set) var editing: Annotation.ID?
     @ObservationIgnored var editor: TextEditorView?
     /// ⌘ held turns any armed Markup Tool into Select until release
-    @ObservationIgnored var cmdHeld = false
+    @ObservationIgnored var cmdHeld = false {
+        didSet { if cmdHeld != oldValue, selection != nil { render() } } // the grips follow
+    }
     var selecting: Bool { armed == .select || cmdHeld }
+    /// the grips the selection shows and takes presses on: Select's own, or
+    /// the bounding box for what a placing Tool just placed
+    var gripSet: GripSet { selecting ? .points : .frame }
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored private var snapper: MarkupSnapper?
@@ -691,18 +696,7 @@ final class MarkupController {
                     render()
                     return
                 }
-                if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
-                                      minExtent: Self.handleMinExtent / zoom,
-                                      rotateOffset: Self.rotateOffset / zoom) {
-                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-                    gesture = .handle(h, sel, from: p)
-                    return
-                }
-                if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
-                    snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-                    gesture = Self.moveGesture(sel, at: p)
-                    return
-                }
+                if grabSelection(at: p) { return }
             }
             if let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom) {
                 selection = hit.id
@@ -714,10 +708,22 @@ final class MarkupController {
             }
             return
         }
+        // what a placing Tool just placed stays selected: a press on its grips
+        // or body adjusts it; a press anywhere else deselects and places anew
+        if editsSelection() {
+            if clickCount == 2, let sel = selected, case .text = sel.kind,
+               PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
+                gestureStart = nil // the text session records its own one step
+                startEditing(sel.id)
+                return
+            }
+            if grabSelection(at: p) { return }
+        }
+        // a new Annotation takes the Tool's style and options, not the selection's
+        selection = nil
         if armed == .draw, MarkupStyles.shared.drawVariant.isBrush {
             // Brush: collect samples while the pointer is down; the preview
             // draws them as an open polyline of corner nodes
-            selection = nil // the new stroke takes the Tool's style, not the selection's
             let style = MarkupStyles.shared.style(for: .draw)
             let a = Annotation(kind: .path(PathData(nodes: [PathNode(anchor: p)])), style: style)
             gesture = .brush(a, raw: [p])
@@ -727,7 +733,6 @@ final class MarkupController {
         if armed == .draw, MarkupStyles.shared.drawVariant == .pen {
             // Pen: a press adds a node (or closes on the first), a press-drag
             // pulls its handles — the path lives in `pen` until finishPen
-            selection = nil
             if pen == nil {
                 pen = (PenBuilder(), Annotation.ID(), MarkupStyles.shared.style(for: .draw))
             }
@@ -737,14 +742,12 @@ final class MarkupController {
             return
         }
         if armed == .eraser {
-            selection = nil
             gesture = MarkupEraser.variant == .knife
                 ? .cutting(from: p, to: p)
                 : .erasing(EraserSweep(stack: stack, at: p, radius: MarkupEraser.width / 2))
             render()
             return
         }
-        selection = nil // a new Annotation takes the Tool's style and options, not the selection's
         if armed == .text {
             gestureStart = nil // the text session records its own one step
             textEditStart = stack; textDirtyMarked = false; textSavedDuringSession = false
@@ -784,6 +787,42 @@ final class MarkupController {
         render()
     }
 
+    /// whether a press with the armed placing Tool may grab the selection —
+    /// not mid Pen path (its presses add nodes), not for the Eraser (it places
+    /// nothing), and not for a Counter's ⌥-click (it picks a sequence)
+    private func editsSelection() -> Bool {
+        guard selection != nil, pen == nil, armed != nil, armed != .eraser else { return false }
+        return !(armed == .counter && NSEvent.modifierFlags.contains(.option))
+    }
+
+    /// a press on the selection's grips or body starts the drag that adjusts
+    /// it; false when the press missed it
+    private func grabSelection(at p: CGPoint) -> Bool {
+        guard let sel = selected else { return false }
+        if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
+                              minExtent: Self.handleMinExtent / zoom,
+                              rotateOffset: Self.rotateOffset / zoom, set: gripSet) {
+            snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
+            gesture = .handle(h, sel, from: p)
+            return true
+        }
+        if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
+            snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
+            gesture = Self.moveGesture(sel, at: p)
+            return true
+        }
+        return false
+    }
+
+    /// true when `p` lies on the selection's grips or body — where a placing
+    /// Tool's press adjusts it rather than placing; the views show the arrow there
+    func overSelection(at p: CGPoint) -> Bool {
+        guard !selecting, editing == nil, editsSelection(), let sel = selected else { return false }
+        return sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
+                          rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil
+            || PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom)
+    }
+
     /// a Step counter click places on the spot — there's no drag. ⌥-click on a
     /// counter makes the next click continue from it; ⌥-click elsewhere starts
     /// a new sequence at 1/A.
@@ -800,10 +839,11 @@ final class MarkupController {
         let value = option ? 1 : counterNext ?? stack.nextCounterValue(format)
         counterNext = nil
         // the click's own gesture snapshot (begin → end) makes this one undo step
-        stack.add(Annotation(kind: .counter(center: p, radius: MarkupCounter.size / 2,
+        let a = Annotation(kind: .counter(center: p, radius: MarkupCounter.size / 2,
                                           value: value, format: format),
-                             style: MarkupStyles.shared.style(for: .counter)))
-        render()
+                           style: MarkupStyles.shared.style(for: .counter))
+        stack.add(a)
+        selection = a.id // stays selected for editing; selection's didSet renders
         AppLog.line("markup: placed counter \(format.label(value))")
     }
     /// `constrained` = Shift held: drawing and end drags snap to 45°
@@ -907,6 +947,7 @@ final class MarkupController {
                 var a = d
                 a.kind = .path(fitted)
                 stack.add(a)
+                selection = a.id // stays selected for editing, the Tool still armed
             }
             commitGesture() // the stroke's whole drag is its one undo step
             render()
@@ -952,7 +993,10 @@ final class MarkupController {
             case .image, .canvas: // images are never drafts
                 false
             }
-            if drawn { stack.add(d) }
+            if drawn {
+                stack.add(d)
+                selection = d.id // stays selected for editing, the Tool still armed
+            }
         }
         commitGesture()
         gesture = nil
@@ -978,6 +1022,8 @@ final class MarkupController {
             // mid-path are separate gestures, so the gesture snapshot can't
             // carry this one
             edit { $0.add(a) }
+            // stays selected for editing while a Tool is armed
+            if armed != nil { selection = a.id }
             AppLog.line("markup: finished pen path (\(data.nodes.count) nodes)")
         }
         gestureStart = nil // the path's presses left no drag to commit
