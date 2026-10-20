@@ -305,4 +305,18 @@ struct PathGeometryTests {
         let body = d.stroke.copy(strokingWithWidth: 4, lineCap: .round, lineJoin: .round, miterLimit: 10)
         #expect(body.intersects(d.ends))
     }
+
+    // coverage follows what paints: a filled head aimed along the stroke's
+    // last 18 pt trims the stroke at (-4.1, 8), so the corner at (0, 8) —
+    // outside the head — is no longer covered
+    @Test func coverageUsesTheTrimmedStroke() {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        style.head = .filledArrow
+        let a = Annotation(kind: .path(PathData(nodes: [
+            CGPoint(x: -18, y: 8), CGPoint(x: -8, y: 8), CGPoint(x: 0, y: 8), .zero,
+        ].map { PathNode(anchor: $0) })), style: style)
+        let covered = PathGeometry.coverage(for: a)
+        #expect(!covered.contains(CGPoint(x: 0, y: 8)))
+        #expect(covered.contains(CGPoint(x: -8, y: 8)))
+    }
 }
