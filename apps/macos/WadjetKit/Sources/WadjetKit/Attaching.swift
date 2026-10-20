@@ -83,15 +83,24 @@ extension LayerStack {
         let rigid = movingTogether(Set(members.map(\.id)))
         var list = annotations
         let index = Dictionary(list.enumerated().map { ($1.id, $0) }, uniquingKeysWith: { a, _ in a })
+        // a member attached whole sits out the first solve, so the edit's
+        // placement stands while its target (a member, or something that
+        // follows them) settles; then its offset and turn are taken from there
+        var wholes: [Annotation.ID: Attachment] = [:]
         for m in members {
             guard let i = index[m.id] else { continue }
             list[i] = m
             list[i].attachments.removeAll { !rigid.contains($0.target) }
+            if let w = list[i].attachments.first(where: { $0.point == .whole }) {
+                wholes[m.id] = w
+                list[i].attachments = []
+            }
         }
-        // a follower whose target is a member too: the edit placed both; one
-        // whose target only follows the members moves with it unchanged
-        let ids = Set(members.map(\.id))
-        Self.rebaseWhole(ids, in: &list, index: index, targets: ids)
+        annotations = list
+        guard !wholes.isEmpty else { return }
+        list = annotations
+        for (id, w) in wholes { if let i = index[id] { list[i].attachments = [w] } }
+        Self.rebaseWhole(Set(wholes.keys), in: &list, index: index, targets: nil)
         annotations = list
     }
 
@@ -192,6 +201,53 @@ extension LayerStack {
                       let anchor = a.nearestSegmentAnchor(to: was) else { return at }
                 var at = at
                 at.anchor = anchor
+                return at
+            }
+        }
+        annotations = list
+    }
+
+    /// replaces `a`, a path with the anchors at `removed` (old indices)
+    /// deleted — `Annotation.removingAnchors`. Removed points let go; the
+    /// nodes and segments that survive keep their exact attachments under
+    /// their new indices; an anchor on a segment the deletion merged moves
+    /// to the nearest spot on the merged one.
+    public mutating func replaceRemovingAnchors(_ a: Annotation, removed: Set<Int>) {
+        guard let old = annotations.first(where: { $0.id == a.id }), case let .path(od) = old.kind,
+              case let .path(nd) = a.kind else { return replaceReshaping(a) }
+        let n = od.nodes.count, survivors = (0..<n).filter { !removed.contains($0) }
+        guard survivors.count == nd.nodes.count else { return replaceReshaping(a) }
+        let newIndex = Dictionary(uniqueKeysWithValues: survivors.enumerated().map { ($1, $0) })
+        let m = survivors.count
+        var list = annotations
+        for i in list.indices {
+            if list[i].id == a.id {
+                var new = a
+                new.attachments = old.attachments.compactMap { at in
+                    let k: Int? = switch at.point {
+                    case .start: 0
+                    case .end: n - 1
+                    case let .node(k): k
+                    case .bend, .whole: nil
+                    }
+                    guard let k else { return at }
+                    guard let j = newIndex[k], let point = a.attachPoint(forAnchor: j) else { return nil }
+                    var at = at
+                    at.point = point
+                    return at
+                }
+                list[i] = new
+                continue
+            }
+            list[i].attachments = list[i].attachments.map { at in
+                guard at.target == a.id, case let .segment(j, t) = at.anchor else { return at }
+                var at = at
+                let j1 = od.closed ? (j + 1) % n : j + 1
+                if let s = newIndex[j], let e = newIndex[j1], e == (nd.closed ? (s + 1) % m : s + 1) {
+                    at.anchor = .segment(s, t: t)
+                } else if let was = old.position(of: at.anchor), let anchor = a.nearestSegmentAnchor(to: was) {
+                    at.anchor = anchor
+                }
                 return at
             }
         }

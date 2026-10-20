@@ -459,7 +459,7 @@ struct AttachingTests {
         var stack = LayerStack([path, label])
         stack.attach(label.id, .whole, to: path.id, at: .segment(1, t: 0.5))
         let kept = try #require(current(stack, path.id).removingAnchors([1]))
-        stack.replaceReshaping(kept)
+        stack.replaceRemovingAnchors(kept, removed: [1])
         #expect(abs(current(stack, label.id).kind.bounds.midX - 37.5) < 1e-6)
     }
 
@@ -476,6 +476,51 @@ struct AttachingTests {
         stack.replaceEditingAnchors([(moved, [2])])
         #expect(current(stack, path.id).attachments.map(\.point) == [.start])
         #expect(near(current(stack, path.id).position(of: .end), CGPoint(x: 100, y: 30)))
+    }
+
+    // Proves deleting an anchor keeps a follower on its own, unchanged
+    // segment, even beside a closer stroke: on the hairpin
+    // (0,0)→(100,0)→(1000,0)→(1000,5)→(0,5), deleting the first anchor
+    // leaves the follower at (500, 0), and a deleted attached node lets go.
+    @Test func removingAnAnchorKeepsTheSegment() throws {
+        let hairpin = Annotation(kind: .path(PathData(nodes: [(0, 0), (100, 0), (1000, 0), (1000, 5), (0, 5)].map {
+            PathNode(anchor: CGPoint(x: $0.0, y: $0.1)) })), style: red4)
+        let follower = arrow(from: CGPoint(x: 500, y: -50), to: CGPoint(x: 500, y: -10))
+        let t = box(CGRect(x: 0, y: 0, width: 5, height: 5))
+        var stack = LayerStack([t, hairpin, follower])
+        stack.attach(follower.id, .end, to: hairpin.id, at: .segment(1, t: 4.0 / 9))
+        stack.attach(hairpin.id, .start, to: t.id, at: .frame(.zero))
+        let kept = try #require(current(stack, hairpin.id).removingAnchors([0]))
+        stack.replaceRemovingAnchors(kept, removed: [0])
+        #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 500, y: 0)))
+        #expect(current(stack, hairpin.id).attachments.isEmpty)
+    }
+
+    // Proves a group resize keeps a selected label's placement when its
+    // target only follows the group: two boxes and a label on the Line
+    // between them, doubled about the origin, leave the label's centre at
+    // (100, 30), and it stays attached.
+    @Test func groupResizeKeepsFollowersOfIndirectTargets() {
+        let b1 = box(CGRect(x: 0, y: 0, width: 0.001, height: 0.001))
+        let b2 = box(CGRect(x: 100, y: 0, width: 0.001, height: 0.001))
+        let line = arrow(from: .zero, to: CGPoint(x: 100, y: 0))
+        let label = box(CGRect(x: 45, y: 10, width: 10, height: 10))
+        var stack = LayerStack([b1, b2, line, label])
+        stack.attach(line.id, .start, to: b1.id, at: .frame(.zero))
+        stack.attach(line.id, .end, to: b2.id, at: .frame(.zero))
+        stack.attach(label.id, .whole, to: line.id, at: .segment(0, t: 0.5))
+        let ids: Set = [b1.id, b2.id, label.id]
+        // each member's rect doubled about the origin, as a 2× group resize does
+        let doubled = stack.annotations.filter { ids.contains($0.id) }.map { a -> Annotation in
+            guard case let .shape(k, r) = a.kind else { return a }
+            var a = a
+            a.kind = .shape(k, rect: CGRect(x: r.minX * 2, y: r.minY * 2, width: r.width * 2, height: r.height * 2))
+            return a
+        }
+        stack.replaceGroup(doubled)
+        let b = current(stack, label.id).kind.bounds
+        #expect(abs(b.midX - 100) < 1e-6 && abs(b.midY - 30) < 1e-6)
+        #expect(current(stack, label.id).attachments.count == 1)
     }
 }
 

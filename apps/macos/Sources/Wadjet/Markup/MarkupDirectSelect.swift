@@ -129,12 +129,10 @@ extension MarkupController {
         let picked = nodes
         edit { s in
             for a in s.annotations where !picked.indices(of: a.id).isEmpty {
-                // a deleted anchor lets go; the rest renumber, and their
-                // attachments move to the same spots
-                for i in picked.indices(of: a.id) {
-                    if let point = a.attachPoint(forAnchor: i) { s.detach(a.id, point) }
+                // a deleted anchor lets go; the rest renumber, attachments and all
+                if let kept = a.removingAnchors(picked.indices(of: a.id)) {
+                    s.replaceRemovingAnchors(kept, removed: picked.indices(of: a.id))
                 }
-                if let kept = a.removingAnchors(picked.indices(of: a.id)) { s.replaceReshaping(kept) }
                 else { s.remove(id: a.id) }
             }
         }
