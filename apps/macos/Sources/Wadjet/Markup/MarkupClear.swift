@@ -63,7 +63,8 @@ extension MarkupController {
                                        reduceMotion: NSWorkspace.shared.accessibilityDisplayShouldReduceMotion)
         guard case .fadeOut(let fade) = r else { return r }
         clearInFlight = true
-        let views = markupViews, tapped = Set(stack.annotations.map(\.id))
+        // the Pen draft too: disarming commits it into the stack with its id
+        let views = markupViews, tapped = Set(stack.annotations.map(\.id) + [draft?.id].compactMap { $0 })
         views.forEach { $0.fadeOut(fade, annotations: stack.annotations) }
         Task { @MainActor in
             try? await Task.sleep(for: .seconds(fade.settle))
