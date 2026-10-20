@@ -414,6 +414,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         Task { @MainActor in // live reload shows up in app.log
             var lastMode = AppState.shared.config.value.tools.measure.mode
             var lastShortcuts = AppState.shared.config.value.shortcuts
+            var lastLayout = AppState.shared.config.value.toolbarLayout
             for await c in Observations({ AppState.shared.config.value }) {
                 AppLog.line("config: colourFormat=\(c.tools.pickColour.format.rawValue) measureMode=\(c.tools.measure.mode.rawValue)")
                 // a config.json edit of the Measure mode rescans without a mouse move
@@ -424,6 +425,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 if c.shortcuts != lastShortcuts {
                     lastShortcuts = c.shortcuts
                     registerShortcuts()
+                    rebuildMenu()
+                }
+                if c.toolbarLayout != lastLayout { // from the Debug menu or a config.json edit
+                    lastLayout = c.toolbarLayout
+                    overlayCtrl.toolbarLayoutChanged()
                     rebuildMenu()
                 }
                 resolveBookmarks()
@@ -497,6 +503,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             case "confirm": s.confirmMode = val
             default: AppLog.line("cmd option: unknown key \(key)")
             }
+        case "layout" where parts.count > 1: // debug: current | steady | uniform | twoRows
+            if let l = ToolbarLayoutStyle(rawValue: String(parts[1])) { s.config.update { $0.toolbarLayout = l } }
         case "expand": s.expandedDisplay = overlayCtrl.mouseDisplay()
         case "group" where parts.count > 1: // debug: animated group switch on the expanded toolbar
             s.debugGroup = ["shot": .shot, "rec": .rec, "util": .util, "markup": .markup][String(parts[1])]
@@ -604,6 +612,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         proto.image = ToolIcon.menuImage(for: .debug)
         let psub = NSMenu()
         psub.addItem(mi("Island Mode Even With Notch", #selector(toggleIsland), on: AppState.shared.islandMode))
+        psub.addItem(toolbarLayoutItem())
         psub.addItem(.separator())
         psub.addItem(mi("Next Upload: Succeed", #selector(upl0), on: AppState.shared.uploadMode == 0))
         psub.addItem(mi("Next Upload: Fail", #selector(upl1), on: AppState.shared.uploadMode == 1))
@@ -2131,7 +2140,7 @@ final class OverlayController {
     // the expanded row's true size lands after the panel is created; resize to
     // fit it, staying centred on the display
     func resizeToolbar(_ w: CGFloat, _ h: CGFloat, on di: Int) {
-        guard let p = toolbarPanels[di], abs(p.frame.width - w) > 1 else { return }
+        guard let p = toolbarPanels[di], abs(p.frame.width - w) > 1 || abs(p.frame.height - h) > 1 else { return }
         var f = p.frame; f.size = NSSize(width: w, height: h)
         if let scr = p.screen { f.origin.x = scr.frame.midX - w / 2; f.origin.y = scr.frame.maxY - h }
         p.contentView?.frame.size = f.size
@@ -2881,8 +2890,8 @@ struct ToolbarView: View {
     var rowGap: CGFloat { 6 }
     var shapeTop: CGFloat { expanded && !hasNotch ? islandH : gap }
     var contentTop: CGFloat { hasNotch ? islandH + rowGap : d }
-    var expW: CGFloat { min(limit, recording ? recRowSize.width : rowSize.width) }
-    var expH: CGFloat { contentTop + selH + d }
+    var expW: CGFloat { min(limit, recording ? recRowSize.width : twoRows ? max(stripWidth, rowSize.width) : rowSize.width) }
+    var expH: CGFloat { rowTop + selH + d }
     var shapeW: CGFloat { expanded ? expW : islandW }
     var shapeH: CGFloat { expanded ? expH : pillH }
     // slack beyond expW so a fully stretched lens (lensW × 1.3 at the last
@@ -2892,11 +2901,11 @@ struct ToolbarView: View {
     /// lensOvershootCap below), with a few points spare
     let lensSlack: CGFloat = 96
     let lensOvershootCap: CGFloat = 40
-    var panelW: CGFloat { min(limit, expW) + 2 * lensSlack }
+    var panelW: CGFloat { widePanel ? screenWidth : min(limit, expW) + 2 * lensSlack }
     // menus and tooltips are their own panels
     var panelH: CGFloat { (hasNotch ? 0 : islandH) + expH + 12 }
     var shapeRectInView: CGRect {
-        CGRect(x: (panelW - shapeW) / 2, y: panelH - shapeTop - shapeH, width: shapeW, height: shapeH)
+        CGRect(x: (panelW - shapeW) / 2 + barDX, y: panelH - shapeTop - shapeH, width: shapeW, height: shapeH)
     }
     // one rect drives both click-through and the expand decision. Expanded on
     // an island display: shape ∪ collapsed island ∪ a bridge strip, so resting
@@ -2970,8 +2979,8 @@ struct ToolbarView: View {
                     hoverInside = pointerInside()
                 }
             }
-            .onChange(of: hoverInside) { syncExpanded() }
-            .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded() }
+            .onChange(of: hoverInside) { syncExpanded(); refitOnLeave() }
+            .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded(); refitOnLeave() }
             .onAppear { syncHit(); syncLensBg()
                 // a Markup Tool armed by a Shortcut or the menu expands the new
                 // bar; unarmed bars wait for hover so they don't collapse under
@@ -2987,12 +2996,12 @@ struct ToolbarView: View {
                 if expanded, let t = s.tool, let c = cellCentres[t] { snapLens(to: c) }
                 else {
                     var tx = Transaction(); tx.disablesAnimations = true
-                    withTransaction(tx) { openGroup = restingGroup }
+                    withTransaction(tx) { openGroup = restingGroup; resetLayoutHold() }
                 }
                 syncHit(); syncLensBg()
                 if !expanded { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide() }
             }
-            .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded() }
+            .onChange(of: s.openMenu) { ctrl.syncMenu(); syncExpanded(); refitOnLeave() }
             .onChange(of: s.debugGroup) { // cmd.sh group — the expanded bar animates it
                 if let k = s.debugGroup, expanded {
                     s.debugGroup = nil; openTheGroup(k)
@@ -3044,6 +3053,7 @@ struct ToolbarView: View {
         .glassEffect(ownBar ? .identity : .clear.tint(.black.opacity(0.35)).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
+        .offset(x: barDX) // Steady's shift; 0 in every other layout
         .padding(.top, shapeTop)
         .animation(.spring(duration: 0.35), value: expanded)
     }
@@ -3105,10 +3115,11 @@ struct ToolbarView: View {
             #if CLEAR_GLASS_PATCH
             // while frozen the bar is our own surface — the same view the
             // lens bends — so inside the lens reads like outside
-            if lensBg != nil, !recording { barSurface }
+            if lensBg != nil, !recording { barSurface.offset(x: -barDX) } // the picture stays put; morph carries its offset
             #endif
             expandedContent
                 .frame(width: expW, height: expH, alignment: .top)
+                .overlay(alignment: .top) { if twoRows { groupStrip.padding(.top, contentTop) } }
                 .position(x: panelW / 2, y: expTop + expH / 2)
         }
         .frame(width: panelW, height: panelH)
@@ -3127,9 +3138,12 @@ struct ToolbarView: View {
             .onGeometryChange(for: CGSize.self) { $0.size } action: { recRowSize = $0; rowMeasured = true }
     }
 
-    let toolD: CGFloat = 72
-    let cellGap: CGFloat = 8 // rowContent's spacing = cell pitch − toolD
-    let selW: CGFloat = 92, selH: CGFloat = 64 // rest capsule size
+    // Two Rows' second bar uses smaller cells (ToolbarLayouts.swift)
+    var toolD: CGFloat { twoRows ? 52 : 72 }
+    var cellGap: CGFloat { twoRows ? 6 : 8 } // rowContent's spacing = cell pitch − toolD
+    var selW: CGFloat { twoRows ? 64 : 92 } // rest capsule size
+    var selH: CGFloat { twoRows ? 48 : 64 }
+    var iconD: CGFloat { twoRows ? 20 : 24 }
     // the capsule overhangs its cell by (selW − toolD)/2 on each side; the
     // dividers pad past that so they never touch the highlight
     let sepMargin: CGFloat = 6
@@ -3151,6 +3165,13 @@ struct ToolbarView: View {
     /// one group open at a time; the rest collapse to their last-used Tool
     @State var openGroup: Tool.Kind = .shot
     @State var lastUsed: [Tool.Kind: Tool] = [:]
+    /// Steady (ToolbarLayouts.swift): the bar's shift from centre, the slot
+    /// widths held while the pointer is inside, the collapsed group under the
+    /// pointer and its dwell timer
+    @State var barOffset: CGFloat = 0
+    @State var reserve: [Tool.Kind: CGFloat] = [:]
+    @State var hoverKind: Tool.Kind?
+    @State var dwellTask: Task<Void, Never>?
     /// One spring sim owns the lens: position chases lensTarget, velocity
     /// drives the stretch — no gesture-event velocity, no debounce.
     @State var lensVel = CGPoint.zero
@@ -3305,19 +3326,23 @@ struct ToolbarView: View {
     }
     func slots(in k: Tool.Kind) -> [RowSlot] {
         k == openGroup ? groupTools(k).filter(inRow).map { RowSlot(tool: $0, collapsed: false) }
-                       : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
+            : twoRows ? [] // Two Rows' bar holds the shown group only; its header lives in the strip
+            : [RowSlot(tool: lastUsedTool(k), collapsed: true)]
     }
     var visibleTools: Set<Tool> { Set(Tool.Kind.allCases.flatMap { slots(in: $0).map(\.tool) }) }
     /// open a group — the same centred spring as hover; the lens retargets
     /// onto the pointer's position in the new layout, so no jump
-    func openTheGroup(_ k: Tool.Kind) {
+    /// `anchor` is the cell Steady keeps under the pointer (default: whatever is under it)
+    func openTheGroup(_ k: Tool.Kind, anchor: Tool? = nil) {
         guard k != openGroup, !(s.recActive && k == .rec) else { return }
         AppLog.line("openTheGroup \(k)")
+        let hold = steadyHold(opening: k, anchor: anchor)
+        let change = { openGroup = k; if let h = hold { reserve = h.reserve; barOffset = h.offset } }
         if reduceMotion { // no bouncy layout spring under Reduce Motion
             var t = Transaction(); t.disablesAnimations = true
-            withTransaction(t) { openGroup = k }
+            withTransaction(t) { change() }
         } else {
-            withAnimation(.spring(duration: 0.4, bounce: 0.2)) { openGroup = k }
+            withAnimation(.spring(duration: 0.4, bounce: 0.2)) { change() }
         }
     }
     /// Record Tools are dead while a Recording runs
@@ -3340,9 +3365,9 @@ struct ToolbarView: View {
     /// the row laid out once, shared by the real cells, the accent copy and
     /// the lens's icon strip — every copy keeps the same geometry
     func rowContent<V: View>(_ make: @escaping (Tool, Bool) -> V) -> some View {
-        HStack(spacing: cellGap) {
+        HStack(spacing: twoRows ? 0 : cellGap) { // Two Rows' hidden groups take no gap either
             ForEach(Tool.Kind.allCases, id: \.self) { k in
-                if k != Tool.Kind.allCases.first { // thin divider between groups, clear of the highlight capsule
+                if k != Tool.Kind.allCases.first, !twoRows { // thin divider between groups, clear of the highlight capsule
                     Rectangle().fill(.white.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                         .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
@@ -3357,7 +3382,7 @@ struct ToolbarView: View {
                 let open = k == openGroup, g = groupTools(k), v = g.filter(inRow)
                 HStack(spacing: 0) {
                     ForEach(g, id: \.self) { t in
-                        let rep = t == lastUsedTool(k), shown = open ? v.contains(t) : rep
+                        let rep = t == lastUsedTool(k), shown = open ? v.contains(t) : rep && !twoRows
                         make(t, !open && rep)
                             .scaleEffect(shown ? 1 : 0.5)
                             .opacity(shown ? (toolDisabled(t) ? 0.35 : 1) : 0) // a Recording greys the video group
@@ -3368,7 +3393,9 @@ struct ToolbarView: View {
                             .zIndex(rep ? 1 : 0)
                     }
                 }
-                .frame(width: open ? toolD * CGFloat(v.count) + cellGap * CGFloat(max(v.count - 1, 0)) : toolD, alignment: .leading)
+                // the slot's width per layout (ToolbarLayout in WadjetKit);
+                // Uniform centres a small group in the widest group's slot
+                .frame(width: slotWidth(k), alignment: open && style == .uniform ? .center : .leading)
             }
         }
         .padding(.horizontal, d + (selW - toolD) / 2)
@@ -3379,7 +3406,7 @@ struct ToolbarView: View {
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
             (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
-                .frame(width: 24, height: 24)
+                .frame(width: iconD, height: iconD)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
@@ -3419,7 +3446,7 @@ struct ToolbarView: View {
     #if CLEAR_GLASS_PATCH
     /// the lens capsule's centre in panel coords
     var lensCentre: CGPoint {
-        CGPoint(x: (panelW - rowSize.width) / 2 + blobX, y: shapeTop + contentTop + blobY)
+        CGPoint(x: (panelW - rowSize.width) / 2 + barDX + blobX, y: shapeTop + rowTop + blobY)
     }
     /// the lens capsule's centre in row space (for the accent mask)
     var lensCentreInRow: CGPoint {
@@ -3450,11 +3477,11 @@ struct ToolbarView: View {
         // glass rect above the panel so the top has no rounded corners,
         // rim or edge bend — only the sides and bottom are glass edges
         .modifier(BarGlassEffect(ctrl: ctrl, di: displayIndex,
-                                 rect: CGRect(x: (panelW - shapeW) / 2, y: shapeTop - (hasNotch ? notchOverscan : 0),
+                                 rect: CGRect(x: (panelW - shapeW) / 2 + barDX, y: shapeTop - (hasNotch ? notchOverscan : 0),
                                               width: shapeW, height: shapeH + (hasNotch ? notchOverscan : 0)),
                                  radius: selH / 2 + d, bounds: CGSize(width: panelW, height: panelH)))
         .mask(alignment: .top) {
-            shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop)
+            shape.frame(width: shapeW, height: shapeH).padding(.top, shapeTop).offset(x: barDX)
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -3489,7 +3516,8 @@ struct ToolbarView: View {
                       .position(lensCentreInRow))
         }
         .frame(width: shapeW, height: shapeH, alignment: .top)
-        .padding(.top, shapeTop + contentTop)
+        .padding(.top, shapeTop + rowTop)
+        .offset(x: barDX)
         .frame(width: panelW, height: panelH, alignment: .top)
     }
     var lensLayer: some View {
@@ -3527,7 +3555,7 @@ struct ToolbarView: View {
         // the last-used Tool's symbol as the tiny badge
         return VStack(spacing: 3) {
             (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
-                .frame(width: 24, height: 24)
+                .frame(width: iconD, height: iconD)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
                 // it travels into the bar (and back) as the shape morphs
@@ -3562,6 +3590,8 @@ struct ToolbarView: View {
                     Capsule().fill(.white.opacity(0.10))
                         .overlay(Capsule().strokeBorder(Color.wadjetAccent, lineWidth: 1.5))
                         .frame(width: selW, height: selH)
+                } else if collapsed, hoverKind == t.kind { // Steady: the group a click or dwell opens
+                    Capsule().fill(.white.opacity(0.10)).frame(width: selW, height: selH)
                 }
             }
             .contentShape(Rectangle()) // whole cell, not just the glyph
@@ -3626,7 +3656,7 @@ struct ToolbarView: View {
         .gesture(DragGesture(minimumDistance: 0, coordinateSpace: .named("row"))
             .onChanged { v in
                 if !pressActive { // first event of the press: lens in at once
-                    pressActive = true
+                    pressActive = true; dwellTask?.cancel() // Steady: the release decides, not the dwell
                     // a press takes the lens over from a tap's travel: keep the
                     // lens where it is mid-flight, don't snap back to selected
                     let wasTravelling = travelling; travelling = false
@@ -3634,7 +3664,7 @@ struct ToolbarView: View {
                     // the real cell under the finger (gaps pick the nearest
                     // cell); a greyed Record cell swallows the press entirely
                     pressTool = hitTool(at: v.startLocation.x) ?? nearestTool(to: v.startLocation.x)
-                    if let pt = pressTool, toolDisabled(pt) || pt.isAction { pressTool = nil }
+                    if let pt = pressTool, toolDisabled(pt) || pt.isAction || opensOnRelease(pt) { pressTool = nil }
                     // the lens only pops for an actual switch — a press on the
                     // selected Tool (its menu tap) shows none; a travel in
                     // flight keeps it up so it can't vanish mid-flight
@@ -3662,7 +3692,7 @@ struct ToolbarView: View {
                     setLensTarget(x: min(hi, max(lo, v.location.x)), pointerY: v.location.y)
                     // hover callbacks don't fire mid-drag — open the group
                     // under the lens ourselves, anchored on that cell
-                    if let t = nearestTool(to: v.location.x) { openTheGroup(t.kind) }
+                    if let t = nearestTool(to: v.location.x) { openTheGroup(t.kind, anchor: t) }
                 }
             }
             .onEnded { v in
@@ -3682,6 +3712,8 @@ struct ToolbarView: View {
                         // the spring carries it home — overshoot is the wobble
                         if let c = cellCentres[n] { setLensTarget(x: c.x) }
                     }
+                } else if !menuByHold, let t = hitTool(at: v.location.x), opensOnRelease(t) {
+                    openTheGroup(t.kind, anchor: t) // Steady: a click opens the group in place
                 } else if !menuByHold, let t = hitTool(at: v.location.x) ?? nearestTool(to: v.location.x) {
                     if t.isAction { t.hasMenu ? openToolMenu(t) : AppDelegate.shared?.trigger(t) }
                     else if t != s.tool {
@@ -3698,10 +3730,10 @@ struct ToolbarView: View {
                 ctrl.markOverlaysDirty() // loupe off while over the bar
                 if dragging { TipPanel.hide() }
                 else if let t = (ToolbarBtnFrames.rects[displayIndex] ?? [:]).first(where: { visibleTools.contains($0.key) && $0.value.contains(p) })?.key {
-                    openTheGroup(t.kind) // groups open under the pointer
-                } else { TipPanel.hide() }
+                    hoverCell(t) // groups open under the pointer (Steady: after a dwell)
+                } else { TipPanel.hide(); hoverCell(nil) }
             case .ended:
-                TipPanel.hide()
+                TipPanel.hide(); hoverCell(nil)
                 ctrl.markOverlaysDirty() // loupe back on the Freeze Frame
             }
         }
@@ -3715,7 +3747,7 @@ struct ToolbarView: View {
             // group's click opens it
             if !lensActive { openTheGroup(restingGroup) }
         }
-        .padding(.top, contentTop)
+        .padding(.top, rowTop)
 
     }
 }
