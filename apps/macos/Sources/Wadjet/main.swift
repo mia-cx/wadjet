@@ -3487,21 +3487,31 @@ struct ToolbarView: View {
         .frame(width: panelW, height: panelH, alignment: .top)
     }
 
-    /// a glass-free copy of what sits under the lens — backdrop views can't
-    /// rasterize into layerEffect, so the shader bends this instead. The
-    /// icons are in it, so they bend and fringe at the rim like the bar.
-    /// On the live desktop there is no crop: the icons are all it holds,
-    /// and the system glass bar shows through around them
+    /// the toolbar layer the lens bends: a glass-free copy of the bar's
+    /// surface (backdrop views can't rasterize into layerEffect) plus the
+    /// icons, so both squeeze, bend and fringe at the rim. Transparent off
+    /// the bar: the world behind isn't in it. On the live desktop there is
+    /// no surface copy, only the icons, and the system glass bar shows
+    /// through around them
     var lensSource: some View {
         ZStack(alignment: .top) {
+            barSurface
+            iconStrip
+        }
+        .frame(width: panelW, height: panelH, alignment: .top)
+    }
+    /// the world behind the bar, under the bent toolbar layer and sampled
+    /// 1:1 at its true spot, so its texture never slides as the lens drags.
+    /// It covers the real bar under the lens where the squeezed bar no
+    /// longer reaches. Empty on the live desktop, where the screen itself
+    /// is behind the panel
+    var lensBackdrop: some View {
+        ZStack(alignment: .top) {
             if let img = lensBg {
-                // crisp everywhere — the bar copy above frosts what's behind it
                 Image(decorative: img, scale: CGFloat(img.width) / panelW)
                     .resizable()
                     .frame(width: panelW, height: panelH)
             }
-            barSurface
-            iconStrip
         }
         .frame(width: panelW, height: panelH, alignment: .top)
     }
@@ -3511,7 +3521,7 @@ struct ToolbarView: View {
     /// their own — the mask would run ahead of them during the springs)
     var lensLayer: some View {
         lensSource
-            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, squeeze: lensSqueeze, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
+            .modifier(LensEffect(ctrl: ctrl, di: displayIndex, backdrop: lensBackdrop, squeeze: lensSqueeze, bounds: CGSize(width: panelW, height: panelH), centre: lensCentre, size: lensSize,
                                  stretch: CGSize(width: stretchX, height: stretchY)))
             .opacity(lensActive ? 1 : 0)
             .animation(.smooth(duration: 0.15), value: lensActive)
@@ -3750,9 +3760,10 @@ struct BarGlassEffect: ViewModifier {
     }
 }
 
-struct LensEffect: ViewModifier, @preconcurrency Animatable {
+struct LensEffect<Backdrop: View>: ViewModifier, @preconcurrency Animatable {
     let ctrl: OverlayController
     let di: Int
+    let backdrop: Backdrop // unbent, under the refraction, inside the same mask
     let squeeze: CGFloat // what the bar's scale reads in the lens's body
     @ObservedObject var light = PointerLight.shared
     var bounds: CGSize = .zero // the source layer's size; samples clamp to it
@@ -3784,6 +3795,7 @@ struct LensEffect: ViewModifier, @preconcurrency Animatable {
                                    .float(Float(1 / (ctrl.toolbarPanels[di]?.backingScaleFactor ?? 2))),
                                    .float(Float(1 / squeeze))),
                 maxSampleOffset: CGSize(width: 64, height: 64))
+            .background { backdrop }
             .mask {
                 Capsule().frame(width: size.width + 2, height: size.height + 2)
                     .scaleEffect(x: stretch.width, y: stretch.height)

@@ -12,9 +12,11 @@ using namespace metal;
 // pixels so it stays a soft ~3 px line at 1× and 2×. Gotchas: stitchable
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
-// keep the whole sampled half4 and overwrite only r and b. The Tool icons
-// are part of the sampled layer, so they bend and fringe with the bar; the
-// caller pre-scales them by kCentre so they still read grown at the centre,
+// keep the whole sampled half4 and overwrite only r and b. The layer holds
+// only the toolbar (bar surface and Tool icons), transparent elsewhere: the
+// world behind is drawn unbent beneath it, so its texture never slides as
+// the lens moves, and the hairline adds light over it. The caller
+// pre-scales the icons by kCentre so they still read grown at the centre,
 // which is why kCentre comes in as an argument rather than a #define.
 #define kRim 2.1       // how far the rim reaches outward
 #define band 9.0       // rim band width in points
