@@ -289,4 +289,20 @@ struct PathGeometryTests {
         #expect(first != nil)
         #expect(abs(hypot(first!.x + 1, first!.y) - 9) < 0.5)
     }
+
+    // a stroke that curls inside the trim circle just before its tip: a
+    // purely radial trim would cut the whole curl and leave the stem ending
+    // ~8 pt from a head aimed along the curl. The stem must still reach the
+    // head, at the head (tip (0,0)) and, reversed, at the tail
+    @Test(arguments: [true, false])
+    func curledEndKeepsStemOnTheHead(head: Bool) {
+        var style = AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4)
+        if head { style.head = .filledArrow } else { style.tail = .filledArrow }
+        let points = [CGPoint(x: 0, y: -20), CGPoint(x: 0, y: -9), CGPoint(x: -8, y: 0),
+                      CGPoint(x: 4, y: 4), CGPoint(x: 0, y: 0)]
+        let nodes = (head ? points : points.reversed()).map { PathNode(anchor: $0) }
+        let d = PathGeometry.drawing(for: Annotation(kind: .path(PathData(nodes: nodes)), style: style))
+        let body = d.stroke.copy(strokingWithWidth: 4, lineCap: .round, lineJoin: .round, miterLimit: 10)
+        #expect(body.intersects(d.ends))
+    }
 }

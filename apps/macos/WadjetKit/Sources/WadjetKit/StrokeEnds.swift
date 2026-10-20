@@ -103,25 +103,60 @@ extension PathGeometry {
         segments.reversed().map { Segment(p0: $0.p3, c1: $0.c2, c2: $0.c1, p3: $0.p0, straight: $0.straight) }
     }
 
-    /// `segments` with everything within `d` points of the path's p3 end cut
+    /// `segments` with the end within `d` points of the path's p3 tip cut
     /// off, across as many segments as that reaches — a freehand stroke's
-    /// last segment is often shorter than `d`. Trims to the crossing nearest
-    /// the tip; a path wholly within `d` collapses to its start
-    static func trimmedEnd(_ segments: [Segment], by d: CGFloat) -> [Segment] {
+    /// last segment is often shorter than `d`. Walking back from the tip, it
+    /// cuts at whichever comes first: the first point `d` from the tip (the
+    /// crossing nearest the tip, when the curve doubles back), or `reach` of
+    /// arc length. The cap keeps the stem joined to a head aimed by
+    /// endOutward(_:reach:): that chord's far end sits on the head's axis, so
+    /// a stroke that curls inside the d-circle can't lose its curl and leave
+    /// the head floating. A path that ends before either collapses to its start
+    static func trimmedEnd(_ segments: [Segment], by d: CGFloat, within reach: CGFloat) -> [Segment] {
         guard let tip = segments.last?.p3 else { return segments }
+        func far(_ s: Segment, _ t: CGFloat) -> CGFloat {
+            let v = s.point(at: t)
+            return hypot(v.x - tip.x, v.y - tip.y)
+        }
+        var walked: CGFloat = 0
         for i in segments.indices.reversed() {
-            if let piece = segments[i].splitEnd(by: d, from: tip) {
-                return Array(segments[..<i]) + [piece]
+            let s = segments[i]
+            var near: CGFloat = 1, here = s.p3
+            for k in stride(from: 63, through: 0, by: -1) {
+                let t = CGFloat(k) / 64, p = s.point(at: t)
+                let step = hypot(p.x - here.x, p.y - here.y)
+                var cut: CGFloat?
+                if far(s, t) >= d {
+                    // bisect the step for the radial crossing
+                    var lo = t, hi = near
+                    for _ in 0..<40 {
+                        let mid = (lo + hi) / 2
+                        if far(s, mid) > d { lo = mid } else { hi = mid }
+                    }
+                    cut = hi
+                }
+                if walked + step >= reach, step > 0 {
+                    // the arc cap, if it lands nearer the tip than the crossing
+                    let ta = near - (near - t) * (reach - walked) / step
+                    cut = max(cut ?? ta, ta)
+                }
+                if let cut {
+                    var piece = s.split(at: cut).0
+                    piece.straight = s.straight
+                    return Array(segments[..<i]) + [piece]
+                }
+                walked += step
+                here = p
+                near = t
             }
         }
         let a = segments[0].p0
         return [Segment(p0: a, c1: a, c2: a, p3: a, straight: true)]
     }
 
-    /// `segments` with everything within `d` points of the path's p0 end cut
-    /// off — trimmedEnd's mirror
-    static func trimmedStart(_ segments: [Segment], by d: CGFloat) -> [Segment] {
-        reversed(trimmedEnd(reversed(segments), by: d))
+    /// `segments` with the end near the path's p0 cut off — trimmedEnd's mirror
+    static func trimmedStart(_ segments: [Segment], by d: CGFloat, within reach: CGFloat) -> [Segment] {
+        reversed(trimmedEnd(reversed(segments), by: d, within: reach))
     }
 }
 
@@ -164,34 +199,5 @@ extension Segment {
         let d = lerp(a, b), e = lerp(b, c), f = lerp(d, e)
         return (Segment(p0: p0, c1: a, c2: d, p3: f, straight: false),
                 Segment(p0: f, c1: e, c2: c, p3: p3, straight: false))
-    }
-
-    /// the [0, t] piece where |B(t) − tip| ≈ d, or nil when the whole
-    /// segment lies within d of `tip`. The distance isn't monotone when the
-    /// curve doubles back, so march back from p3 until it first reaches d and
-    /// bisect only that interval — the crossing nearest the tip is the one to
-    /// keep. A straight piece stays straight
-    func splitEnd(by d: CGFloat, from tip: CGPoint) -> Segment? {
-        func far(_ t: CGFloat) -> CGFloat {
-            let v = point(at: t)
-            return hypot(v.x - tip.x, v.y - tip.y)
-        }
-        var near: CGFloat = 1
-        for i in stride(from: 64, through: 0, by: -1) {
-            let t = CGFloat(i) / 64
-            if far(t) >= d {
-                guard t < 1 else { return self }   // p3 itself is already d out
-                var lo = t, hi = near
-                for _ in 0..<40 {
-                    let mid = (lo + hi) / 2
-                    if far(mid) > d { lo = mid } else { hi = mid }
-                }
-                var piece = split(at: hi).0
-                piece.straight = straight
-                return piece
-            }
-            near = t
-        }
-        return nil
     }
 }

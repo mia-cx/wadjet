@@ -171,7 +171,7 @@ public enum PathGeometry {
             let u = endOutward(segments, reach: reach), n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.head, at: last.p3, u: u, n: n, width: w))
             if a.style.head == .filledArrow {
-                strokeSegments = trimmedEnd(strokeSegments, by: headLength(width: w) / 2)
+                strokeSegments = trimmedEnd(strokeSegments, by: reach / 2, within: reach)
             }
         }
         // tangents come from the untrimmed geometry, and the tail's mark sits
@@ -180,7 +180,7 @@ public enum PathGeometry {
             let u = startOutward(segments, reach: reach), n = CGPoint(x: -u.y, y: u.x)
             ends.addPath(endMark(a.style.tail, at: first.p0, u: u, n: n, width: w))
             if a.style.tail == .filledArrow {
-                strokeSegments = trimmedStart(strokeSegments, by: headLength(width: w) / 2)
+                strokeSegments = trimmedStart(strokeSegments, by: reach / 2, within: reach)
             }
         }
         var t = a.affineTransform
