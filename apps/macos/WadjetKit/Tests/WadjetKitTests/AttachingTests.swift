@@ -297,5 +297,27 @@ struct AttachingTests {
         #expect(current(stack, label.id).attachments.count == 1)
         #expect(current(stack, label.id).kind.bounds == CGRect(x: 52, y: 13, width: 10, height: 10))
     }
+
+    // Proves a reshape that merges two attached nodes into one keeps the
+    // nearer attachment in control and frees the other, rather than keeping
+    // two that fight over one node. Nodes at x 40 and 60 collapse onto the
+    // new middle node at x 50; the x-40 one was attached first, so on a tie
+    // it wins, and its target still steers the node.
+    @Test func reshapeMergingNodesFreesTheLoser() {
+        func path(_ xs: [CGFloat]) -> AnnotationKind {
+            .path(PathData(nodes: xs.map { PathNode(anchor: CGPoint(x: $0, y: 0)) }))
+        }
+        let p = Annotation(kind: path([0, 40, 60, 100]), style: red4)
+        let t1 = box(CGRect(x: 40, y: 0, width: 5, height: 5)), t2 = box(CGRect(x: 60, y: 0, width: 5, height: 5))
+        var stack = LayerStack([t1, t2, p])
+        stack.attach(p.id, .node(1), to: t1.id, at: .frame(.zero))
+        stack.attach(p.id, .node(2), to: t2.id, at: .frame(.zero))
+        var reshaped = current(stack, p.id)
+        reshaped.kind = path([0, 50, 100])
+        stack.replaceReshaping(reshaped)
+        #expect(current(stack, p.id).attachments.map(\.target) == [t1.id])
+        stack.replace(t1.moved(by: CGVector(dx: 0, dy: 20)))
+        #expect(near(current(stack, p.id).position(of: .node(1)), CGPoint(x: 40, y: 20)))
+    }
 }
 

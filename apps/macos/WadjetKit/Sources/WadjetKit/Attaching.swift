@@ -100,14 +100,24 @@ extension LayerStack {
         var list = annotations
         for i in list.indices {
             if list[i].id == a.id {
-                var new = a
-                new.attachments = a.attachments.map { at in
+                // each node attachment moves to the new node nearest where it
+                // held; when two land on one node (or on an attached end),
+                // the one that moved least keeps it and the others go free
+                let moved: [(Attachment, CGFloat)] = a.attachments.map { at in
                     guard case .node = at.point, let was = old.position(of: at.point),
-                          let node = new.nearestNode(to: was) else { return at }
+                          let node = a.nearestNode(to: was), let now = a.position(of: node) else { return (at, 0) }
                     var at = at
                     at.point = node
-                    return at
+                    return (at, hypot(now.x - was.x, now.y - was.y))
                 }
+                var taken = Set<AttachPoint>(), kept: [Attachment] = []
+                for (at, _) in moved.enumerated().sorted(by: { ($0.element.1, $0.offset) < ($1.element.1, $1.offset) })
+                    .map(\.element) where taken.insert(at.point).inserted {
+                    kept.append(at)
+                }
+                var new = a
+                // in their original order, so a save reads the same
+                new.attachments = moved.map(\.0).filter { at in kept.contains(at) }
                 list[i] = new
                 continue
             }
