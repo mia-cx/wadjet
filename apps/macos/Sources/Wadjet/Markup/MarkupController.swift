@@ -121,8 +121,13 @@ final class MarkupController {
     private(set) var editing: Annotation.ID?
     @ObservationIgnored var editor: TextEditorView?
     /// ⌘ held turns any armed Markup Tool into Select until release
-    @ObservationIgnored var cmdHeld = false
+    @ObservationIgnored var cmdHeld = false {
+        didSet { if cmdHeld != oldValue, selection != nil { render() } } // the grips follow
+    }
     var selecting: Bool { armed == .select || cmdHeld }
+    /// the grips the selection shows and takes presses on: Select's own, or
+    /// the bounding box for what a placing Tool just placed
+    var gripSet: GripSet { selecting ? .points : .frame }
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored private var snapper: MarkupSnapper?
@@ -796,7 +801,7 @@ final class MarkupController {
         guard let sel = selected else { return false }
         if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                               minExtent: Self.handleMinExtent / zoom,
-                              rotateOffset: Self.rotateOffset / zoom) {
+                              rotateOffset: Self.rotateOffset / zoom, set: gripSet) {
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
             gesture = .handle(h, sel, from: p)
             return true
@@ -814,7 +819,7 @@ final class MarkupController {
     func overSelection(at p: CGPoint) -> Bool {
         guard !selecting, editing == nil, editsSelection(), let sel = selected else { return false }
         return sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
-                          rotateOffset: Self.rotateOffset / zoom) != nil
+                          rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil
             || PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom)
     }
 

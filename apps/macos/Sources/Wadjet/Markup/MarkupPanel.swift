@@ -163,7 +163,7 @@ final class MarkupView: NSView {
             frameLayer.lineWidth = 1 / controller.zoom
             frameLayer.contentsScale = scale
             let grips = CGMutablePath()
-            let hs = selection.handles(minExtent: MarkupController.handleMinExtent / controller.zoom,
+            let hs = selection.handles(controller.gripSet, minExtent: MarkupController.handleMinExtent / controller.zoom,
                                        rotateOffset: MarkupController.rotateOffset / controller.zoom)
                 // recrop mode has no rotate grip
                 .filter { cropping == nil || $0.handle != .rotate }
