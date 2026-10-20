@@ -567,13 +567,15 @@ extension Annotation {
     /// the grips `set` shows on this Annotation
     public func handles(_ set: GripSet, minExtent: CGFloat,
                         rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+        // a Magnify's source grips size a box, not points: every set keeps them
+        if case .magnify = kind { return handles(minExtent: minExtent, rotateOffset: rotateOffset) }
         switch set {
-        case .frame: frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .frame: return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .placed:
             // the bend first: where it lands on a frame grip, a tie picks it
-            handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
+            return handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
                 + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
-        case .points: handles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .points: return handles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
     }
 
