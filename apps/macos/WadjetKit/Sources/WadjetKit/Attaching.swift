@@ -133,14 +133,12 @@ extension LayerStack {
     }
 
     /// replaces `a`, a copy of a Line or path with node `node` just added by
-    /// splitting the segment before it — `Annotation.insertingNode`. The
-    /// split keeps the curve, so every attachment keeps its exact spot: an
-    /// anchor on the split segment moves to the matching half and t, later
-    /// segments and nodes shift up by one.
-    public mutating func replaceInsertingNode(_ a: Annotation, at node: Int) {
-        guard let old = annotations.first(where: { $0.id == a.id }), node > 0,
-              let p = a.position(of: .node(node)),
-              case let .segment(_, t0)? = old.nearestSegmentAnchor(to: p, only: node - 1) else { return replace(a) }
+    /// splitting the segment before it at `t0` —
+    /// `Annotation.insertingNodeSplit`. The split keeps the curve, so every
+    /// attachment keeps its exact spot: an anchor on the split segment moves
+    /// to the matching half and t, later segments and nodes shift up by one.
+    public mutating func replaceInsertingNode(_ a: Annotation, at node: Int, splitAt t0: CGFloat) {
+        guard annotations.contains(where: { $0.id == a.id }), node > 0 else { return replace(a) }
         let split = node - 1
         var list = annotations
         for i in list.indices {

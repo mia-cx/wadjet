@@ -878,9 +878,9 @@ final class MarkupController {
             // the node joins the stack now; the press's gesture snapshot makes
             // the insertion and its drag one undo step
             if insertingNodes, sel.kind.insertsNodes,
-               let (a, i) = sel.insertingNode(near: p, within: Self.hitTolerance / zoom) {
+               let (a, i, t) = sel.insertingNodeSplit(near: p, within: Self.hitTolerance / zoom) {
                 // the new node renumbers the path: attachments move with it
-                stack.replaceInsertingNode(a, at: i)
+                stack.replaceInsertingNode(a, at: i, splitAt: t)
                 gesture = .handle(.vertex(i), stack.annotations.first { $0.id == a.id } ?? a, from: p)
                 render()
                 AppLog.line("markup: added a node")

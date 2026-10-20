@@ -331,8 +331,8 @@ struct AttachingTests {
         var stack = LayerStack([path, follower, target])
         stack.attach(follower.id, .end, to: path.id, at: .segment(0, t: 0.75))
         stack.attach(path.id, .node(2), to: target.id, at: .frame(.zero))
-        let (inserted, _) = try #require(current(stack, path.id).insertingNode(near: CGPoint(x: 50, y: 0)))
-        stack.replaceInsertingNode(inserted, at: 1)
+        let (inserted, i, t) = try #require(current(stack, path.id).insertingNodeSplit(near: CGPoint(x: 50, y: 0)))
+        stack.replaceInsertingNode(inserted, at: i, splitAt: t)
         #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 75, y: 0)))
         stack.replace(target.moved(by: CGVector(dx: 0, dy: 30)))
         #expect(near(current(stack, path.id).position(of: .node(3)), CGPoint(x: 200, y: 30)))
@@ -350,12 +350,29 @@ struct AttachingTests {
         let follower = arrow(from: CGPoint(x: 500, y: -50), to: CGPoint(x: 500, y: -10))
         var stack = LayerStack([hairpin, follower])
         stack.attach(follower.id, .end, to: hairpin.id, at: .segment(0, t: 0.5))
-        let (inserted, i) = try #require(current(stack, hairpin.id).insertingNode(near: CGPoint(x: 100, y: 0)))
-        stack.replaceInsertingNode(inserted, at: i)
+        let (inserted, i, t) = try #require(current(stack, hairpin.id).insertingNodeSplit(near: CGPoint(x: 100, y: 0)))
+        stack.replaceInsertingNode(inserted, at: i, splitAt: t)
         #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 500, y: 0)))
         stack.replace(current(stack, hairpin.id).dragging(.vertex(i), from: CGPoint(x: 100, y: 0),
                                                          to: CGPoint(x: 100, y: 100)))
         #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 500, y: 500.0 / 9), 1e-3))
+    }
+
+    // Proves a split on a looping cubic keeps a follower exactly in place:
+    // the split's own t is used, not one recovered from where the new node
+    // landed, which a loop makes ambiguous.
+    @Test func insertingIntoALoopKeepsTheFollower() throws {
+        let loop = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero, handleOut: CGPoint(x: 341, y: 97)),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 364, y: 220)),
+        ])), style: red4)
+        let follower = arrow(from: CGPoint(x: 0, y: 200), to: CGPoint(x: 10, y: 190))
+        var stack = LayerStack([loop, follower])
+        stack.attach(follower.id, .end, to: loop.id, at: .segment(0, t: 0.2))
+        let was = try #require(current(stack, follower.id).position(of: .end))
+        let (inserted, i, t) = try #require(current(stack, loop.id).insertingNodeSplit(near: CGPoint(x: 175, y: 65)))
+        stack.replaceInsertingNode(inserted, at: i, splitAt: t)
+        #expect(near(current(stack, follower.id).position(of: .end), was, 1e-6))
     }
 }
 

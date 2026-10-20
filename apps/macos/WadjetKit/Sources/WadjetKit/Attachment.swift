@@ -224,9 +224,9 @@ extension Annotation {
         return CGPoint(x: ns.x + zr * nc.dx - zi * nc.dy, y: ns.y + zr * nc.dy + zi * nc.dx)
     }
 
-    /// the segment anchor on this Line or path nearest screen point `p`,
-    /// searching only segment `only` when given; nil for kinds without segments
-    func nearestSegmentAnchor(to p: CGPoint, only: Int? = nil) -> AttachAnchor? {
+    /// the segment anchor on this Line or path nearest screen point `p`;
+    /// nil for kinds without segments
+    func nearestSegmentAnchor(to p: CGPoint) -> AttachAnchor? {
         let segs = kind.segments, q = p.applying(affineTransform.inverted())
         guard !segs.isEmpty else { return nil }
         func d2(_ i: Int, _ t: CGFloat) -> CGFloat {
@@ -236,7 +236,7 @@ extension Annotation {
         // a coarse scan, then a golden-section refine around the best sample
         let steps = 64
         var best: (i: Int, t: CGFloat, d: CGFloat)?
-        for i in segs.indices where only.map({ $0 == i }) ?? true {
+        for i in segs.indices {
             for k in 0...steps {
                 let t = CGFloat(k) / CGFloat(steps), d = d2(i, t)
                 if best.map({ d < $0.d }) ?? true { best = (i, t, d) }

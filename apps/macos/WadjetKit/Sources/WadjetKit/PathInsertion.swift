@@ -21,6 +21,14 @@ extension Annotation {
     /// stroke's edge.
     public func insertingNode(near point: CGPoint,
                               within tolerance: CGFloat = .infinity) -> (annotation: Annotation, node: Int)? {
+        insertingNodeSplit(near: point, within: tolerance).map { ($0.annotation, $0.node) }
+    }
+
+    /// `insertingNode`, plus the parameter `t` the segment before the new
+    /// node was split at — what `LayerStack.replaceInsertingNode` needs to
+    /// keep attachments on their exact spots
+    public func insertingNodeSplit(near point: CGPoint, within tolerance: CGFloat = .infinity)
+        -> (annotation: Annotation, node: Int, t: CGFloat)? {
         var data: PathData
         switch kind {
         case let .line(start, end, .none):
@@ -73,7 +81,7 @@ extension Annotation {
         // screen in case the new kind's bounds came out a hair different
         let pin = data.nodes[0].anchor
         let was = pin.applying(affineTransform), now = pin.applying(a.affineTransform)
-        return (a.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y)), i + 1)
+        return (a.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y)), i + 1, t)
     }
 
     /// the segment index and parameter nearest `p`: a coarse scan, then a
