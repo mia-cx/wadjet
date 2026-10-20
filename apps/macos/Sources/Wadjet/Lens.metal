@@ -12,7 +12,7 @@ using namespace metal;
 // pixels so it stays a soft ~3 px line at 1× and 2×. Gotchas: stitchable
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
-// keep the whole sampled half4 and overwrite only r and b. The layer holds
+// derive alpha from the samples (see disperse). The layer holds
 // only the toolbar (bar surface and Tool icons), transparent elsewhere: the
 // world behind is drawn unbent beneath it, so its texture never slides as
 // the lens moves, and the hairline adds light over it. The caller
@@ -22,6 +22,18 @@ using namespace metal;
 #define band 9.0       // rim band width in points
 #define disp 0.07      // dispersion at the very edge
 
+
+// Dispersion over a transparent layer: each channel's sample carries its own
+// coverage. Taking alpha from the green sample alone leaves r or b without
+// matching coverage (additive halos, dark edges). Instead unpremultiply each
+// channel by its own sample's alpha and re-premultiply by their mean, so the
+// result stays valid premultiplied colour (every channel <= alpha).
+static half4 disperse(half4 r, half4 g, half4 b) {
+    half a = (r.a + g.a + b.a) / 3.0h;
+    return half4(r.a > 0.0h ? r.r / r.a * a : 0.0h,
+                 g.a > 0.0h ? g.g / g.a * a : 0.0h,
+                 b.a > 0.0h ? b.b / b.a * a : 0.0h, a);
+}
 
 [[ stitchable ]] half4 lens(float2 position, SwiftUI::Layer layer,
                             float2 centre, float2 size, float2 stretch,
@@ -54,18 +66,19 @@ using namespace metal;
         float dksdf = (kRim - kCentre) * 3.0 * u * u / band;
         float fp = fabs(k + length(c) * dksdf) * px;
         float2 dir = c / max(length(c), 1e-3); // radial direction, source space
-        half4 acc = 0;
+        // premultiplied taps average correctly; disperse() after
+        half4 accR = 0, accG = 0, accB = 0;
         for (int i = -2; i <= 2; i++) {
             float t = float(i) * 0.2 * fp;
-            acc.ga += layer.sample(clamp(centre + c * k + dir * t, lo, hi)).ga;
-            acc.r += layer.sample(clamp(centre + c * (k - dk) + dir * t, lo, hi)).r;
-            acc.b += layer.sample(clamp(centre + c * (k + dk) + dir * t, lo, hi)).b;
+            accG += layer.sample(clamp(centre + c * k + dir * t, lo, hi));
+            accR += layer.sample(clamp(centre + c * (k - dk) + dir * t, lo, hi));
+            accB += layer.sample(clamp(centre + c * (k + dk) + dir * t, lo, hi));
         }
-        o = acc / 5.0;
+        o = disperse(accR / 5.0h, accG / 5.0h, accB / 5.0h);
     } else {
-        o = layer.sample(clamp(centre + c * k, lo, hi));
-        o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
-        o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
+        o = disperse(layer.sample(clamp(centre + c * (k - dk), lo, hi)),
+                     layer.sample(clamp(centre + c * k, lo, hi)),
+                     layer.sample(clamp(centre + c * (k + dk), lo, hi)));
     }
     // faint hairline lit from the pointer, plus a small hotspot near it; a
     // light far above reproduces the old top-lit look. Measured in device
