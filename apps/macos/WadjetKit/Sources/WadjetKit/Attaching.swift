@@ -36,16 +36,21 @@ extension LayerStack {
     /// that point was attached to; the point moves onto the spot at once.
     /// A whole Annotation keeps its current offset and turn from the spot,
     /// and drops its point attachments — and a point attachment drops a whole
-    /// one. False, changing nothing, when `canAttach` refuses.
+    /// one. `loose` attaches a Line's or path's end loosely instead: it aims
+    /// at the target's centre and stops on its outline, and `spot` is
+    /// ignored. False, changing nothing, when `canAttach` refuses or `loose`
+    /// names another point.
     @discardableResult
     public mutating func attach(_ source: Annotation.ID, _ point: AttachPoint, to target: Annotation.ID,
-                                at spot: AttachSpot) -> Bool {
+                                at spot: AttachSpot, loose: Bool = false) -> Bool {
+        guard !loose || point == .start || point == .end else { return false }
+        let spot = loose ? AttachSpot.frame(CGPoint(x: 0.5, y: 0.5)) : spot
         guard canAttach(source, point, to: target),
               let i = annotations.firstIndex(where: { $0.id == source }),
               let t = annotations.first(where: { $0.id == target }),
               let p = t.position(of: spot) else { return false }
         var a = annotations[i]
-        let new = Attachment(point: point, target: target, spot: spot)
+        let new = Attachment(point: point, target: target, spot: spot, loose: loose)
         if point == .whole {
             a.attachments = [a.rebased(new, on: t, at: p)]
         } else {
@@ -386,8 +391,20 @@ extension Annotation {
         if let (at, target) = attached.first(where: { $0.0.point == .whole }) {
             return followingWhole(at, on: target)
         }
+        // where each attached point would sit before a loose end is clipped
+        // to its target's outline: an exact spot, or a loose target's centre
+        func unclipped(_ at: Attachment, _ target: Annotation) -> CGPoint? {
+            at.loose ? AttachFinder.centre(of: target) : target.position(of: at.spot)
+        }
         let moves: [(AttachPoint, CGPoint)] = attached.compactMap { at, target in
-            target.position(of: at.spot).map { (at.point, $0) }
+            guard at.loose else { return target.position(of: at.spot).map { (at.point, $0) } }
+            // a loose end aims from its neighbour, as that neighbour will be
+            // placed: never from the Line's bend, which re-solves from the
+            // ends and would never settle
+            guard let n = neighbour(of: at.point),
+                  let origin = attached.first(where: { $0.0.point == n }).flatMap({ unclipped($0.0, $0.1) })
+                    ?? position(of: n) else { return nil }
+            return (at.point, AttachFinder.looseEnd(from: origin, on: target))
         }
         guard moves.contains(where: { point, p in
             position(of: point).map { hypot(p.x - $0.x, p.y - $0.y) > tolerance } ?? false

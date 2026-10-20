@@ -15,13 +15,18 @@ public struct Attachment: Equatable, Sendable {
     public var offset: CGVector
     /// `.whole` only: the attaching Annotation's rotation minus the target's
     public var turn: CGFloat
+    /// `.start` and `.end` only: attached loosely (tldraw's imprecise
+    /// binding) rather than exactly on `spot`. The end aims at the target's
+    /// centre and stops on its outline; `spot` is the centre.
+    public var loose: Bool
     public init(point: AttachPoint, target: Annotation.ID, spot: AttachSpot,
-                offset: CGVector = .zero, turn: CGFloat = 0) {
+                offset: CGVector = .zero, turn: CGFloat = 0, loose: Bool = false) {
         self.point = point
         self.target = target
         self.spot = spot
         self.offset = offset
         self.turn = turn
+        self.loose = loose
     }
 }
 
@@ -55,15 +60,18 @@ public enum AttachSpot: Equatable, Sendable {
 }
 
 extension Attachment: Codable {
-    enum CodingKeys: String, CodingKey { case target, start, end, node, bend, whole, frame, segment }
+    enum CodingKeys: String, CodingKey { case target, start, end, node, bend, whole, frame, segment, loose }
     enum WholeKeys: String, CodingKey { case offset, turn }
     /// `{"target":"…","end":true,"frame":[1,0.5]}`, `{"target":"…","node":2,"segment":[1,0.25]}`,
-    /// `{"target":"…","whole":{"offset":[12,-4],"turn":0},"frame":[1,1]}`
+    /// `{"target":"…","whole":{"offset":[12,-4],"turn":0},"frame":[1,1]}`,
+    /// `{"target":"…","end":true,"frame":[0.5,0.5],"loose":true}` — `loose`
+    /// only when true, so files from before it load as exact attachments
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         target = try c.decode(UUID.self, forKey: .target)
         offset = .zero
         turn = 0
+        loose = try c.decodeIfPresent(Bool.self, forKey: .loose) ?? false
         if c.contains(.start) { point = .start }
         else if c.contains(.end) { point = .end }
         else if c.contains(.bend) { point = .bend }
@@ -106,6 +114,7 @@ extension Attachment: Codable {
         case let .frame(u): try c.encodePoint(u, forKey: .frame)
         case let .segment(i, t): try c.encode([CGFloat(i), t], forKey: .segment)
         }
+        if loose { try c.encode(true, forKey: .loose) }
     }
 }
 

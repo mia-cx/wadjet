@@ -15,11 +15,15 @@ public struct AttachCandidate: Equatable, Sendable {
 
 /// what a dragged point is over: the Annotation it would attach to, that
 /// Annotation's named spots to highlight, and the spot a drop attaches to
-/// (nil while the point is over the target but near none of its spots or its outline)
+/// exactly (nil while the point is over the target but near none of its
+/// spots or its outline)
 public struct AttachHover: Equatable, Sendable {
     public var target: Annotation
     public var spots: [AttachCandidate]
     public var snapped: AttachCandidate?
+    /// unsnapped inside the target with a Line's or path's end: the drop
+    /// attaches it loosely, aimed at the target's centre
+    public var loose: Bool = false
 }
 
 /// Finds attach targets for a dragged point: an Annotation's named spots
@@ -91,16 +95,19 @@ public enum AttachFinder {
     /// what a point of `source` dragged to `p` would attach to. A named spot
     /// within `radius` wins, the nearest of all; then the nearest outline
     /// point within `radius` of the front-most Annotation that has one; then,
-    /// unsnapped, the front-most Annotation under `p` or inside its outline. Hidden Annotations,
-    /// the source, and anything that would close a cycle are skipped.
+    /// unsnapped, the front-most Annotation under `p` or inside its outline,
+    /// which an end attaches to loosely when it has an inside. `snapping`
+    /// false (⌘ held) skips the spots and the outline, so only that last
+    /// step is left. Hidden Annotations, the source, and anything that would
+    /// close a cycle are skipped.
     public static func hover(at p: CGPoint, in stack: LayerStack, attaching source: Annotation.ID,
-                             _ point: AttachPoint, radius: CGFloat) -> AttachHover? {
+                             _ point: AttachPoint, radius: CGFloat, snapping: Bool = true) -> AttachHover? {
         let eligible = stack.annotations.reversed().filter {
             !$0.hidden && stack.canAttach(source, point, to: $0.id)
         }
         func dist(_ s: AttachCandidate) -> CGFloat { hypot(s.at.x - p.x, s.at.y - p.y) }
         var named: (AttachCandidate, Annotation, [AttachCandidate])?
-        for a in eligible {
+        for a in eligible where snapping {
             let spots = spots(on: a)
             if let s = spots.filter({ dist($0) <= radius }).min(by: { dist($0) < dist($1) }),
                named == nil || dist(s) < dist(named!.0) {
@@ -108,7 +115,7 @@ public enum AttachFinder {
             }
         }
         if let (s, a, spots) = named { return AttachHover(target: a, spots: spots, snapped: s) }
-        for a in eligible {
+        for a in eligible where snapping {
             if let s = nearestOnOutline(of: a, to: p), dist(s) <= radius {
                 return AttachHover(target: a, spots: spots(on: a), snapped: s)
             }
@@ -118,46 +125,20 @@ public enum AttachFinder {
             (!$0.kind.insertsAttachSegments && outline(of: $0).contains(p))
                 || PathGeometry.hitTest($0, at: p, tolerance: radius)
         }) {
-            return AttachHover(target: a, spots: spots(on: a), snapped: nil)
+            return AttachHover(target: a, spots: spots(on: a), snapped: nil,
+                               loose: (point == .start || point == .end) && !a.kind.insertsAttachSegments)
         }
         return nil
     }
 
     /// the nearest point to `p` on `path`, its curves flattened
     static func nearest(on path: CGPath, to p: CGPoint) -> CGPoint? {
-        var best: (CGPoint, CGFloat)?, cur = CGPoint.zero, start = CGPoint.zero
-        func consider(_ a: CGPoint, _ b: CGPoint) {
+        var best: (CGPoint, CGFloat)?
+        for (a, b) in chords(of: path) {
             let dx = b.x - a.x, dy = b.y - a.y, l2 = dx * dx + dy * dy
             let t = l2 == 0 ? 0 : min(1, max(0, ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2))
             let q = CGPoint(x: a.x + t * dx, y: a.y + t * dy), d = hypot(q.x - p.x, q.y - p.y)
             if best == nil || d < best!.1 { best = (q, d) }
-        }
-        func curve(_ pts: [CGPoint]) {
-            // a quadratic or cubic from `cur` through its controls, in 24 chords
-            let all = [cur] + pts
-            var prev = cur
-            for k in 1...24 {
-                let t = CGFloat(k) / 24
-                var level = all
-                while level.count > 1 {
-                    level = zip(level, level.dropFirst()).map {
-                        CGPoint(x: $0.x + ($1.x - $0.x) * t, y: $0.y + ($1.y - $0.y) * t)
-                    }
-                }
-                consider(prev, level[0])
-                prev = level[0]
-            }
-        }
-        path.applyWithBlock { e in
-            let el = e.pointee
-            switch el.type {
-            case .moveToPoint: cur = el.points[0]; start = cur
-            case .addLineToPoint: consider(cur, el.points[0]); cur = el.points[0]
-            case .addQuadCurveToPoint: curve([el.points[0], el.points[1]]); cur = el.points[1]
-            case .addCurveToPoint: curve([el.points[0], el.points[1], el.points[2]]); cur = el.points[2]
-            case .closeSubpath: consider(cur, start); cur = start
-            @unknown default: break
-            }
         }
         return best?.0
     }

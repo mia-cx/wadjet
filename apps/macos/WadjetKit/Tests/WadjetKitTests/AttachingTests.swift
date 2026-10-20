@@ -203,6 +203,9 @@ struct AttachingTests {
         stack.attach(a.id, .bend, to: target.id, at: .frame(.zero))
         stack.attach(path.id, .node(1), to: target.id, at: .frame(CGPoint(x: 0.5, y: 1)))
         stack.attach(text.id, .whole, to: target.id, at: .frame(CGPoint(x: 1, y: 1)))
+        let loose = arrow(from: CGPoint(x: 300, y: 25), to: CGPoint(x: 50, y: 25))
+        stack.add(loose)
+        stack.attach(loose.id, .end, to: target.id, at: .frame(.zero), loose: true)
         #expect(try LayerStack(json: stack.json()) == stack)
 
         let old = """
