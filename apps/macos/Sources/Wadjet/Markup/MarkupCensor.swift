@@ -5,14 +5,24 @@ extension MarkupStyles {
     /// the selected Annotation's method if it's a Censor, else Censor's
     /// configured default for new Annotations
     var censorMethod: CensorMethod {
-        if case let .censor(_, method) = MarkupController.active.selected?.kind { return method }
+        if let m = selectedCensorMethods.first { return m }
         return config.value.markup.tools["censor"]?.censorMethod ?? .blackOut
     }
+    /// the selected Censors' methods, back to front
+    var selectedCensorMethods: [CensorMethod] {
+        MarkupController.active.selectedAnnotations.compactMap {
+            if case let .censor(_, m) = $0.kind { m } else { nil }
+        }
+    }
+    /// the selected Censors use different methods — no method tile is lit
+    var censorMethodMixed: Bool { Mixed(selectedCensorMethods.map(\.title))?.isMixed == true }
+    /// the selected Censors differ in method or strength — the slider reads Mixed
+    var censorStrengthMixed: Bool { Mixed(selectedCensorMethods)?.isMixed == true }
 
-    /// a selected Censor changes alone; with nothing selected the method
-    /// becomes Censor's default for new Annotations (mirroring `restyle`)
+    /// every selected Censor changes; with none selected the method becomes
+    /// Censor's default for new Annotations (mirroring `restyle`)
     func setCensorMethod(_ m: CensorMethod) {
-        if let a = MarkupController.active.selected, case .censor = a.kind {
+        if !selectedCensorMethods.isEmpty {
             MarkupController.active.transformSelection {
                 var a = $0
                 if case let .censor(rect, _) = a.kind { a.kind = .censor(rect: rect, method: m) }
@@ -56,12 +66,14 @@ struct CensorControls: View {
             case .blackOut:
                 EmptyView()
             case .blur:
-                MenuSliderRow(icon: "drop.halffull", label: "Blur radius", text: "\(Int(strength)) pt",
+                MenuSliderRow(icon: "drop.halffull", label: "Blur radius",
+                              text: styles.censorStrengthMixed && !editing ? "Mixed" : "\(Int(strength)) pt",
                               value: $strength, range: 2...40, step: 1, editing: $editing) {
                     styles.setCensorMethod(.blur(radius: strength))
                 }
             case .pixelate:
-                MenuSliderRow(icon: "square.grid.3x3", label: "Block size", text: "\(Int(strength)) pt",
+                MenuSliderRow(icon: "square.grid.3x3", label: "Block size",
+                              text: styles.censorStrengthMixed && !editing ? "Mixed" : "\(Int(strength)) pt",
                               value: $strength, range: 4...48, step: 2, editing: $editing) {
                     styles.setCensorMethod(.pixelate(blockSize: strength))
                 }
@@ -80,20 +92,21 @@ struct CensorControls: View {
     /// only when switching cases, so a tuned radius survives a tap on its tile
     var tiles: [[MenuTile]] {
         [[
-            MenuTile(icon: CensorMethod.blackOut.variant.symbol, caption: CensorMethod.blackOut.variant.title, on: method == .blackOut) {
+            MenuTile(icon: CensorMethod.blackOut.variant.symbol, caption: CensorMethod.blackOut.variant.title, on: !mixed && method == .blackOut) {
                 styles.setCensorMethod(.blackOut)
                 ctrl.fitMenu() // the strength slider leaves
             },
-            MenuTile(icon: CensorMethod.defaultBlur.variant.symbol, caption: CensorMethod.defaultBlur.variant.title, on: isBlur) {
-                if !isBlur { styles.setCensorMethod(.defaultBlur) }
+            MenuTile(icon: CensorMethod.defaultBlur.variant.symbol, caption: CensorMethod.defaultBlur.variant.title, on: !mixed && isBlur) {
+                if !isBlur || mixed { styles.setCensorMethod(.defaultBlur) }
                 ctrl.fitMenu()
             },
-            MenuTile(icon: CensorMethod.defaultPixelate.variant.symbol, caption: CensorMethod.defaultPixelate.variant.title, on: isPixelate) {
-                if !isPixelate { styles.setCensorMethod(.defaultPixelate) }
+            MenuTile(icon: CensorMethod.defaultPixelate.variant.symbol, caption: CensorMethod.defaultPixelate.variant.title, on: !mixed && isPixelate) {
+                if !isPixelate || mixed { styles.setCensorMethod(.defaultPixelate) }
                 ctrl.fitMenu()
             },
         ]]
     }
+    var mixed: Bool { styles.censorMethodMixed }
     var isBlur: Bool { if case .blur = method { true } else { false } }
     var isPixelate: Bool { if case .pixelate = method { true } else { false } }
 }

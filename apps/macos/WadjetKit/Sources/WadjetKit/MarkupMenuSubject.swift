@@ -10,8 +10,23 @@ public enum MarkupMenuSubject: Equatable, Sendable {
     case selected(ToolID?)
 
     public init(armed: ToolID?, selected: AnnotationKind?) {
-        guard let selected else { self = .armed(armed); return }
-        let tool: ToolID? = switch selected {
+        self.init(armed: armed, selected: selected.map { [$0] } ?? [])
+    }
+
+    /// several selected Annotations show their shared kind's Tool when every
+    /// one maps to the same Tool (two Lines and a Pen path are all Draw's);
+    /// mixed kinds fall back to Select's controls, which only edit the style
+    /// they all have
+    public init(armed: ToolID?, selected: [AnnotationKind]) {
+        guard let first = selected.first else { self = .armed(armed); return }
+        let tools = selected.map(Self.tool(for:))
+        self = .selected(tools.allSatisfy { $0 == tools[0] } ? Self.tool(for: first) : nil)
+    }
+
+    /// the Tool that draws `kind`; nil for kinds no Tool draws (images,
+    /// windows, nested Canvases), which keep Select's controls
+    static func tool(for kind: AnnotationKind) -> ToolID? {
+        switch kind {
         case .line, .path: .draw
         case .censor: .censor
         case .shape: .shapes
@@ -20,7 +35,6 @@ public enum MarkupMenuSubject: Equatable, Sendable {
         case .text: .text
         case .window, .image, .canvas: nil
         }
-        self = .selected(tool)
     }
 
     /// the Tool whose controls the menu shows; nil means Select's

@@ -195,7 +195,7 @@ extension MarkupController {
         setEditing(id)
         // selecting it too lets the style and format seams restyle the box
         // being typed
-        setSelection(id)
+        setSelection([id])
         syncEditor()
         host.view.window?.makeKey()
         host.view.window?.makeFirstResponder(tv)
@@ -230,7 +230,7 @@ extension MarkupController {
         // the whole session becomes one undo step — nothing for a dropped box
         recordTextEdit()
         // a kept text stays selected for editing while any Tool is armed
-        setSelection(armed != nil && kept ? id : nil)
+        setSelection(armed != nil && kept ? [id] : [])
         render()
         if isScreen {
             syncSession()

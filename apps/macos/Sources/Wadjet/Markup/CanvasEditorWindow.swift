@@ -372,6 +372,8 @@ final class EditorCanvasView: NSView {
             // charactersIgnoringModifiers keeps Shift: ⇧] types } on US layouts
             case "]", "}": doc.markup.restackSelection(shift ? .front : .up); return true
             case "[", "{": doc.markup.restackSelection(shift ? .back : .down); return true
+            case "d" where !shift && !doc.markup.selection.isEmpty:
+                doc.markup.duplicateSelection(); return true
             default: break
             }
         }
@@ -388,6 +390,10 @@ final class EditorCanvasView: NSView {
         }
         // arrows nudge Direct Select's anchors
         if let d = MarkupController.nudge(for: e), doc.markup.nudgeAnchors(by: d) { return }
+        // arrows nudge the selection, ⇧ by ten
+        if doc.markup.editing == nil,
+           e.modifierFlags.intersection([.command, .option, .control]).isEmpty,
+           let d = MarkupController.selectionNudge(for: e), doc.markup.nudgeSelection(by: d) { return }
         if e.keyCode == 53 { // Escape
             if doc.markup.finishPen() { return }
             if !doc.markup.deselect(), state.recrop {
@@ -425,13 +431,19 @@ final class EditorCanvasView: NSView {
         return markupView.canvasPoint(fromScreen: window!.convertPoint(toScreen: centre))
     }
     @objc func paste(_ sender: Any?) { doc.markup.paste(from: .general, at: pastePoint) }
+    /// Edit ▸ Copy: the selected Annotations, or the whole Canvas with none selected
+    @objc func copy(_ sender: Any?) {
+        if !doc.markup.copySelection() { doc.copy(sender) }
+    }
+    @objc func cut(_ sender: Any?) { doc.markup.cutSelection() }
+    override func selectAll(_ sender: Any?) { doc.markup.selectAll() }
 
     /// ⌘ turns the armed Tool into Select until release; ⇧/⌥ reshape a
     /// Shapes draft mid-drag — the screen's flags monitor does both there
     override func flagsChanged(with e: NSEvent) {
         doc.markup.cmdHeld = e.modifierFlags.contains(.command)
         markupView.setToolCursor()
-        if doc.markup.draft != nil {
+        if doc.markup.draft != nil || doc.markup.reshapesOnModifiers {
             doc.markup.drag(to: markupView.canvasPoint(fromScreen: NSEvent.mouseLocation),
                             constrained: e.modifierFlags.contains(.shift))
         }
@@ -569,6 +581,12 @@ final class RecropOverlay: NSView {
 extension EditorCanvasView: NSMenuItemValidation {
     /// Edit ▸ Paste is enabled while the clipboard holds something Markup takes
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
-        item.action != #selector(paste(_:)) || MarkupPasteboard.canRead(.general)
+        switch item.action {
+        case #selector(paste(_:)):
+            MarkupPasteboard.canRead(.general) || AnnotationClipboard.contents(of: .general) != nil
+        case #selector(cut(_:)): !doc.markup.selection.isEmpty
+        case #selector(selectAll(_:)): !doc.markup.stack.isEmpty
+        default: true
+        }
     }
 }

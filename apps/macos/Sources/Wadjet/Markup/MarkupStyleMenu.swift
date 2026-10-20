@@ -47,6 +47,8 @@ struct MarkupStyleControls: View {
     @State var editing = false
 
     var style: AnnotationStyle { styles.style(for: tool) }
+    /// which fields a multi-selection disagrees on; nil with nothing selected
+    var shared: AnnotationStyle.Shared? { MarkupController.active.sharedStyle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -55,40 +57,46 @@ struct MarkupStyleControls: View {
             // a counter has no stroke — its Size slider replaces this — and
             // Text sets its own format controls instead of a stroke weight
             if tool != .counter && !styles.editsText(tool) {
-                MenuSliderRow(icon: "lineweight", label: "Stroke weight", text: "\(Int(width)) pt",
+                MenuSliderRow(icon: "lineweight", label: "Stroke weight",
+                              text: shared?.width.isMixed == true && !editing ? "Mixed" : "\(Int(width)) pt",
                               value: $width, range: 1...24, step: 1, editing: $editing) {
                     styles.restyle(tool) { $0.width = CGFloat(width) }
                 }
             }
             MenuSliderRow(icon: "circle.lefthalf.filled", label: "Opacity",
-                          text: "\(Int((opacity * 100).rounded()))%",
+                          text: shared?.opacity.isMixed == true && !editing
+                              ? "Mixed" : "\(Int((opacity * 100).rounded()))%",
                           value: $opacity, range: 0.1...1, step: 0.05, editing: $editing) {
                 styles.restyle(tool) { $0.opacity = opacity }
             }
             if brushControls {
+                let mixed = MarkupController.active.shared { a -> CGFloat? in
+                    if case let .path(d) = a.kind { d.smoothing } else { nil }
+                }?.isMixed == true
                 MenuSliderRow(icon: "scribble.variable", label: "Smoothing",
-                              text: "\(Int((smoothing * 100).rounded()))%",
+                              text: mixed && !editing ? "Mixed" : "\(Int((smoothing * 100).rounded()))%",
                               value: $smoothing, range: 0...1, step: 0.05, editing: $editing) {
                     styles.setSmoothing(smoothing, for: tool)
                 }
             }
             if lineControls {
                 divider()
-                endRow(side: "Start", atStart: true, current: style.tail) { end in
+                endRow(side: "Start", atStart: true, current: shared?.tail.isMixed == true ? nil : style.tail) { end in
                     styles.restyle(tool) { $0.tail = end }
                 }
-                endRow(side: "End", atStart: false, current: style.head) { end in
+                endRow(side: "End", atStart: false, current: shared?.head.isMixed == true ? nil : style.head) { end in
                     styles.restyle(tool) { $0.head = end }
                 }
                 HStack(spacing: 0) {
+                    let dash = shared?.dash.isMixed == true ? nil : style.dash
                     ForEach(LineDash.allCases, id: \.self) { d in
-                        MenuCell(pinned: d == style.dash) {
+                        MenuCell(pinned: d == dash) {
                             styles.restyle(tool) { $0.dash = d }
                         } content: {
                             lineGlyph(dash: d)
                         }
                         .accessibilityLabel("Dash: \(d.title)")
-                        .accessibilityAddTraits(d == style.dash ? .isSelected : [])
+                        .accessibilityAddTraits(d == dash ? .isSelected : [])
                     }
                 }
                 .frame(minHeight: 40)
@@ -118,14 +126,17 @@ struct MarkupStyleControls: View {
 
     // MARK: line ends and dashes — drawn by WadjetKit so glyphs match the canvas
 
-    /// the end/dash rows show for a selected Line or open path — or, with
-    /// nothing selected, while Draw is armed (both variants)
+    /// the end/dash rows show while everything selected is a Line or open
+    /// path — or, with nothing selected, while Draw is armed (both variants)
     var lineControls: Bool {
-        guard let k = MarkupController.active.selected?.kind else { return tool == .draw }
-        switch k {
-        case .line: return true
-        case .path: return !k.isClosed
-        default: return false
+        let sel = MarkupController.active.selectedAnnotations
+        guard !sel.isEmpty else { return tool == .draw }
+        return sel.allSatisfy {
+            switch $0.kind {
+            case .line: true
+            case .path: !$0.kind.isClosed
+            default: false
+            }
         }
     }
 
@@ -133,20 +144,21 @@ struct MarkupStyleControls: View {
     /// that kept its samples) — or, with nothing selected, while a brush
     /// variant is armed
     var brushControls: Bool {
-        guard let a = MarkupController.active.selected else { return tool == .draw && styles.drawVariant.isBrush }
-        if case let .path(d) = a.kind { return d.rawPoints != nil }
-        return false
+        let sel = MarkupController.active.selectedAnnotations
+        guard !sel.isEmpty else { return tool == .draw && styles.drawVariant.isBrush }
+        return sel.allSatisfy(\.isBrushStroke)
     }
 
     /// the Fill toggle shows for a selected closed path — or, with nothing
     /// selected, while the Pen variant is armed; only closed paths can fill
     var penFillControls: Bool {
-        guard let k = MarkupController.active.selected?.kind else { return tool == .draw && styles.drawVariant == .pen }
-        return k.isClosed
+        let sel = MarkupController.active.selectedAnnotations
+        guard !sel.isEmpty else { return tool == .draw && styles.drawVariant == .pen }
+        return sel.allSatisfy(\.kind.isClosed)
     }
 
     /// a row of the five LineEnds; `atStart` decorates the sample line's left tip
-    func endRow(side: String, atStart: Bool, current: LineEnd,
+    func endRow(side: String, atStart: Bool, current: LineEnd?,
                 pick: @escaping (LineEnd) -> Void) -> some View {
         HStack(spacing: 0) {
             ForEach(LineEnd.allCases, id: \.self) { end in
@@ -189,6 +201,16 @@ struct MarkupColourRow: View {
 
     var colour: RGBAColour { styles.colour(for: tool, target: target) }
     var open: Bool { styles.wheel == target }
+    /// the selected Annotations disagree on this colour — the well shows a
+    /// question mark and no swatch wears the ring, like Illustrator's "?" swatch
+    var mixed: Bool {
+        guard let s = MarkupController.active.sharedStyle else { return false }
+        switch target {
+        case .stroke: return s.colour.isMixed
+        case .fill: return s.fill.isMixed
+        case .border: return MarkupMagnify.mixed(\.border)
+        }
+    }
     /// VoiceOver names the non-stroke rows' controls "Fill …" / "Border …"
     var voiceOver: String {
         switch target { case .fill: "Fill "; case .border: "Border "; case .stroke: "" }
@@ -216,13 +238,20 @@ struct MarkupColourRow: View {
                                             center: .center), lineWidth: 2.5)
                     .frame(width: 30.5, height: 30.5)
                     .overlay {
-                        Circle().fill(Color(red: colour.red, green: colour.green, blue: colour.blue))
-                            .frame(width: 24, height: 24)
+                        if mixed {
+                            Image(systemName: "questionmark").font(.system(size: 13, weight: .semibold))
+                                .foregroundStyle(.white)
+                                .frame(width: 24, height: 24)
+                                .background(Circle().fill(.white.opacity(0.15)))
+                        } else {
+                            Circle().fill(Color(red: colour.red, green: colour.green, blue: colour.blue))
+                                .frame(width: 24, height: 24)
+                        }
                     }
             }
             .accessibilityLabel("\(voiceOver)Colour wheel")
             .accessibilityAddTraits(.isToggle)
-            .accessibilityValue(open ? "On" : "Off")
+            .accessibilityValue(mixed ? "Mixed colours, \(open ? "on" : "off")" : open ? "On" : "Off")
 
             ForEach(0..<MarkupStyles.swatchCount, id: \.self) { i in
                 if i < styles.swatches.count {
@@ -233,14 +262,14 @@ struct MarkupColourRow: View {
                         Circle().fill(Color(red: c.red, green: c.green, blue: c.blue))
                             .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 0.5)) // black must read on dark glass
                             .overlay { // the current colour wears a ring
-                                if c.hex == colour.hex {
+                                if !mixed, c.hex == colour.hex {
                                     Circle().stroke(.white, lineWidth: 2).padding(-2)
                                 }
                             }
                             .frame(width: 22, height: 22)
                     }
                     .accessibilityLabel("\(voiceOver)Colour \(c.hex)")
-                    .accessibilityAddTraits(c.hex == colour.hex ? .isSelected : [])
+                    .accessibilityAddTraits(!mixed && c.hex == colour.hex ? .isSelected : [])
                 } else {
                     Color.clear.frame(maxWidth: .infinity, minHeight: 40)
                 }

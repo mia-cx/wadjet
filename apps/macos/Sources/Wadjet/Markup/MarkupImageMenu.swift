@@ -15,15 +15,22 @@ struct ImageStyleControls: View {
 
     var style: AnnotationStyle { styles.style(for: tool) }
     var placement: ImagePlacement? { MarkupController.active.selected?.placement }
+    /// which placement fields the selected images disagree on
+    func mixed<T: Equatable>(_ read: (ImagePlacement) -> T) -> Bool {
+        MarkupController.active.shared { $0.placement.map(read) }?.isMixed == true
+    }
+    var shared: AnnotationStyle.Shared? { MarkupController.active.sharedStyle }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             MenuSliderRow(icon: "circle.lefthalf.filled", label: "Opacity",
-                          text: "\(Int((opacity * 100).rounded()))%",
+                          text: shared?.opacity.isMixed == true && !editing
+                              ? "Mixed" : "\(Int((opacity * 100).rounded()))%",
                           value: $opacity, range: 0.1...1, step: 0.05, editing: $editing) {
                 styles.restyle(tool) { $0.opacity = opacity }
             }
-            MenuSliderRow(icon: "app", label: "Corner radius", text: "\(Int(radius)) pt",
+            MenuSliderRow(icon: "app", label: "Corner radius",
+                          text: mixed(\.cornerRadius) && !editing ? "Mixed" : "\(Int(radius)) pt",
                           value: $radius, range: 0...64, step: 1, editing: $editing) {
                 MarkupController.active.updateSelectedPlacement { $0.cornerRadius = CGFloat(radius) }
             }
@@ -34,10 +41,10 @@ struct ImageStyleControls: View {
                 .padding(.horizontal, 14).padding(.top, 4).padding(.bottom, 2)
                 .accessibilityAddTraits(.isHeader)
             MarkupColourRow(tool: tool, target: .stroke, ctrl: ctrl)
-            MenuRow(title: "Auto", icon: "circle.lefthalf.filled", on: placement?.border == .difference) {
+            MenuRow(title: "Auto", icon: "circle.lefthalf.filled", on: !mixed(\.border) && placement?.border == .difference) {
                 MarkupController.active.updateSelectedPlacement { $0.border = .difference }
             }
-            MenuRow(title: "None", icon: "circle.slash", on: placement?.border == .hidden) {
+            MenuRow(title: "None", icon: "circle.slash", on: !mixed(\.border) && placement?.border == .hidden) {
                 MarkupController.active.updateSelectedPlacement { $0.border = .hidden }
             }
         }

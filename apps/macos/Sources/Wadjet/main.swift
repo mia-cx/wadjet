@@ -4055,13 +4055,14 @@ struct ToolMenuView: View {
                 freezeRegionRows()
             case .markup:
                 // Direct Select's menu is Select's: nothing armed to set defaults for
+                let selected = MarkupController.active.selectedAnnotations
                 let subject = MarkupMenuSubject(armed: tool == .directSelect ? nil : tool.toolID,
-                                                selected: MarkupController.active.selected?.kind)
+                                                selected: selected.map(\.kind))
                 let t = subject.tool.flatMap { Tool(rawValue: $0.rawValue) } ?? .select
                 if t == .eraser {
                     eraserRows()
-                } else if MarkupController.active.selected?.placement != nil {
-                    // an image kind's menu: opacity, radius, border
+                } else if !selected.isEmpty, selected.allSatisfy({ $0.placement != nil }) {
+                    // an image kind's menu: opacity, radius, border — every selected image's
                     ImageStyleControls(tool: tool, ctrl: ctrl)
                 } else {
                     if t == .shapes { ShapeVariantControls(ctrl: ctrl) }

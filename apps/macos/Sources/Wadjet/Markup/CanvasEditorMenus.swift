@@ -152,8 +152,8 @@ private struct EditorLayersList: View {
     var body: some View {
         if let c = EditorFocus.shared.markup {
             LayersView(annotations: c.stack.annotations,
-                       selection: Binding(get: { c.selection }, set: { c.select($0) }),
-                       move: c.moveLayer,
+                       selection: Binding(get: { c.selection.set }, set: { c.select($0) }),
+                       reorder: c.reorderLayers,
                        update: c.update,
                        windowLayers: c.windowLayers)
         }

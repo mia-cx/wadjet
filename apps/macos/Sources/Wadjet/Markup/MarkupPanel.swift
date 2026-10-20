@@ -42,6 +42,11 @@ final class MarkupView: NSView {
     let anchorsLayer = CAShapeLayer()
     let selectedAnchorsLayer = CAShapeLayer()
     let marqueeLayer = CAShapeLayer()
+    /// a multi-selection's chrome: each member's outline, the shared box and
+    /// its grips, and Select's marquee — MarkupSelection.swift
+    let groupLayer = CAShapeLayer()
+    let groupHandlesLayer = CAShapeLayer()
+    let marqueeSelectLayer = CAShapeLayer()
     /// snap guides, drawn above the Annotations and outside the peer-through mask
     let guidesLayer = CAShapeLayer()
     let accent = CGColor(srgbRed: 0.20, green: 0.84, blue: 0.58, alpha: 1)
@@ -112,7 +117,8 @@ final class MarkupView: NSView {
         let s = (window?.backingScaleFactor ?? 2) * controller.zoom
         guard s != scale else { return }
         scale = s
-        for l in Array(shapeLayers.values) + Array(imageLayers.values) + [frameLayer, handlesLayer, guidesLayer] {
+        for l in Array(shapeLayers.values) + Array(imageLayers.values)
+            + [frameLayer, handlesLayer, guidesLayer, groupLayer, groupHandlesLayer, marqueeSelectLayer] {
             l.contentsScale = s
             l.sublayers?.forEach { $0.contentsScale = s }
         }
@@ -125,9 +131,10 @@ final class MarkupView: NSView {
     /// and grips on top — except while the selection is the text being edited —
     /// and while `cropping` names it, only resize grips show. `dimmed` are the
     /// Annotations an Eraser drag has marked — they draw faint until release.
+    /// `group` is a multi-selection's shared box and the marquee in flight.
     func show(_ annotations: [Annotation], selection: Annotation?,
               editing: Annotation.ID? = nil, cropping: Annotation.ID? = nil,
-              dimmed: Set<Annotation.ID> = []) {
+              dimmed: Set<Annotation.ID> = [], group: SelectionChrome = SelectionChrome()) {
         shown = annotations
         shownDimmed = dimmed
         CATransaction.begin()
@@ -207,7 +214,7 @@ final class MarkupView: NSView {
         }
         let chrome = selection != nil && selection?.id != editing ? [frameLayer, handlesLayer] : []
         content.sublayers = annotations.compactMap { shapeLayers[$0.id] ?? imageLayers[$0.id] }
-        canvas.sublayers = [content] + chrome + nodeChrome
+        canvas.sublayers = [content] + chrome + nodeChrome + syncGroupChrome(group)
         // text entries are TextAnnotationLayers; the samplers only write back
         // into their own AnnotationLayers
         let layers = shapeLayers.compactMapValues { $0 as? AnnotationLayer }
@@ -253,6 +260,53 @@ final class MarkupView: NSView {
             style(marqueeLayer, CGPath(rect: m, transform: nil), fill: nil)
             marqueeLayer.lineDashPattern = [NSNumber(value: 3 / z), NSNumber(value: 3 / z)]
             layers.append(marqueeLayer)
+        }
+        return layers
+    }
+
+    /// a multi-selection's chrome after Illustrator: thin outlines on every
+    /// selected Annotation, one box around them with square-ish grips like a
+    /// single frame's, and a dashed marquee — the layers to add above the content
+    private func syncGroupChrome(_ g: SelectionChrome) -> [CALayer] {
+        let z = controller.zoom
+        var layers: [CALayer] = []
+        if let box = g.box {
+            let path = CGMutablePath()
+            for o in g.outlines { path.addPath(o) }
+            path.addRect(box)
+            if let rotate = g.handles.first(where: { $0.handle == .rotate }) {
+                // the rotate grip hangs off the top edge on a short stem
+                path.move(to: CGPoint(x: box.midX, y: box.maxY)); path.addLine(to: rotate.at)
+            }
+            groupLayer.path = path
+            groupLayer.fillColor = nil
+            groupLayer.strokeColor = accent
+            groupLayer.lineWidth = 1 / z
+            groupLayer.contentsScale = scale
+            let grips = CGMutablePath()
+            let r = MarkupController.handleSize / 2 / z
+            for h in g.handles {
+                grips.addEllipse(in: CGRect(x: h.at.x - r, y: h.at.y - r, width: 2 * r, height: 2 * r))
+            }
+            groupHandlesLayer.path = grips
+            groupHandlesLayer.fillColor = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+            groupHandlesLayer.strokeColor = accent
+            groupHandlesLayer.lineWidth = 1 / z
+            groupHandlesLayer.contentsScale = scale
+            groupHandlesLayer.shadowColor = .black
+            groupHandlesLayer.shadowOpacity = 0.25
+            groupHandlesLayer.shadowRadius = 1 / z
+            groupHandlesLayer.shadowOffset = CGSize(width: 0, height: -0.5 / z)
+            layers += [groupLayer, groupHandlesLayer]
+        }
+        if let m = g.marquee {
+            marqueeSelectLayer.path = CGPath(rect: m, transform: nil)
+            marqueeSelectLayer.fillColor = accent.copy(alpha: 0.08)
+            marqueeSelectLayer.strokeColor = accent
+            marqueeSelectLayer.lineWidth = 1 / z
+            marqueeSelectLayer.lineDashPattern = [NSNumber(value: 3 / z), NSNumber(value: 3 / z)]
+            marqueeSelectLayer.contentsScale = scale
+            layers.append(marqueeSelectLayer)
         }
         return layers
     }

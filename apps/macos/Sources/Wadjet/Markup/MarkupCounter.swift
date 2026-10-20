@@ -8,38 +8,53 @@ import WadjetKit
     static let defaultSize: CGFloat = 28
     private static var config: ConfigStore<WadjetConfig> { AppState.shared.config }
 
-    /// the selected counter's, else configured, else .numbers
+    /// the selected counters' formats and diameters, back to front
+    static var selectedCounters: [(format: CounterFormat, size: CGFloat)] {
+        MarkupController.active.selectedAnnotations.compactMap {
+            if case let .counter(_, r, _, f) = $0.kind { (f, 2 * r) } else { nil }
+        }
+    }
+    static var formatMixed: Bool { Mixed(selectedCounters.map(\.format))?.isMixed == true }
+    static var sizeMixed: Bool { Mixed(selectedCounters.map(\.size))?.isMixed == true }
+
+    /// the first selected counter's, else configured, else .numbers
     static var format: CounterFormat {
-        if case let .counter(_, _, _, f) = MarkupController.active.selected?.kind { return f }
+        if let c = selectedCounters.first { return c.format }
         return config.value.markup.tools["counter"]?.format ?? .numbers
     }
 
-    /// relabels the selected counter (value kept), else sets the Tool's format
+    /// relabels every selected counter (values kept), else sets the Tool's format
     static func setFormat(_ f: CounterFormat) {
-        if var a = MarkupController.active.selected,
-           case let .counter(c, r, v, _) = a.kind {
-            a.kind = .counter(center: c, radius: r, value: v, format: f)
-            MarkupController.active.transformSelection { _ in a }
+        guard selectedCounters.isEmpty else {
+            setEach { c, r, v, _ in .counter(center: c, radius: r, value: v, format: f) }
             return
         }
         config.update { $0.markup.tools["counter", default: .init()].format = f }
     }
 
-    /// diameter: the selected counter's 2 × radius, else configured, else defaultSize
+    /// diameter: the first selected counter's 2 × radius, else configured, else defaultSize
     static var size: CGFloat {
-        if case let .counter(_, r, _, _) = MarkupController.active.selected?.kind { return 2 * r }
+        if let c = selectedCounters.first { return c.size }
         return config.value.markup.tools["counter"]?.size ?? defaultSize
     }
 
-    /// resizes the selected counter about its centre, else sets the Tool's size
+    /// resizes every selected counter about its centre, else sets the Tool's size
     static func setSize(_ d: CGFloat) {
-        if var a = MarkupController.active.selected,
-           case let .counter(c, _, v, f) = a.kind {
-            a.kind = .counter(center: c, radius: d / 2, value: v, format: f)
-            MarkupController.active.transformSelection { _ in a }
+        guard selectedCounters.isEmpty else {
+            setEach { c, _, v, f in .counter(center: c, radius: d / 2, value: v, format: f) }
             return
         }
         config.update { $0.markup.tools["counter", default: .init()].size = d }
+    }
+
+    /// each selected counter rebuilt from its centre, radius, value, and format — one undo step
+    private static func setEach(_ change: (CGPoint, CGFloat, Int, CounterFormat) -> AnnotationKind) {
+        MarkupController.active.transformSelection { a in
+            guard case let .counter(c, r, v, f) = a.kind else { return a }
+            var a = a
+            a.kind = change(c, r, v, f)
+            return a
+        }
     }
 }
 
@@ -56,15 +71,16 @@ struct CounterControls: View {
         VStack(alignment: .leading, spacing: 0) {
             HStack(spacing: 0) {
                 MenuTile(icon: "textformat.123", caption: "Numbers",
-                         on: MarkupCounter.format == .numbers) {
+                         on: !MarkupCounter.formatMixed && MarkupCounter.format == .numbers) {
                     MarkupCounter.setFormat(.numbers)
                 }
                 MenuTile(icon: "textformat.abc", caption: "Letters",
-                         on: MarkupCounter.format == .letters) {
+                         on: !MarkupCounter.formatMixed && MarkupCounter.format == .letters) {
                     MarkupCounter.setFormat(.letters)
                 }
             }
-            MenuSliderRow(icon: "circle.dashed", label: "Size", text: "\(Int(size)) pt",
+            MenuSliderRow(icon: "circle.dashed", label: "Size",
+                          text: MarkupCounter.sizeMixed && !editing ? "Mixed" : "\(Int(size)) pt",
                           value: $size, range: 16...64, step: 2, editing: $editing) {
                 MarkupCounter.setSize(size)
             }
