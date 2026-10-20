@@ -2,26 +2,24 @@ import AppKit
 import WadjetKit
 
 /// Attaching to another Annotation: a point dragged with Direct Select (a
-/// Line's end or bend, a path's end or node), or a whole Annotation being
-/// moved. While it drags, the Annotation under it shows its attach spots
-/// and it snaps to the nearest; the drop attaches it. Control suppresses
-/// attaching, as it suppresses snapping, and so does ⌘ while Select or
-/// Direct Select is the armed Tool — with any other Tool armed, ⌘ is what
-/// turns it into Select.
+/// Line's end or bend, a path's end or node), or a whole Annotation moved
+/// with ⇧⌘ held. While it drags, the Annotation under it shows its attach
+/// spots and it snaps to the nearest; the drop attaches it there exactly. An
+/// end dropped inside an Annotation, away from its spots, attaches loosely:
+/// the whole outline glows. Control stops attaching, ⌘ stops snapping
+/// (DragModifiers).
+extension DragModifiers {
+    init(_ f: NSEvent.ModifierFlags) {
+        self.init(shift: f.contains(.shift), command: f.contains(.command), control: f.contains(.control))
+    }
+
+    /// the keys held now
+    static var held: DragModifiers { DragModifiers(NSEvent.modifierFlags) }
+}
+
 extension MarkupController {
     /// how near, in on-screen points, a dragged end snaps to an attach spot or outline
     static let attachRadius: CGFloat = 8
-
-    /// a held or released modifier changes what a drag in flight does
-    /// (Control and ⌘ suppress attaching, ⇧ constrains), so the drag re-runs
-    /// at the same pointer — true for the drags that attach
-    var attachDragInFlight: Bool { attachHover != nil || draggingAttachable }
-
-    /// whether the keys held now keep a dragged end from attaching
-    var attachSuppressed: Bool {
-        let f = NSEvent.modifierFlags
-        return f.contains(.control) || (f.contains(.command) && (armed == .select || armed == .directSelect))
-    }
 
     /// the one attachable point a Direct Select drag carries, if it carries
     /// exactly one: several anchors moving together attach nothing
@@ -53,34 +51,62 @@ extension MarkupController {
 
     /// `moved`, the grip drag's result, with the dragged end snapped onto the
     /// attach spot it's over, and what it's over — nil for grips that don't
-    /// attach, while attaching is suppressed, and while Shift holds the end
-    /// on its 45° ray — a spot would pull it off
+    /// attach, under Control, and while Shift holds the end on its 45° ray
+    /// (a spot would pull it off it). An end over the inside of an Annotation,
+    /// away from its spots, stays where it is and attaches loosely; with ⌘
+    /// held nothing snaps, so that's the only way it attaches.
     func attaching(_ moved: Annotation, point: AttachPoint?, constrained: Bool) -> (Annotation, AttachHover?) {
-        guard !attachSuppressed, !constrained, let point,
+        let mods = DragModifiers.held
+        guard mods.attachesPoints, !constrained, let point,
               let at = moved.position(of: point),
               let hover = AttachFinder.hover(at: at, in: stack, attaching: moved.id, point,
-                                             radius: Self.attachRadius / zoom) else { return (moved, nil) }
-        guard let spot = hover.snapped else { return (moved, hover) }
-        return (moved.moving(point, to: spot.at), hover)
+                                             radius: Self.attachRadius / zoom, snapping: mods.snaps)
+        else { return (moved, nil) }
+        if let spot = hover.snapped { return (moved.moving(point, to: spot.at), hover) }
+        // over a target that won't take this point unsnapped: no highlight, no attach
+        return (moved, hover.loose ? hover : nil)
     }
 
-    /// a whole Annotation being moved: when the pointer comes within reach of
-    /// another Annotation's spot or edge, `unsnapped` shifts so the pointer
-    /// sits exactly on it, and the drop attaches it there at its offset.
-    /// Only a snapped spot counts — moving over an Annotation's middle shows
-    /// and attaches nothing, so ordinary moves stay ordinary.
+    /// a whole Annotation being moved with ⇧⌘ held: when the pointer comes
+    /// within reach of another Annotation's spot or edge, `unsnapped` shifts
+    /// so the pointer sits exactly on it, and the drop attaches it there at
+    /// its offset. Only a snapped spot counts, and only under the chord, so
+    /// ordinary moves stay ordinary.
     func attachingWhole(_ moved: Annotation, unsnapped: Annotation, pointer p: CGPoint) -> (Annotation, AttachHover?) {
-        guard !attachSuppressed,
+        guard DragModifiers.held.attachesWhole,
               let hover = AttachFinder.hover(at: p, in: stack, attaching: moved.id, .whole,
                                              radius: Self.attachRadius / zoom),
               let spot = hover.snapped else { return (moved, nil) }
         return (unsnapped.moved(by: CGVector(dx: spot.at.x - p.x, dy: spot.at.y - p.y)), hover)
     }
+
+    /// the drop: a dragged point over a spot attaches there exactly, one
+    /// inside a target loosely; a moved Annotation over a spot attaches
+    /// whole. The keys held at the drop decide, as they decided the hover.
+    func dropAttaching() {
+        defer { attachHover = nil }
+        guard let hover = attachHover else { return }
+        let mods = DragModifiers.held
+        if let (id, point) = draggedAttachPoint, mods.attachesPoints {
+            if let spot = hover.snapped {
+                mutateUnrecorded { $0.attach(id, point, to: spot.target, at: spot.spot) }
+                AppLog.line("markup: attached \(point)")
+            } else if hover.loose {
+                mutateUnrecorded { $0.attach(id, point, to: hover.target.id, at: .frame(.zero), loose: true) }
+                AppLog.line("markup: attached \(point) loosely")
+            }
+        }
+        if case let .moving(start, _) = gesture, mods.attachesWhole, let spot = hover.snapped {
+            mutateUnrecorded { $0.attach(start.id, .whole, to: spot.target, at: spot.spot) }
+            AppLog.line("markup: attached a whole Annotation")
+        }
+    }
 }
 
 extension MarkupView {
-    /// the attach target's outline and spots in malachite, the snapped spot
-    /// filled; nil clears them. Sizes stay constant on screen at any zoom.
+    /// the attach target in malachite: for an exact attach its outline and
+    /// spots, the snapped spot filled; for a loose one the whole outline
+    /// glowing. nil clears them. Sizes stay constant on screen at any zoom.
     func showAttach(_ hover: AttachHover?) {
         let l: CAShapeLayer
         if let existing = layer?.sublayers?.first(where: { $0.name == "attach" }) as? CAShapeLayer {
@@ -99,8 +125,25 @@ extension MarkupView {
         defer { CATransaction.commit() }
         l.sublayers?.forEach { $0.removeFromSuperlayer() }
         guard let hover else { l.path = nil; return }
-        let z = controller.zoom, p = CGMutablePath()
-        p.addPath(AttachFinder.outline(of: hover.target))
+        let z = controller.zoom, p = CGMutablePath(), outline = AttachFinder.outline(of: hover.target)
+        p.addPath(outline)
+        if hover.loose {
+            // the drop attaches anywhere on it: the outline glows, no spot stands out
+            let glow = CAShapeLayer()
+            glow.path = outline
+            glow.fillColor = accent.copy(alpha: 0.12)
+            glow.strokeColor = accent.copy(alpha: 0.4)
+            glow.lineWidth = 6 / z
+            glow.lineJoin = .round
+            glow.contentsScale = scale
+            l.addSublayer(glow)
+            l.path = p
+            l.fillColor = nil
+            l.strokeColor = accent
+            l.lineWidth = 2 / z
+            l.contentsScale = scale
+            return
+        }
         for s in hover.spots {
             p.addEllipse(in: CGRect(x: s.at.x - 3 / z, y: s.at.y - 3 / z, width: 6 / z, height: 6 / z))
         }

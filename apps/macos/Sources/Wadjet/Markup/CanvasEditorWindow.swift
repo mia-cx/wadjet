@@ -35,7 +35,7 @@ final class CentreClipView: NSClipView {
 }
 
 /// The Editor window: a magnified Canvas, the floating Markup toolbar on top.
-/// Keys (Delete, Escape, ⌘-select) go to the document view, its first responder.
+/// Keys (Delete, Escape, modifiers) go to the document view, its first responder.
 final class CanvasEditorWindowController: NSWindowController, NSWindowDelegate {
     private var doc: CanvasEditorDocument? { document as? CanvasEditorDocument }
     private(set) var state: EditorState?
@@ -438,14 +438,13 @@ final class EditorCanvasView: NSView {
     @objc func cut(_ sender: Any?) { doc.markup.cutSelection() }
     override func selectAll(_ sender: Any?) { doc.markup.selectAll() }
 
-    /// ⌘ turns the armed Tool into Select until release; ⇧/⌥ reshape a
-    /// Shapes draft mid-drag — the screen's flags monitor does both there
+    /// modifiers change a drag in flight without the pointer moving — the
+    /// screen's flags monitor does the same there
     override func flagsChanged(with e: NSEvent) {
-        doc.markup.cmdHeld = e.modifierFlags.contains(.command)
         markupView.setToolCursor()
-        if doc.markup.draft != nil || doc.markup.reshapesOnModifiers || doc.markup.attachDragInFlight {
+        if doc.markup.draft != nil || doc.markup.reactsToModifiers {
             doc.markup.drag(to: markupView.canvasPoint(fromScreen: NSEvent.mouseLocation),
-                            constrained: e.modifierFlags.contains(.shift))
+                            constrained: DragModifiers(e.modifierFlags).constrains)
         }
         super.flagsChanged(with: e)
     }

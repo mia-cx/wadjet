@@ -25,9 +25,9 @@ public struct DragModifiers: Equatable, Sendable {
     public var snaps: Bool { !command || shift }
 
     /// a dragged Line or path point (an end, a node, a Line's bend) may
-    /// attach. Control stops it, and so does ⇧'s 45° ray: a spot would pull
-    /// the point off it.
-    public var attachesPoints: Bool { !control && !constrains }
+    /// attach — by default, unless Control is held. (A point ⇧ holds on its
+    /// 45° ray doesn't attach either: a spot would pull it off the ray.)
+    public var attachesPoints: Bool { !control }
 
     /// a moved Annotation attaches whole: only under the chord, and never with Control
     public var attachesWhole: Bool { attachChord && !control }

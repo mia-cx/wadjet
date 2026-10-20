@@ -12,6 +12,8 @@ An attached point or Annotation records its attachment on itself: which point (s
 
 A spot is either a position in the target's untransformed bounds, normalised 0…1 (tldraw's `normalizedAnchor`), or a segment index plus parameter on a Line or path. A corner is just (0, 0) or (1, 1), and an edge midpoint is (0.5, 0). Both kinds of spot survive resize, rotation and flips. Points on an ellipse, polygon or star stay on its outline, because those shapes scale with their rect. A segment spot survives reshaping, and splitting a segment at t maps it exactly. A corner or vertex index was the alternative, but it can't name a point along an edge, and it means something different on each kind.
 
+A Line's or path's end can also attach loosely, as tldraw's imprecise binding does: the attachment is marked `loose` and its spot is the target's centre. The re-solve aims the end from its neighbouring point (the Line's other end, or the path's next node) at that centre and stops it where it crosses the target's outline. It aims from the neighbour, not from a Line's bend, because the bend is re-solved from the ends and the two would never settle.
+
 ## Consequences
 
 - An attachment that would close a cycle is refused. A file with a cycle (only a hand edit can make one) loads with the closing attachment dropped.

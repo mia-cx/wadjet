@@ -52,7 +52,7 @@ One point Direct Select edits: a Line's end, a path's node, or a Shape's outline
 _Avoid_: Node, vertex, point
 
 **Attach**:
-To pin a Line's or path's end, a point along it, or a whole Annotation to a spot on another Annotation, so it follows when that one moves, resizes, rotates, or reshapes. Dragging it away detaches it; deleting the other Annotation leaves it where it was.
+To pin a Line's or path's end, a point along it, or a whole Annotation to a spot on another Annotation, so it follows when that one moves, resizes, rotates, or reshapes. An end dropped inside the other Annotation, away from its spots, attaches loosely: it points at that Annotation's centre and stops at its edge. Dragging it away detaches it; deleting the other Annotation leaves it where it was.
 _Avoid_: Bind, binding, connect, glue, stick
 
 **Canvas**:

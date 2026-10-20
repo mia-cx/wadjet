@@ -341,13 +341,12 @@ final class MarkupView: NSView {
     }
     override func acceptsFirstMouse(for e: NSEvent?) -> Bool { true }
     override func mouseDown(with e: NSEvent) {
-        controller.begin(at: canvasPoint(e), command: e.modifierFlags.contains(.command),
-                         constrained: e.modifierFlags.contains(.shift),
+        controller.begin(at: canvasPoint(e), constrained: e.modifierFlags.contains(.shift),
                          clickCount: e.clickCount)
     }
     // drags keep coming to this view across displays
     override func mouseDragged(with e: NSEvent) {
-        controller.drag(to: canvasPoint(e), constrained: e.modifierFlags.contains(.shift))
+        controller.drag(to: canvasPoint(e), constrained: DragModifiers(e.modifierFlags).constrains)
     }
     override func mouseUp(with e: NSEvent) { controller.end() }
     /// scroll over a selected Magnify's magnifier zooms it; anything else passes through

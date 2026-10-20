@@ -151,17 +151,10 @@ final class MarkupController {
     /// lives in MarkupTextEditor.swift; the menu reads this
     private(set) var editing: Annotation.ID?
     @ObservationIgnored var editor: TextEditorView?
-    /// ⌘ held turns any armed Markup Tool into Select until release
-    @ObservationIgnored var cmdHeld = false {
-        didSet {
-            guard cmdHeld != oldValue else { return }
-            showSelectionAnchors() // what ⌘ selected shows its anchors on release
-            if !selection.isEmpty { render() } // the grips follow
-        }
-    }
-    var selecting: Bool { armed == .select || armed == .directSelect || cmdHeld }
-    /// Direct Select armed and not overridden by ⌘'s temporary Select
-    var directSelecting: Bool { armed == .directSelect && !cmdHeld }
+    /// Select or Direct Select is armed: presses pick Annotations rather than place them
+    var selecting: Bool { armed == .select || armed == .directSelect }
+    /// Direct Select is armed
+    var directSelecting: Bool { armed == .directSelect }
     /// the grips the selection shows and takes presses on: Direct Select's
     /// points, Select's bounding box, or the bounding box and a Line's bend
     /// for what a placing Tool just placed
@@ -171,11 +164,6 @@ final class MarkupController {
     @ObservationIgnored var snapper: MarkupSnapper?
     /// what a dragged end is over and would attach to (MarkupAttach.swift)
     @ObservationIgnored var attachHover: AttachHover?
-    /// a drag of a point that can attach, or a whole Annotation's move, is in flight
-    var draggingAttachable: Bool {
-        if case .moving = gesture { return true }
-        return draggedAttachPoint != nil
-    }
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
@@ -308,7 +296,7 @@ final class MarkupController {
         commitGesture(); gesture = nil
         // a Tool switch commits a Pen path or a text session in progress
         if tool != armed { finishPen(); commitEditing() }
-        if tool == nil { selection = []; cmdHeld = false }
+        if tool == nil { selection = [] }
         if tool != armed { nodes.clear() } // anchors belong to Direct Select
         armed = tool
         showSelectionAnchors()
@@ -342,32 +330,21 @@ final class MarkupController {
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
             closeScroll() // an open phased scroll is its own step too
-            gesture = nil; selection = []; cmdHeld = false; snapper = nil
+            gesture = nil; selection = []; snapper = nil
             counterNext = nil; cropping = nil
             if let m = flagsMon { NSEvent.removeMonitor(m); flagsMon = nil }
             if let m = keyMon { NSEvent.removeMonitor(m); keyMon = nil }
         } else if flagsMon == nil {
-            // ⌘ = temporary Select; Delete removes the selection — installed on
-            // entering the armed session, kept across Tool switches within it
+            // modifiers re-run a drag in flight; Delete removes the selection —
+            // installed on entering the armed session, kept across Tool switches within it
             flagsMon = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] e in
                 guard let self else { return e }
-                self.cmdHeld = e.modifierFlags.contains(.command)
                 if AppDelegate.shared?.overlayCtrl.pointerOverUI != true {
                     self.panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.view.setToolCursor()
                 }
-                // ⇧/⌥ mid-drag reshape a Shapes draft or a group resize without the pointer moving
-                if case .drawing = self.gesture { self.drag(to: NSEvent.mouseLocation) }
-                if case .groupHandle = self.gesture {
-                    self.drag(to: NSEvent.mouseLocation, constrained: e.modifierFlags.contains(.shift))
-                }
-                // ⇧ snaps the Knife's cut to 45° mid-drag, and releases it
-                if case .cutting = self.gesture {
-                    self.drag(to: NSEvent.mouseLocation,
-                              constrained: e.modifierFlags.contains(.shift))
-                }
-                // Control/⌘ suppress attaching and ⇧ constrains an end mid-drag
-                if self.attachDragInFlight {
-                    self.drag(to: NSEvent.mouseLocation, constrained: e.modifierFlags.contains(.shift))
+                // ⇧ ⌥ ⌘ ⌃ change what a drag does without the pointer moving
+                if self.reactsToModifiers {
+                    self.drag(to: NSEvent.mouseLocation, constrained: DragModifiers(e.modifierFlags).constrains)
                 }
                 return e
             }
@@ -739,9 +716,9 @@ final class MarkupController {
     }
 
     // strokes arrive as Canvas (global screen) points from MarkupView;
-    // `command` = temporary Select, `constrained` = Shift (45° snaps),
+    // `constrained` = Shift (adds to a selection, 45° Pen nodes),
     // `clickCount` for a double-click's re-edit (Text) or recrop (image kinds)
-    func begin(at p: CGPoint, command: Bool, constrained: Bool = false, clickCount: Int = 1) {
+    func begin(at p: CGPoint, constrained: Bool = false, clickCount: Int = 1) {
         closeScroll() // an open phased scroll is its own undo step
         // a click anywhere commits the open text editor and places nothing
         if editing != nil {
@@ -764,14 +741,14 @@ final class MarkupController {
             // then the click is handled normally
         }
         // a double-click on Text or an image re-edits or recrops it, as under Select
-        if directSelecting, !command,
+        if directSelecting,
            !(clickCount == 2 && stack.topmost(at: p, tolerance: Self.hitTolerance / zoom)
                .map { !$0.kind.hasAnchors } == true) {
             beginDirect(at: p, adding: constrained)
             return
         }
         // Direct Select reaches here only for a double-click on Text or an image
-        if armed == .select || armed == .directSelect || command {
+        if selecting {
             if clickCount == 2, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
                case .text = hit.kind {
                 gestureStart = nil // the text session records its own one step
@@ -972,7 +949,7 @@ final class MarkupController {
                 // ⇧ constrains to a square, ⌥ draws from the centre
                 let f = NSEvent.modifierFlags
                 a.kind = .shape(kind, rect: CGRect(dragFrom: from, to: p,
-                                                   square: f.contains(.shift), fromCentre: f.contains(.option)))
+                                                   square: DragModifiers(f).constrains, fromCentre: f.contains(.option)))
             case let .censor(_, method):
                 a.kind = .censor(rect: CGRect(x: from.x, y: from.y, width: p.x - from.x,
                                               height: p.y - from.y).standardized, method: method)
@@ -1008,7 +985,7 @@ final class MarkupController {
             // a Magnify snaps its magnifier frame, not its whole path's box
             let snapRect = moved.pixelSnapBounds
             let snapped = snapper?.offset(rect: snapRect) ?? .zero
-            // over another Annotation's spot or edge, the pointer snaps there to attach
+            // with ⇧⌘ held, over another Annotation's spot or edge, the pointer snaps there to attach
             let (attached, hover) = attachingWhole(moved.moved(by: snapped), unsnapped: moved, pointer: p)
             attachHover = hover
             stack.replace(attached)
@@ -1138,16 +1115,9 @@ final class MarkupController {
                 selection = [d.id] // stays selected for editing, the Tool still armed
             }
         }
-        // a dragged end dropped on an attach spot attaches there, in the drag's undo step
-        if let (id, point) = draggedAttachPoint, let spot = attachHover?.snapped, !attachSuppressed {
-            stack.attach(id, point, to: spot.target, at: spot.spot)
-            AppLog.line("markup: attached \(point)")
-        }
-        if case let .moving(start, _) = gesture, let spot = attachHover?.snapped, !attachSuppressed {
-            stack.attach(start.id, .whole, to: spot.target, at: spot.spot)
-            AppLog.line("markup: attached a whole Annotation")
-        }
-        attachHover = nil
+        // a dragged end dropped on an attach spot attaches there exactly, one
+        // dropped inside a target loosely — in the drag's undo step
+        dropAttaching()
         commitGesture()
         gesture = nil
         snapper = nil
@@ -1160,7 +1130,7 @@ final class MarkupController {
     func finishPen() -> Bool {
         guard let pen else { return false }
         self.pen = nil; penHover = nil
-        // a temporary-Select drag may still be in flight — commit it first so
+        // a drag of the selection may still be in flight — commit it first so
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen, .brush: break
@@ -1170,9 +1140,8 @@ final class MarkupController {
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
-            // the insertion is its own undo step — temporary Select presses
-            // mid-path are separate gestures, so the gesture snapshot can't
-            // carry this one
+            // the insertion is its own undo step — the path's presses are
+            // separate gestures, so the gesture snapshot can't carry this one
             edit { $0.add(a) }
             // stays selected for editing while a Tool is armed
             if armed != nil { selection = [a.id] }
