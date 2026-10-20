@@ -7,6 +7,7 @@ struct MarkupToolKeyTests {
     // Lock's uppercase finds the same key; a letter that arms nothing is nil.
     @Test(arguments: [
         ("v" as Character, nil, nil),
+        ("a", "directSelect", nil),
         ("e", "eraser", "eraser"),
         ("k", "eraser", "knife"),
         ("l", "draw", "line"),

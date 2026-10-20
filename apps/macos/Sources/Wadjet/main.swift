@@ -4013,7 +4013,9 @@ struct ToolMenuView: View {
             case .markup where tool == .freezeRegion:
                 freezeRegionRows()
             case .markup:
-                let subject = MarkupMenuSubject(armed: tool.toolID, selected: MarkupController.active.selected?.kind)
+                // Direct Select's menu is Select's: nothing armed to set defaults for
+                let subject = MarkupMenuSubject(armed: tool == .directSelect ? nil : tool.toolID,
+                                                selected: MarkupController.active.selected?.kind)
                 let t = subject.tool.flatMap { Tool(rawValue: $0.rawValue) } ?? .select
                 if t == .eraser {
                     eraserRows()

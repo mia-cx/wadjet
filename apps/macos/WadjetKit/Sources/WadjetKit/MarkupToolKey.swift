@@ -18,6 +18,7 @@ public struct MarkupToolKey: Equatable, Sendable {
 
     public static let all: [MarkupToolKey] = [
         .init("v", nil, nil),
+        .init("a", .directSelect, nil),
         .init("e", .eraser, EraserVariant.eraser.variant),
         .init("k", .eraser, EraserVariant.knife.variant),
         .init("l", .draw, DrawVariant.line.variant),
