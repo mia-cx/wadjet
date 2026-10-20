@@ -35,6 +35,13 @@ final class MarkupView: NSView {
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
+    /// Direct Select's chrome: the shown paths' outlines and handle stems,
+    /// the handle grips, the anchors, and the marquee
+    let nodeFrameLayer = CAShapeLayer()
+    let nodeGripsLayer = CAShapeLayer()
+    let anchorsLayer = CAShapeLayer()
+    let selectedAnchorsLayer = CAShapeLayer()
+    let marqueeLayer = CAShapeLayer()
     /// snap guides, drawn above the Annotations and outside the peer-through mask
     let guidesLayer = CAShapeLayer()
     let accent = CGColor(srgbRed: 0.20, green: 0.84, blue: 0.58, alpha: 1)
@@ -153,6 +160,9 @@ final class MarkupView: NSView {
         let seen = Set(annotations.map(\.id))
         for id in shapeLayers.keys where !seen.contains(id) { shapeLayers[id] = nil }
         for id in imageLayers.keys where !seen.contains(id) { imageLayers[id] = nil }
+        // Direct Select draws a pathlike selection as anchors, not grips
+        let nodeChrome = controller.directSelecting ? syncNodeChrome(annotations) : []
+        let selection = controller.directSelecting && selection?.kind.hasAnchors == true ? nil : selection
         if let selection, selection.id != editing {
             let frame = CGMutablePath()
             frame.addLines(between: selection.frameCorners)
@@ -197,13 +207,54 @@ final class MarkupView: NSView {
         }
         let chrome = selection != nil && selection?.id != editing ? [frameLayer, handlesLayer] : []
         content.sublayers = annotations.compactMap { shapeLayers[$0.id] ?? imageLayers[$0.id] }
-        canvas.sublayers = [content] + chrome
+        canvas.sublayers = [content] + chrome + nodeChrome
         // text entries are TextAnnotationLayers; the samplers only write back
         // into their own AnnotationLayers
         let layers = shapeLayers.compactMapValues { $0 as? AnnotationLayer }
         censors?.sync(annotations, layers: layers)
         magnifiers?.sync(annotations, layers: layers, scale: scale, dimmed: dimmed)
         CATransaction.commit()
+    }
+
+    /// Direct Select's chrome after Illustrator: the shown paths outlined,
+    /// hollow square anchors that fill once selected, round handle grips on
+    /// stems, and the marquee — the layers to show above the content
+    private func syncNodeChrome(_ annotations: [Annotation]) -> [CALayer] {
+        let z = controller.zoom
+        let chrome = controller.directChrome
+        let frame = CGMutablePath(), grips = CGMutablePath()
+        let hollow = CGMutablePath(), filled = CGMutablePath()
+        for id in controller.nodes.shown {
+            if let a = annotations.first(where: { $0.id == id }) { frame.addPath(PathGeometry.path(for: a)) }
+        }
+        for g in chrome.grips {
+            if let stem = g.stem { frame.move(to: stem); frame.addLine(to: g.at) }
+            let r = (g.handle == .cornerRadius ? 3.5 : 2.5) / z
+            grips.addEllipse(in: CGRect(x: g.at.x - r, y: g.at.y - r, width: 2 * r, height: 2 * r))
+        }
+        let h = 3 / z
+        for a in chrome.anchors {
+            (a.selected ? filled : hollow).addRect(CGRect(x: a.at.x - h, y: a.at.y - h, width: 2 * h, height: 2 * h))
+        }
+        func style(_ l: CAShapeLayer, _ path: CGPath, fill: CGColor?) {
+            l.path = path
+            l.fillColor = fill
+            l.strokeColor = accent
+            l.lineWidth = 1 / z
+            l.contentsScale = scale
+        }
+        let white = CGColor(srgbRed: 1, green: 1, blue: 1, alpha: 1)
+        style(nodeFrameLayer, frame, fill: nil)
+        style(nodeGripsLayer, grips, fill: white)
+        style(anchorsLayer, hollow, fill: white)
+        style(selectedAnchorsLayer, filled, fill: accent)
+        var layers: [CALayer] = [nodeFrameLayer, nodeGripsLayer, anchorsLayer, selectedAnchorsLayer]
+        if let m = controller.marqueeRect {
+            style(marqueeLayer, CGPath(rect: m, transform: nil), fill: nil)
+            marqueeLayer.lineDashPattern = [NSNumber(value: 3 / z), NSNumber(value: 3 / z)]
+            layers.append(marqueeLayer)
+        }
+        return layers
     }
 
     /// a fresh sample or a lost stream: re-run the sampled layers on the last

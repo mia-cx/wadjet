@@ -39,6 +39,18 @@ _Avoid_: Drawing tool, annotation tool
 One object drawn or pasted with Markup, such as a shape, line, text, step counter, pasted image, or pasted Canvas. Annotations stack as layers; each stays on screen until erased or cleared, and stays editable inside a Canvas.
 _Avoid_: A markup, drawing, mark
 
+**Select**:
+The Markup Tool that works on whole Annotations: click to select one, then move, resize, or rotate it through its bounding box.
+_Avoid_: Selection tool, Move tool, arrow
+
+**Direct Select**:
+The Markup Tool that works on an Annotation's points: a Line's ends and bend, a path's anchors and bezier handles, a Shape's vertices and corner radius. Anchors are selected by click, Shift-click, or marquee, across Annotations.
+_Avoid_: Node tool, point tool, Direct Selection
+
+**Anchor**:
+One point Direct Select edits: a Line's end, a path's node, or a Shape's outline vertex. A Shape whose anchor moves becomes a path.
+_Avoid_: Node, vertex, point
+
 **Canvas**:
 wadjet's editable image document, saved as a `.wadjet` file: every uncropped display, the crop and its corner radius, optionally each window as a layer, and every Annotation as its own layer.
 History keeps a Canvas for each Screenshot; the clipboard and the Workflow get the flattened image.

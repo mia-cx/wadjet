@@ -42,6 +42,9 @@ public enum SelectionHandle: Hashable, Sendable {
     /// a Magnify's source grip, x and y as in `resize` over the source rect:
     /// resizing the source keeps the lens's longest edge and lowers or raises the zoom
     case source(x: Int, y: Int)
+    /// a rectangle's corner widget under Direct Select — drag it in to round
+    /// the corners
+    case cornerRadius
 }
 
 extension AnnotationKind {
@@ -209,8 +212,11 @@ extension Annotation {
     /// drift; `constrained` (Shift) snaps a vertex drag to 45° of the other end.
     /// Image kinds keep their aspect ratio unless `stretch` (also Shift); other
     /// kinds ignore it.
+    /// `breaking` (⌥ on a bezier handle) turns a smooth node into a corner: the
+    /// opposite handle stays where it is.
     public func dragging(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint,
-                         constrained: Bool = false, stretch: Bool = false) -> Annotation {
+                         constrained: Bool = false, stretch: Bool = false,
+                         breaking: Bool = false) -> Annotation {
         switch handle {
         case let .vertex(i):
             // the grip's position at drag start plus the drag — the press needn't land dead-on
@@ -280,7 +286,7 @@ extension Annotation {
             if outgoing { data.nodes[i].handleOut = h } else { data.nodes[i].handleIn = h }
             // a smooth node stays smooth: the opposite handle turns to stay
             // collinear through the anchor at its own length; a nil one stays nil
-            if let other = outgoing ? n.handleIn : n.handleOut {
+            if !breaking, let other = outgoing ? n.handleIn : n.handleOut {
                 let ux = n.anchor.x - h.x, uy = n.anchor.y - h.y, l = hypot(ux, uy)
                 if l > 1e-9 {
                     let len = hypot(other.x - n.anchor.x, other.y - n.anchor.y)
@@ -338,6 +344,18 @@ extension Annotation {
             // the pin where the anchor was on screen
             let was = anchor.applying(m), now = pin.applying(new.affineTransform)
             return new.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y))
+        case .cornerRadius:
+            guard case let .shape(.rectangle(r), rect) = kind else { return self }
+            // in geometry space the widget sits on the top-left corner's
+            // diagonal; the drag's inward component along it changes the radius
+            let inv = affineTransform.inverted()
+            let a = start.applying(inv), b = point.applying(inv)
+            let limit = min(rect.width, rect.height) / 2
+            let inward = ((b.x - a.x) - (b.y - a.y)) / 2
+            var new = self
+            new.kind = .shape(.rectangle(cornerRadius: min(max(0, min(max(0, r), limit) + inward), limit)),
+                              rect: rect)
+            return new
         case .rotate:
             let c = CGPoint(x: kind.bounds.midX, y: kind.bounds.midY)
             return rotated(by: atan2(point.y - c.y, point.x - c.x) - atan2(start.y - c.y, start.x - c.x))
@@ -549,13 +567,15 @@ extension Annotation {
     /// the grips `set` shows on this Annotation
     public func handles(_ set: GripSet, minExtent: CGFloat,
                         rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+        // a Magnify's source grips size a box, not points: every set keeps them
+        if case .magnify = kind { return handles(minExtent: minExtent, rotateOffset: rotateOffset) }
         switch set {
-        case .frame: frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .frame: return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .placed:
             // the bend first: where it lands on a frame grip, a tie picks it
-            handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
+            return handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
                 + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
-        case .points: handles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .points: return handles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
     }
 

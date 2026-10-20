@@ -24,7 +24,7 @@ final class MarkupController {
     private(set) var stack = LayerStack()
     private(set) var armed: Tool?
     /// a drag in flight; the Annotation payload is the state at drag start, so long drags don't drift
-    @ObservationIgnored private var gesture: Gesture?
+    @ObservationIgnored var gesture: Gesture?
     /// the pixels and Canvases this Markup's image kinds draw from
     let assets = MarkupAssets()
     /// every committed change is one undo step
@@ -54,7 +54,7 @@ final class MarkupController {
     /// the Layers window names them; the screen's stays empty
     @ObservationIgnored var windowLayers: [UUID: CanvasWindowLayer] = [:]
     /// the stack when the drag in flight began — its one undo step
-    @ObservationIgnored private var gestureStart: LayerStack?
+    @ObservationIgnored var gestureStart: LayerStack?
     enum Gesture {
         case drawing(Annotation, from: CGPoint)
         case pen
@@ -73,6 +73,11 @@ final class MarkupController {
         case recrop(SelectionHandle, Annotation, from: CGPoint)
         /// a drag inside while recropping: the crop slides within the source
         case pan(Annotation, from: CGPoint)
+        /// Direct Select carrying anchors (or a segment's two) across
+        /// Annotations: each start state and the anchor indices it moves
+        case anchors([Annotation.ID: (start: Annotation, indices: Set<Int>)], from: CGPoint)
+        /// Direct Select's marquee; release selects the anchors inside
+        case marquee(from: CGPoint, to: CGPoint, adding: Bool)
     }
     /// an in-progress Pen path and the pointer's latest position for its preview
     @ObservationIgnored private var pen: (builder: PenBuilder, id: Annotation.ID, style: AnnotationStyle)?
@@ -104,6 +109,7 @@ final class MarkupController {
     private(set) var selection: Annotation.ID? {
         didSet {
             if selection != oldValue { cropping = nil }
+            if selection == nil { nodes.clear() }
             if isScreen, selection == nil, AppState.shared.openMenu?.kind == .markup {
                 AppState.shared.openMenu = nil
                 AppDelegate.shared?.overlayCtrl.syncMenu()
@@ -115,6 +121,8 @@ final class MarkupController {
             render()
         }
     }
+    /// Direct Select's shown and selected anchors — MarkupDirectSelect.swift
+    @ObservationIgnored var nodes = NodeSelection()
     var selected: Annotation? { selection.flatMap { id in stack.annotations.first { $0.id == id } } }
     /// the text Annotation being edited in place, if any — the editor logic
     /// lives in MarkupTextEditor.swift; the menu reads this
@@ -122,12 +130,19 @@ final class MarkupController {
     @ObservationIgnored var editor: TextEditorView?
     /// ⌘ held turns any armed Markup Tool into Select until release
     @ObservationIgnored var cmdHeld = false {
-        didSet { if cmdHeld != oldValue, selection != nil { render() } } // the grips follow
+        didSet {
+            guard cmdHeld != oldValue else { return }
+            showSelectionAnchors() // what ⌘ selected shows its anchors on release
+            if selection != nil { render() } // the grips follow
+        }
     }
-    var selecting: Bool { armed == .select || cmdHeld }
-    /// the grips the selection shows and takes presses on: Select's own, or
-    /// the bounding box (and a Line's bend) for what a placing Tool just placed
-    var gripSet: GripSet { selecting ? .points : .placed }
+    var selecting: Bool { armed == .select || armed == .directSelect || cmdHeld }
+    /// Direct Select armed and not overridden by ⌘'s temporary Select
+    var directSelecting: Bool { armed == .directSelect && !cmdHeld }
+    /// the grips the selection shows and takes presses on: Direct Select's
+    /// points, Select's bounding box, or the bounding box and a Line's bend
+    /// for what a placing Tool just placed
+    var gripSet: GripSet { directSelecting ? .points : selecting ? .frame : .placed }
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored private var snapper: MarkupSnapper?
@@ -161,10 +176,12 @@ final class MarkupController {
     }
 
     /// one action = one undo step; every mutation of `stack` goes through here
-    private func edit(_ change: (inout LayerStack) -> Void) {
+    func edit(_ change: (inout LayerStack) -> Void) {
         let before = stack
         change(&stack)
         record(from: before)
+        // a layer hidden, locked, or gone takes its anchors out of Direct Select
+        nodes.prune(to: stack.annotations)
         render()
         dismissIdleToolbarIfEmpty()
     }
@@ -173,7 +190,7 @@ final class MarkupController {
         if isScreen, stack.isEmpty { AppDelegate.shared?.overlayCtrl.scheduleIdleToolbarCheck() }
     }
     /// the drag in flight becomes its one undo step, if it changed anything
-    private func commitGesture() {
+    func commitGesture() {
         if let gestureStart { record(from: gestureStart) }
         gestureStart = nil
     }
@@ -245,6 +262,7 @@ final class MarkupController {
         // gone, hidden, or locked: none of those can stay the selection
         if selected.map({ $0.hidden || $0.locked }) ?? true { selection = nil }
         if let id = cropping, !s.annotations.contains(where: { $0.id == id }) { cropping = nil }
+        nodes.prune(to: s.annotations)
         syncPanels(); render()
         dismissIdleToolbarIfEmpty()
     }
@@ -257,7 +275,9 @@ final class MarkupController {
         // a Tool switch commits a Pen path or a text session in progress
         if tool != armed { finishPen(); commitEditing() }
         if tool == nil { selection = nil; cmdHeld = false }
+        if tool != armed { nodes.clear() } // anchors belong to Direct Select
         armed = tool
+        showSelectionAnchors()
         render()
     }
 
@@ -281,7 +301,9 @@ final class MarkupController {
         finishPen() // a Tool switch commits any Pen path in progress
         commitEditing()
         let was = armed
+        nodes.clear() // anchors belong to Direct Select
         armed = want
+        showSelectionAnchors()
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
         if want == nil {
             commitGesture() // a drag cut short by disarming is still one step
@@ -312,6 +334,8 @@ final class MarkupController {
                 guard let self else { return e }
                 // Return finishes a Pen path in progress (and only then eats the key)
                 if e.keyCode == 36 || e.keyCode == 76, self.finishPen() { return nil }
+                // arrows nudge Direct Select's anchors
+                if let d = Self.nudge(for: e), self.editing == nil, self.nudgeAnchors(by: d) { return nil }
                 guard e.keyCode == 51 || e.keyCode == 117, self.selection != nil, self.editing == nil else { return e }
                 self.deleteSelection()
                 return nil
@@ -470,7 +494,11 @@ final class MarkupController {
         guard let id else { deselect(); return }
         guard let a = stack.annotations.first(where: { $0.id == id }), !a.hidden, !a.locked else { return }
         if armed == nil { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
-        if armed != nil { selection = id }
+        guard armed != nil else { return }
+        // the anchors first: the selection's didSet renders
+        nodes.clear()
+        if directSelecting, a.kind.hasAnchors { nodes.show(id, adding: false) }
+        selection = id
     }
 
     /// the clipboard's image or Canvas centred on `p`, selected, Select armed —
@@ -596,13 +624,15 @@ final class MarkupController {
     /// true when there was a selection to drop
     @discardableResult
     func deselect() -> Bool {
-        guard selection != nil else { return false }
+        guard selection != nil || !nodes.isEmpty else { return false }
+        nodes.clear()
         selection = nil
         AppLog.line("markup: deselected")
         return true
     }
 
     func deleteSelection() {
+        if deleteAnchors() { return }
         guard let id = selection else { return }
         edit { $0.remove(id: id) }
         selection = nil
@@ -688,7 +718,15 @@ final class MarkupController {
             endRecrop()
             // then the click is handled normally
         }
-        if armed == .select || command {
+        // a double-click on Text or an image re-edits or recrops it, as under Select
+        if directSelecting, !command,
+           !(clickCount == 2 && stack.topmost(at: p, tolerance: Self.hitTolerance / zoom)
+               .map { !$0.kind.hasAnchors } == true) {
+            beginDirect(at: p, adding: constrained)
+            return
+        }
+        // Direct Select reaches here only for a double-click on Text or an image
+        if armed == .select || armed == .directSelect || command {
             if clickCount == 2, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
                case .text = hit.kind {
                 gestureStart = nil // the text session records its own one step
@@ -806,7 +844,7 @@ final class MarkupController {
     /// a press on the selection's grips or body starts the drag that adjusts
     /// it; false when the press missed it. `insertingNodes` (the Draw Tool):
     /// a press on a Line's or path's stroke adds a node there and drags it
-    private func grabSelection(at p: CGPoint, insertingNodes: Bool = false) -> Bool {
+    func grabSelection(at p: CGPoint, insertingNodes: Bool = false) -> Bool {
         guard let sel = selected else { return false }
         if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                               minExtent: Self.handleMinExtent / zoom,
@@ -933,6 +971,17 @@ final class MarkupController {
             var a = start
             a.kind = .magnify(m)
             stack.replace(a)
+        case let .anchors(starts, from):
+            dragAnchors(starts, from: from, to: p, constrained: constrained)
+            return
+        case let .marquee(from, _, adding):
+            gesture = .marquee(from: from, to: p, adding: adding)
+        case let .handle(.tangent(i, out), start, from):
+            // ⌥ breaks a smooth node into a corner; a Shape reshapes into its
+            // outline path as the handle moves
+            stack.replace(start.outlinePath.dragging(.tangent(i, outgoing: out), from: from, to: p,
+                                                     constrained: constrained,
+                                                     breaking: NSEvent.modifierFlags.contains(.option)))
         case let .handle(h, start, from):
             // Shift's 45° constraint wins on point handles: a point snap
             // would leave the ray — vertex ends and Pen tangents both;
@@ -998,6 +1047,11 @@ final class MarkupController {
             render()
             return
         }
+        if case let .marquee(from, to, adding) = gesture {
+            gesture = nil
+            endMarquee(from: from, to: to, adding: adding)
+            return
+        }
         if case let .drawing(d, _) = gesture {
             let drawn: Bool = switch d.kind {
             case let .line(start, end, _):
@@ -1036,7 +1090,8 @@ final class MarkupController {
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen, .brush: break
-        case .drawing, .moving, .movingSource, .handle, .recrop, .pan, .erasing, .cutting: commitGesture()
+        case .drawing, .moving, .movingSource, .handle, .recrop, .pan, .erasing, .cutting,
+             .anchors, .marquee: commitGesture()
         }
         if let data = pen.builder.finished {
             let a = Annotation(id: pen.id, kind: .path(data), style: pen.style)
@@ -1070,7 +1125,7 @@ final class MarkupController {
     }
 
     /// a press on a Magnify outside its magnifier box drags the source, not the frame
-    private static func moveGesture(_ a: Annotation, at p: CGPoint) -> Gesture {
+    static func moveGesture(_ a: Annotation, at p: CGPoint) -> Gesture {
         guard case let .magnify(m) = a.kind,
               !m.options.shape.path(in: m.frame).contains(p) else { return .moving(a, from: p) }
         return .movingSource(a, from: p)

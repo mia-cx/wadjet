@@ -264,6 +264,16 @@ struct AnnotationTransformTests {
         #expect(a.handle(at: CGPoint(x: 50, y: 40), radius: 6, minExtent: 12, rotateOffset: 20, set: .placed) == .bend)
     }
 
+    // Proves Select's and a placing Tool's grips on a Magnify still size its
+    // source, not only its lens
+    @Test(arguments: [GripSet.frame, .placed])
+    func magnifyKeepsSourceGrips(set: GripSet) {
+        let m = Magnifier.placed(source: CGRect(x: 0, y: 0, width: 40, height: 30), options: MagnifierOptions(),
+                                 on: CGRect(x: -500, y: -500, width: 1000, height: 1000))
+        let a = Annotation(kind: .magnify(m), style: style)
+        #expect(a.handles(set, minExtent: 12, rotateOffset: 20).contains { $0.handle == .source(x: 1, y: 1) })
+    }
+
     // dragging a vertex moves only that end; the press needn't land dead-on —
     // the new position is the grip's start position plus the drag
     @Test func vertexDrag() {

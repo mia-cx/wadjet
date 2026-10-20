@@ -386,6 +386,8 @@ final class EditorCanvasView: NSView {
         if e.keyCode == 36 || e.keyCode == 76 { // Return, keypad Enter
             if doc.markup.finishPen() { return }
         }
+        // arrows nudge Direct Select's anchors
+        if let d = MarkupController.nudge(for: e), doc.markup.nudgeAnchors(by: d) { return }
         if e.keyCode == 53 { // Escape
             if doc.markup.finishPen() { return }
             if !doc.markup.deselect(), state.recrop {
