@@ -115,7 +115,7 @@ final class MarkupController {
     private(set) var cropping: Annotation.ID?
     /// the selected Annotations' ids, in the order they joined — a click,
     /// Shift-click, marquee, Select All, or the Layers window builds it.
-    /// Every change re-renders and reaches `onSelectionChange`.
+    /// Every change re-renders and reaches `observeSelection` handlers.
     private(set) var selection = AnnotationSelection() {
         didSet {
             if selection != oldValue { cropping = nil }
