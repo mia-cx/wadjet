@@ -15,7 +15,9 @@ extension Annotation {
             return (dragging(handle, from: from, to: to, stretch: stretch), [])
         default: break
         }
-        guard let grip = handles(minExtent: minExtent, rotateOffset: rotateOffset)
+        // the grip may be a point grip or a bounding-box one, whichever set the press took
+        guard let grip = (handles(.points, minExtent: minExtent, rotateOffset: rotateOffset)
+                          + handles(.frame, minExtent: minExtent, rotateOffset: rotateOffset))
             .filter({ $0.handle == handle })
             .min(by: { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) })?.at
         else { return (dragging(handle, from: from, to: to, stretch: stretch), []) }

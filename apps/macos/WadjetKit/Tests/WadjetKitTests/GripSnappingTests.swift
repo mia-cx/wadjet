@@ -23,6 +23,16 @@ struct GripSnappingTests {
             .min { hypot($0.at.x - p.x, $0.at.y - p.y) < hypot($1.at.x - p.x, $1.at.y - p.y) }?.at
     }
 
+    // Proves a Line's bounding-box grip, which only placing Tools show, keeps
+    // the press offset: pressed 3 pt past the end at x = 100 and dragged 8 pt,
+    // the end lands at 108, not under the pointer at 111
+    @Test func lineFrameGripKeepsThePressOffset() {
+        let a = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: style)
+        let r = drag(a, .resize(x: 1, y: 0), from: CGPoint(x: 103, y: 0), to: CGPoint(x: 111, y: 0), targets: [])
+        guard case let .line(_, e, _) = r.annotation.kind else { Issue.record(); return }
+        #expect(near(e, CGPoint(x: 108, y: 0)))
+    }
+
     // the press was 3 pt off the grip, so the delta — not the pointer — snaps
     @Test func offCentreCornerPressLandsOnTheGuides() {
         let a = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 100, height: 100), method: .blackOut), style: style)
