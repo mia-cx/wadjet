@@ -59,6 +59,13 @@ struct MagnifyTests {
         #expect(MagnifyZoom.stepped(3.1, by: 1) == 3.25)
         #expect(MagnifyZoom.stepped(2, by: -100) == 1.5)
         #expect(MagnifyZoom.stepped(7, by: 100) == 8)
+        // a zoom resized past the range never steps the wrong way: above 8,
+        // zooming in holds and zooming out comes back to 8; below 1.5,
+        // zooming out holds and zooming in goes up to 1.5
+        #expect(MagnifyZoom.stepped(16, by: 1) == 16)
+        #expect(MagnifyZoom.stepped(16, by: -1) == 8)
+        #expect(MagnifyZoom.stepped(0.32, by: -1) == 0.32)
+        #expect(MagnifyZoom.stepped(0.32, by: 1) == 1.5)
     }
 
     // Proves a fresh Magnify lands opposite the source's nearest display edge
@@ -343,5 +350,38 @@ struct MagnifyTests {
         #expect(r.frame == CGRect(x: 80, y: 90, width: 120, height: 60))
         #expect(r.zoom == 3)
         #expect(r.viewport == m.source)
+    }
+
+    // Proves Reset Zoom restores a fresh lens's zoom by resizing the lens
+    // about its centre, after a scroll or a source resize, so the viewport
+    // stays the source.
+    @Test func resetZoomResizesTheLens() {
+        let source = CGRect(x: 0, y: 0, width: 40, height: 20)
+        let fresh = Magnifier.placed(source: source, options: .init(),
+                                     on: CGRect(x: -500, y: -500, width: 1440, height: 900))
+        #expect(fresh.zoomIsAuto)
+        let scrolled = fresh.zoomed(to: 8)
+        #expect(!scrolled.zoomIsAuto)
+        let reset = scrolled.resettingZoom()
+        #expect(reset.zoomIsAuto)
+        #expect(reset.frame.size == fresh.frame.size)
+        #expect(reset.frame.midX == scrolled.frame.midX && reset.frame.midY == scrolled.frame.midY)
+        #expect(reset.viewport == source)
+        let widened = fresh.resizingSource(to: CGRect(x: 0, y: 0, width: 80, height: 20)).resettingZoom()
+        #expect(widened.zoomIsAuto)
+        #expect(widened.viewport == widened.source)
+    }
+
+    // Proves a lens edge grip dragged past its anchor puts the lens on the
+    // pointer's side, still in the source's aspect.
+    @Test func lensGripPastAnchorFollowsThePointer() {
+        let m = Self.magnifier(source: CGRect(x: 0, y: 0, width: 40, height: 20),
+                               frame: CGRect(x: 100, y: 100, width: 80, height: 40))
+        let r = Self.annotation(m).dragging(.resize(x: 1, y: 0), from: CGPoint(x: 180, y: 120),
+                                            to: CGPoint(x: 60, y: 120))
+        guard case let .magnify(n) = r.kind else { Issue.record("not a Magnify"); return }
+        #expect(n.frame == CGRect(x: 60, y: 110, width: 40, height: 20))
+        #expect(n.source == m.source)
+        #expect(r.affineTransform == .identity)
     }
 }

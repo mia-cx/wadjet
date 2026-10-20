@@ -299,8 +299,11 @@ extension Annotation {
             var sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
             var sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
             if case let .magnify(m) = kind {
-                // the lens keeps the source's aspect; only the zoom changes
-                let u = abs(Self.uniform(x, y, sx, sy))
+                // the lens keeps the source's aspect; only the zoom changes.
+                // The scale keeps its sign, so a grip dragged past the anchor
+                // puts the lens on the pointer's side — the box re-standardizes
+                // and a Magnify never flips its content
+                let u = Self.uniform(x, y, sx, sy)
                 var new = self
                 new.kind = .magnify(m.resizingLens(to: m.frame.mapCorners {
                     CGPoint(x: anchor.x + ($0.x - anchor.x) * u, y: anchor.y + ($0.y - anchor.y) * u)

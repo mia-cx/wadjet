@@ -39,16 +39,15 @@ import WadjetKit
         }
     }
 
-    /// whether the selected Magnify scroll-zoomed away from auto
+    /// whether the selected Magnify zoomed away from a fresh lens's zoom
     static var zoomOverridden: Bool {
-        if case let .magnify(m) = MarkupController.active.selected?.kind { return m.zoom != nil }
+        if case let .magnify(m) = MarkupController.active.selected?.kind { return !m.zoomIsAuto }
         return false
     }
-    /// the selected Magnify zooms by its source size again
+    /// the selected Magnify's lens back at a fresh lens's zoom, about its centre
     static func resetZoom() {
-        guard var a = MarkupController.active.selected, case var .magnify(m) = a.kind else { return }
-        m.zoom = nil
-        a.kind = .magnify(m)
+        guard var a = MarkupController.active.selected, case let .magnify(m) = a.kind else { return }
+        a.kind = .magnify(m.resettingZoom())
         MarkupController.active.transformSelection { _ in a }
     }
 }

@@ -140,9 +140,9 @@ public struct Magnifier: Codable, Equatable, Sendable {
     /// put on the side opposite the display edge nearest the source's centre,
     /// then kept inside the display's margin
     public static func placed(source: CGRect, options: MagnifierOptions, on display: CGRect) -> Magnifier {
-        let minSide: CGFloat = 64, maxSide: CGFloat = 320, gap: CGFloat = 24, margin: CGFloat = 8
+        let gap: CGFloat = 24, margin: CGFloat = 8
         // the source's aspect at auto zoom, its longest edge kept within the bounds
-        let longest = min(max(sourceLongest(source) * MagnifyZoom.auto(for: source.size), minSide), maxSide)
+        let longest = sourceLongest(source) * autoZoom(for: source)
         let size = lensSize(for: source, longest: longest)
         let c = CGPoint(x: source.midX, y: source.midY)
         // the nearest display edge; the magnifier goes on its opposite side
@@ -158,12 +158,26 @@ public struct Magnifier: Codable, Equatable, Sendable {
             ? min(max(frame.minX, area.minX), area.maxX - frame.width) : area.minX
         frame.origin.y = frame.height <= area.height
             ? min(max(frame.minY, area.minY), area.maxY - frame.height) : area.minY
-        return Magnifier(source: source, frame: frame, zoom: longest / sourceLongest(source),
-                         options: options)
+        return Magnifier(source: source, frame: frame, zoom: autoZoom(for: source), options: options)
     }
 
     // MARK: resizing — the lens always takes the source's aspect, and the
     // zoom is the lens's longest edge over the source's
+
+    /// a fresh lens's zoom: `MagnifyZoom.auto`, eased so the lens's longest
+    /// edge lands within 64…320 pt
+    public static func autoZoom(for source: CGRect) -> CGFloat {
+        let s = sourceLongest(source)
+        return min(max(s * MagnifyZoom.auto(for: source.size), 64), 320) / s
+    }
+    /// whether the zoom is still the one a fresh lens gets
+    public var zoomIsAuto: Bool {
+        abs(effectiveZoom - Self.autoZoom(for: source)) < 1e-6
+    }
+    /// the lens back at a fresh lens's zoom, resized about its centre
+    public func resettingZoom() -> Magnifier {
+        zoomed(to: Self.autoZoom(for: source))
+    }
 
     /// the smallest the lens's longest edge gets
     public static let minLens: CGFloat = 16
@@ -219,9 +233,14 @@ public enum MagnifyZoom {
         if s >= 256 { return 2 }
         return 4 - 2 * (s - 64) / (256 - 64)
     }
-    /// `zoom` rounded to the step grid plus `steps` more steps, clamped to `range`
+    /// `zoom` rounded to the step grid plus `steps` more steps, clamped to
+    /// `range` — but never against the steps' direction: a lens resized past
+    /// the range only steps back toward it, and holds still the other way
     public static func stepped(_ zoom: CGFloat, by steps: Int) -> CGFloat {
-        let z = (zoom / step).rounded() * step + CGFloat(steps) * step
-        return min(max(z, range.lowerBound), range.upperBound)
+        let z = min(max((zoom / step).rounded() * step + CGFloat(steps) * step,
+                        range.lowerBound), range.upperBound)
+        if steps > 0 { return max(z, zoom) }
+        if steps < 0 { return min(z, zoom) }
+        return z
     }
 }
