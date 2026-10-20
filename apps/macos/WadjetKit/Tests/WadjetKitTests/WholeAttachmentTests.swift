@@ -23,4 +23,21 @@ struct WholeAttachmentTests {
         stack.replace(target.rotated(by: .pi / 2))
         #expect(abs(current(stack, label.id).transform.rotation - 3 * .pi / 4) < 1e-9)
     }
+
+    // Proves editing one end of a Line attached whole, then snapping that end
+    // onto a spot, moves only that end: the start stays at x 0 through the
+    // preview and after the end attaches.
+    @Test func snappingAnEditedEndKeepsTheRest() {
+        let a = box(CGRect(x: 0, y: 0, width: 4, height: 4)), b = box(CGRect(x: 120, y: 0, width: 4, height: 4))
+        let line = Annotation(kind: .line(start: .zero, end: CGPoint(x: 100, y: 0)), style: red4)
+        var stack = LayerStack([a, b, line])
+        stack.attach(line.id, .whole, to: a.id, at: .frame(.zero))
+        stack.replaceEditingAnchors([(current(stack, line.id).movingAnchors([1], by: CGVector(dx: 14, dy: 0)), [1])])
+        stack.replaceRebasing(current(stack, line.id).moving(.end, to: CGPoint(x: 120, y: 0)))
+        #expect(current(stack, line.id).position(of: .start) == .zero)
+        stack.attach(line.id, .end, to: b.id, at: .frame(.zero))
+        #expect(current(stack, line.id).position(of: .start) == .zero)
+        #expect(current(stack, line.id).position(of: .end) == CGPoint(x: 120, y: 0))
+    }
 }
+

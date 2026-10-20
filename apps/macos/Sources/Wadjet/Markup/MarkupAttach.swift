@@ -45,7 +45,8 @@ extension MarkupController {
         else { attachHover = nil; render(); return }
         let (snapped, hover) = attaching(moved, point: point, constrained: constrained)
         attachHover = hover
-        if snapped != moved { mutateUnrecorded { $0.replace(snapped) } }
+        // rebasing: a whole attachment must not undo part of the snap
+        if snapped != moved { mutateUnrecorded { $0.replaceRebasing(snapped) } }
         // the hover can change while the geometry doesn't: draw it either way
         render()
     }
