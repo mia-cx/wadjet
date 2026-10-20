@@ -132,6 +132,41 @@ extension LayerStack {
         annotations = list
     }
 
+    /// replaces `a`, a copy of a Line or path with node `node` just added by
+    /// splitting the segment before it — `Annotation.insertingNode`. The
+    /// split keeps the curve, so every attachment keeps its exact spot: an
+    /// anchor on the split segment moves to the matching half and t, later
+    /// segments and nodes shift up by one.
+    public mutating func replaceInsertingNode(_ a: Annotation, at node: Int) {
+        guard let old = annotations.first(where: { $0.id == a.id }), node > 0,
+              let p = a.position(of: .node(node)),
+              case let .segment(_, t0)? = old.nearestSegmentAnchor(to: p, only: node - 1) else { return replace(a) }
+        let split = node - 1
+        var list = annotations
+        for i in list.indices {
+            if list[i].id == a.id {
+                var new = a
+                new.attachments = a.attachments.map { at in
+                    guard case let .node(k) = at.point, k >= node else { return at }
+                    var at = at
+                    at.point = .node(k + 1)
+                    return at
+                }
+                list[i] = new
+                continue
+            }
+            list[i].attachments = list[i].attachments.map { at in
+                guard at.target == a.id, case let .segment(j, t) = at.anchor, j >= split else { return at }
+                var at = at
+                at.anchor = j > split ? .segment(j + 1, t: t)
+                    : t < t0 ? .segment(split, t: t0 > 0 ? t / t0 : 0)
+                    : .segment(node, t: t0 < 1 ? (t - t0) / (1 - t0) : 1)
+                return at
+            }
+        }
+        annotations = list
+    }
+
     /// `list` with every attachment re-solved, targets before what follows
     /// them. One whose target is missing is skipped: the point stays free
     /// where it is, and the reference stays only until the stack is saved,

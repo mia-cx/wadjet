@@ -332,11 +332,30 @@ struct AttachingTests {
         stack.attach(follower.id, .end, to: path.id, at: .segment(0, t: 0.75))
         stack.attach(path.id, .node(2), to: target.id, at: .frame(.zero))
         let (inserted, _) = try #require(current(stack, path.id).insertingNode(near: CGPoint(x: 50, y: 0)))
-        stack.replaceReshaping(inserted)
+        stack.replaceInsertingNode(inserted, at: 1)
         #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 75, y: 0)))
         stack.replace(target.moved(by: CGVector(dx: 0, dy: 30)))
         #expect(near(current(stack, path.id).position(of: .node(3)), CGPoint(x: 200, y: 30)))
         #expect(near(current(stack, path.id).position(of: .node(2)), CGPoint(x: 100, y: 0)))
+    }
+
+    // Proves an insertion keeps a follower on the segment it was on, even
+    // with another stroke closer than the split half's samples: on a hairpin
+    // (0,0)→(1000,0)→(1000,5)→(0,5), a split at x = 100 keeps the follower
+    // at (500, 0) on the lower stroke, t = 4/9 of the new segment 1, so
+    // dragging the new node up 100 lifts it to 500 · 100/900 ≈ 55.6.
+    @Test func insertingANodeKeepsTheSegment() throws {
+        let hairpin = Annotation(kind: .path(PathData(nodes: [(0, 0), (1000, 0), (1000, 5), (0, 5)].map {
+            PathNode(anchor: CGPoint(x: $0.0, y: $0.1)) })), style: red4)
+        let follower = arrow(from: CGPoint(x: 500, y: -50), to: CGPoint(x: 500, y: -10))
+        var stack = LayerStack([hairpin, follower])
+        stack.attach(follower.id, .end, to: hairpin.id, at: .segment(0, t: 0.5))
+        let (inserted, i) = try #require(current(stack, hairpin.id).insertingNode(near: CGPoint(x: 100, y: 0)))
+        stack.replaceInsertingNode(inserted, at: i)
+        #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 500, y: 0)))
+        stack.replace(current(stack, hairpin.id).dragging(.vertex(i), from: CGPoint(x: 100, y: 0),
+                                                         to: CGPoint(x: 100, y: 100)))
+        #expect(near(current(stack, follower.id).position(of: .end), CGPoint(x: 500, y: 500.0 / 9), 1e-3))
     }
 }
 

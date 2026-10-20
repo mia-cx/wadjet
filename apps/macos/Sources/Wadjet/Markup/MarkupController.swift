@@ -880,7 +880,7 @@ final class MarkupController {
             if insertingNodes, sel.kind.insertsNodes,
                let (a, i) = sel.insertingNode(near: p, within: Self.hitTolerance / zoom) {
                 // the new node renumbers the path: attachments move with it
-                stack.replaceReshaping(a)
+                stack.replaceInsertingNode(a, at: i)
                 gesture = .handle(.vertex(i), stack.annotations.first { $0.id == a.id } ?? a, from: p)
                 render()
                 AppLog.line("markup: added a node")
