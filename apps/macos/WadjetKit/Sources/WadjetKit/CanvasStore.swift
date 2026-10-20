@@ -137,11 +137,17 @@ public struct CanvasStore: Sendable {
     /// The store's packages by id. A Finder duplicate carries its original's id;
     /// the earliest-created package keeps it and the copies stay unowned, so
     /// retention never touches them. A package without metadata isn't History's.
-    func ownedPackages(_ urls: [URL]) throws
+    /// `strict` throws on an unreadable package, as retention needs; lookups skip
+    /// it, so one damaged file in the folder can't hide every other Canvas.
+    func ownedPackages(_ urls: [URL], strict: Bool = false) throws
         -> [UUID: (url: URL, manifest: CanvasDocument.Manifest, created: Date)] {
         var owned: [UUID: (url: URL, manifest: CanvasDocument.Manifest, created: Date)] = [:]
         for url in urls {
-            let manifest = try manifest(at: url)
+            let manifest: CanvasDocument.Manifest
+            do { manifest = try self.manifest(at: url) } catch {
+                if strict { throw error }
+                continue
+            }
             guard let id = try ownedID(at: url, manifest: manifest) else { continue }
             let created = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.creationDate]
                 as? Date ?? .distantFuture
@@ -160,7 +166,7 @@ public struct CanvasStore: Sendable {
         var packages: [UUID: URL] = [:]
         var links: [UUID: [CanvasLink]] = [:]
         var linkedCrops: [String: [CGRect]] = [:]
-        for (id, package) in try ownedPackages(packageURLs()).sorted(by: { $0.value.url.path < $1.value.url.path }) {
+        for (id, package) in try ownedPackages(packageURLs(), strict: true).sorted(by: { $0.value.url.path < $1.value.url.path }) {
             guard let metadata = package.manifest.store else { continue }
             packages[id] = package.url
             links[id] = try linkedCanvases(in: package.manifest, at: package.url, crops: &linkedCrops)
