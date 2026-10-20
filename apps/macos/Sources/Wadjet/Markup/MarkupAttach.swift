@@ -41,10 +41,12 @@ extension MarkupController {
     /// attach spot it's over
     func attachAnchorDrag(constrained: Bool) {
         guard let (id, point) = draggedAttachPoint, let moved = stack.annotations.first(where: { $0.id == id })
-        else { attachHover = nil; return }
+        else { attachHover = nil; render(); return }
         let (snapped, hover) = attaching(moved, point: point, constrained: constrained)
         attachHover = hover
         if snapped != moved { mutateUnrecorded { $0.replace(snapped) } }
+        // the hover can change while the geometry doesn't: draw it either way
+        render()
     }
 
     /// `moved`, the grip drag's result, with the dragged end snapped onto the
