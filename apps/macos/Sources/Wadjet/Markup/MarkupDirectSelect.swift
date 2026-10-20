@@ -106,7 +106,7 @@ extension MarkupController {
         let rect = CGRect(x: min(from.x, to.x), y: min(from.y, to.y),
                           width: abs(to.x - from.x), height: abs(to.y - from.y))
         nodes.marquee(rect, in: stack.annotations, adding: adding)
-        setSelection(nodes.shown.last)
+        setSelection(AnnotationSelection(nodes.shown.last.map { [$0] } ?? []))
         commitGesture()
         render()
         AppLog.line("markup: marquee selected \(nodes.anchors.count) anchors")

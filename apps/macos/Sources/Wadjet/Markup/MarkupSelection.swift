@@ -60,6 +60,14 @@ extension MarkupController {
         guard armed != nil else { return }
         let kept = selection.ids.filter(pickable.contains)
         let added = stack.annotations.map(\.id).filter { pickable.contains($0) && !kept.contains($0) }
+        // under Direct Select the picked paths show their anchors, none selected;
+        // the anchors go first because the selection's didSet renders
+        nodes.clear()
+        if directSelecting {
+            for a in stack.annotations where pickable.contains(a.id) && a.kind.hasAnchors {
+                nodes.show(a.id, adding: true)
+            }
+        }
         setSelection(AnnotationSelection(kept + added))
     }
 
