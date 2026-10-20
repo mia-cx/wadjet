@@ -166,8 +166,11 @@ final class MarkupController {
     @ObservationIgnored var snapper: MarkupSnapper?
     /// what a dragged end is over and would attach to (MarkupAttach.swift)
     @ObservationIgnored var attachHover: AttachHover?
-    /// a grip drag on an end that can attach is in flight
-    var draggingAttachable: Bool { draggedAttachPoint != nil }
+    /// a drag of a point that can attach, or a whole Annotation's move, is in flight
+    var draggingAttachable: Bool {
+        if case .moving = gesture { return true }
+        return draggedAttachPoint != nil
+    }
     var guides: [SnapGuide] { snapper?.guides ?? [] }
 
     @ObservationIgnored private(set) var panels: [MarkupPanel] = []
