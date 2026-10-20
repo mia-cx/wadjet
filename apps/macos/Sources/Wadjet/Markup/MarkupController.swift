@@ -205,10 +205,14 @@ final class MarkupController {
         editing != nil || (NSApp.keyWindow === AppDelegate.shared?.overlayCtrl.menuPanel
                            && NSApp.keyWindow?.firstResponder is NSText)
     }
-    /// Carbon command keys and the Layers window track the toolbar; call on
-    /// every phase/tool change
+    /// Carbon command keys, the Markup Tool Key letters, and the Layers
+    /// window track the toolbar; call on every phase/tool change. The letters
+    /// are live only while a Freeze Frame is up or a Markup Tool is armed —
+    /// a bare toolbar (phase .toolbar, tool nil) never swallows typing
     func syncSession() {
-        MarkupKeys.shared.sync(active: AppState.shared.toolbarOpen && !textHasFocus)
+        let s = AppState.shared, typing = textHasFocus
+        MarkupKeys.shared.sync(commands: s.toolbarOpen && !typing,
+                               tools: !typing && (s.phase == .frozen || (s.toolbarOpen && s.tool?.kind == .markup)))
         LayersWindow.shared.sync()
         endHistoryIfClosed()
     }

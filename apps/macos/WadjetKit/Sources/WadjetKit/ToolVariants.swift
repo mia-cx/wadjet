@@ -37,19 +37,25 @@ extension WadjetConfig.Markup {
         return variants.first { $0.id == tools[tool.rawValue]?.variant } ?? variants.first
     }
 
+    /// arms `variant` outright, as its menu tile would. Writes only the
+    /// Tool's default, never a selected Annotation; no-op when already armed.
+    public mutating func arm(_ variant: ToolVariant, of tool: ToolID) {
+        guard armedVariant(of: tool) != variant else { return }
+        if tool == .censor {
+            // Censor stores a method (with its strength), not a variant name
+            tools["censor", default: WadjetConfig.MarkupTool()].censorMethod =
+                CensorMethod.methods.first { $0.variant == variant }
+        } else {
+            tools[tool.rawValue, default: WadjetConfig.MarkupTool()].variant = variant.id
+        }
+    }
+
     /// arms the variant `step` places from the armed one, wrapping at both
     /// ends. Writes only the Tool's default, never a selected Annotation.
     public mutating func cycleVariant(of tool: ToolID, by step: Int) {
         let all = tool.variants
         guard let armed = armedVariant(of: tool), let i = all.firstIndex(of: armed) else { return }
         let next = all[((i + step) % all.count + all.count) % all.count]
-        guard next != armed else { return }
-        if tool == .censor {
-            // Censor stores a method (with its strength), not a variant name
-            tools["censor", default: WadjetConfig.MarkupTool()].censorMethod =
-                CensorMethod.methods.first { $0.variant == next }
-        } else {
-            tools[tool.rawValue, default: WadjetConfig.MarkupTool()].variant = next.id
-        }
+        arm(next, of: tool)
     }
 }

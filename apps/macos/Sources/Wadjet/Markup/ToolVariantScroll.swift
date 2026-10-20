@@ -9,10 +9,21 @@ extension Tool {
     /// arms the variant `step` places on, as picking its tile would (finishing
     /// any Pen path); a selected Annotation keeps its own variant
     @MainActor func cycleVariant(by step: Int) {
+        updateVariant { $0.cycleVariant(of: $1, by: step) }
+    }
+
+    /// arms `variant` outright, as a Markup Tool Key does
+    @MainActor func armVariant(_ variant: ToolVariant) {
+        updateVariant { $0.arm(variant, of: $1) }
+    }
+
+    /// the shared arming: finish any Pen path, write the config, then let an
+    /// open menu's rows follow the variant
+    @MainActor private func updateVariant(_ update: (inout WadjetConfig.Markup, ToolID) -> Void) {
         guard let id = toolID, !id.variants.isEmpty else { return }
         MarkupController.active.finishPen()
-        AppState.shared.config.update { $0.markup.cycleVariant(of: id, by: step) }
-        AppDelegate.shared?.overlayCtrl.fitMenu() // an open menu's rows follow the variant
+        AppState.shared.config.update { update(&$0.markup, id) }
+        AppDelegate.shared?.overlayCtrl.fitMenu()
     }
 }
 

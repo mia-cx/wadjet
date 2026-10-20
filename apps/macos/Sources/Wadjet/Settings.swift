@@ -138,7 +138,7 @@ enum SettingsPanes: String, CaseIterable {
         Section("Screenshots") { ForEach(Tool.allCases.filter { $0.kind == .shot }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
         Section("Recordings") { ForEach(Tool.allCases.filter { $0.kind == .rec }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
         Section("Utilities") { ForEach(Tool.allCases.filter { $0.kind == .util }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
-        Section("Markup") { ForEach(Tool.allCases.filter { $0.kind == .markup && $0.toolID != nil }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Markup") { ForEach(Tool.allCases.filter { $0.kind == .markup && !$0.isAction }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
     }
 }
 
@@ -154,10 +154,23 @@ enum SettingsPanes: String, CaseIterable {
             HStack {
                 Label(tool.title, systemImage: tool.symbol)
                 Spacer()
-                Button { pendingTool = tool } label: { Image(systemName: "plus.circle") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Add Shortcut")
-                    .accessibilityLabel("Add Shortcut for \(tool.title)")
+                ForEach(MarkupToolKey.all.filter { $0.markupTool == tool }, id: \.character) { key in
+                    HStack(spacing: 4) {
+                        if let variant = key.variant { Text(variant.title).font(.caption).foregroundStyle(.secondary) }
+                        Text(String(key.character).uppercased())
+                            .font(.caption.monospaced())
+                            .padding(.horizontal, 4)
+                            .background(.quaternary, in: .rect(cornerRadius: 4))
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Key \(String(key.character).uppercased())\(key.variant.map { ", \($0.title)" } ?? "")")
+                }
+                if tool.toolID != nil {
+                    Button { pendingTool = tool } label: { Image(systemName: "plus.circle") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Add Shortcut")
+                        .accessibilityLabel("Add Shortcut for \(tool.title)")
+                }
             }
             ForEach(mine, id: \.self) { ShortcutRow(i: $0) }
             if pendingTool == tool {

@@ -211,6 +211,8 @@ final class LayersWindow {
     private var panel: LayersPanel?
     private init() {}
     var windowNumber: Int? { panel?.windowNumber }
+    /// the panel's frame while it's on screen, else nil
+    var visibleFrame: NSRect? { panel?.isVisible == true ? panel?.frame : nil }
 
     func toggle() {
         wanted.toggle()
