@@ -4127,10 +4127,13 @@ struct ToolMenuView: View {
         .onAppear { withAnimation(.spring(duration: 0.3, bounce: 0.15)) { shown = true } }
     }
 
-    func row(_ title: String, subtitle: String? = nil, icon: String, on: Bool, isToggle: Bool = false, disabled: Bool = false, action: @escaping () -> Void) -> some View {
+    /// a menu row that changes a setting keeps the menu open, its check
+    /// updating in place and the panel refitting to any rows it adds or
+    /// removes; `closes` is for rows that switch Tool or run a one-shot command
+    func row(_ title: String, subtitle: String? = nil, icon: String, on: Bool, isToggle: Bool = false, disabled: Bool = false, closes: Bool = false, action: @escaping () -> Void) -> some View {
         MenuRow(title: title, subtitle: subtitle, icon: icon, on: on, isToggle: isToggle, disabled: disabled) {
             action()
-            s.openMenu = nil; ctrl.syncMenu()
+            if closes { s.openMenu = nil; ctrl.syncMenu() } else { ctrl.fitMenu() }
         }
     }
     static let shape = RoundedRectangle(cornerRadius: 26, style: .continuous)
@@ -4176,7 +4179,6 @@ struct ToolMenuView: View {
         }
     }
     func confirmRow() -> some View {
-        // a two-state pick, so it closes the menu like the other rows
         row("Confirm on Release", icon: "hand.tap", on: s.confirmMode == "release", isToggle: true) {
             s.confirmMode = s.confirmMode == "release" ? "manual" : "release"
         }
@@ -4201,11 +4203,11 @@ struct ToolMenuView: View {
             MenuTile(icon: "mic", filledIcon: "mic.fill", caption: "Mic", on: s.mic, isToggle: true) { s.mic.toggle() },
         ]]
     }
-    /// Measure's four modes as pick tiles, areas then lines — they close the menu
+    /// Measure's four modes as pick tiles, areas then lines — they keep the menu open
     var measureTiles: [[MenuTile]] {
         func tile(_ mode: String, _ icon: String) -> MenuTile {
             MenuTile(icon: icon, caption: mode, on: s.measureMode == mode) {
-                s.measureMode = mode; s.openMenu = nil; ctrl.syncMenu()
+                s.measureMode = mode
             }
         }
         return [[tile("Bounds", "square.dashed"), tile("Spacing", "arrow.left.and.right.square")],

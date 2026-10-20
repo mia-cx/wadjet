@@ -70,10 +70,10 @@ final class MarkupToolbar {
 }
 
 extension ToolMenuView {
-    /// More's menu: the overflow Tools, each tap arming it (row() closes the menu)
+    /// More's menu: the overflow Tools, each tap arming it and closing the menu
     @ViewBuilder func overflowRows() -> some View {
         ForEach(MarkupToolbar.shared.overflow, id: \.self) { t in
-            row(t.title, icon: t.icon, on: false) { AppDelegate.shared?.trigger(t) }
+            row(t.title, icon: t.icon, on: false, closes: true) { AppDelegate.shared?.trigger(t) }
         }
     }
 }

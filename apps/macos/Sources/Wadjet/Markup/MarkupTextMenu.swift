@@ -153,7 +153,6 @@ struct TextFormatControls: View {
 
     func pick(_ family: String) {
         styles.pickFont(family: family, weight: format.weight, for: tool)
-        s.openMenu = nil; ctrl.syncMenu()
     }
 
     // MARK: alignment and pill tiles — they keep the menu open
@@ -198,7 +197,7 @@ struct TextFormatControls: View {
 }
 
 /// a font-list row: the family name in its own face, checkmark when current.
-/// A pick closes the menu like the other radio rows.
+/// A pick restyles in place and keeps the menu open.
 struct FontFamilyRow: View {
     let family: String
     let on: Bool
