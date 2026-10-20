@@ -572,6 +572,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         for (i, t) in tools.enumerated() {
             let it = NSMenuItem(title: t.title, action: #selector(toolItem(_:)), keyEquivalent: "")
             it.representedObject = t.rawValue; it.target = self
+            it.image = ToolIcon.menuImage(for: t)
             if let si = s.config.value.shortcuts.firstIndex(where: { $0.tool.rawValue == t.rawValue }) {
                 it.setShortcut(for: KeyboardShortcuts.Name("shortcut.\(si)"))
             }
@@ -582,12 +583,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         // arms the last Markup Tool — a Shortcut naming it shows here too
         let markup = NSMenuItem(title: "Markup", action: #selector(armLastMarkupTool), keyEquivalent: "")
         markup.target = self
+        markup.image = ToolIcon.menuImage(for: .markup)
         if let si = s.config.value.shortcuts.firstIndex(where: { $0.tool.rawValue == Tool.lastMarkup.rawValue }) {
             markup.setShortcut(for: KeyboardShortcuts.Name("shortcut.\(si)"))
         }
         m.addItem(markup)
         m.addItem(.separator())
         let recent = NSMenuItem(title: "Recent", action: nil, keyEquivalent: "")
+        recent.image = ToolIcon.menuImage(for: .recent)
         let rsub = NSMenu()
         rsub.autoenablesItems = false // a swept entry must stay disabled, not auto-enabled
         rsub.delegate = self // filled lazily in menuNeedsUpdate
@@ -595,8 +598,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         m.addItem(.separator())
         let settings = NSMenuItem(title: "Settings…", action: #selector(openSettings), keyEquivalent: ",")
         settings.target = self
+        settings.image = ToolIcon.menuImage(for: .settings)
         m.addItem(settings)
         let proto = NSMenuItem(title: "Debug", action: nil, keyEquivalent: "")
+        proto.image = ToolIcon.menuImage(for: .debug)
         let psub = NSMenu()
         psub.addItem(mi("Island Mode Even With Notch", #selector(toggleIsland), on: AppState.shared.islandMode))
         psub.addItem(.separator())
@@ -3054,8 +3059,8 @@ struct ToolbarView: View {
             } else {
                 // nothing selected (the count island, or the live toolbar
                 // unarmed): the Markup group's badge
-                Image(systemName: s.tool?.icon ?? Tool.Kind.markup.badge)
-                    .resizable().scaledToFit()
+                (s.tool?.iconImage ?? Tool.Kind.markup.iconImage)
+                    .scaledToFit()
                     .frame(width: min(pillH * 0.45, pillH - 14), height: min(pillH * 0.45, pillH - 14))
                     // on the glyph's own frame, so size and position both travel
                     .matchedGeometryEffect(id: "selectedIcon", in: ns, isSource: !expanded)
@@ -3366,12 +3371,12 @@ struct ToolbarView: View {
         // pixel-identical layout to cell() so the masked splice joins equal:
         // the same 24×24 icon + 10 pt label VStack, the same collapsed badge
         VStack(spacing: 3) {
-            Image(systemName: collapsed ? t.kind.badge : t.icon).resizable().scaledToFit()
+            (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
                 .frame(width: 24, height: 24)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
-                        Image(systemName: t.icon).font(.system(size: 9, weight: .bold))
+                        t.iconImage.scaledToFit().frame(width: 11, height: 11)
                             .foregroundStyle(.white.opacity(0.7))
                             .frame(width: 16, height: 16)
                             .background(Circle().fill(.black.opacity(0.85)))
@@ -3514,7 +3519,7 @@ struct ToolbarView: View {
         // a collapsed group's cell IS the group: category icon at Tool size,
         // the last-used Tool's symbol as the tiny badge
         return VStack(spacing: 3) {
-            Image(systemName: collapsed ? t.kind.badge : t.icon).resizable().scaledToFit()
+            (collapsed ? t.kind.iconImage : t.iconImage).scaledToFit()
                 .frame(width: 24, height: 24)
                 .contentTransition(reduceMotion ? .opacity : .symbolEffect(.replace))
                 // the selected cell's icon and the island's icon are one element:
@@ -3522,7 +3527,7 @@ struct ToolbarView: View {
                 .matchedGeometryEffect(id: selected ? "selectedIcon" : "icon-\(t)", in: ns, isSource: expanded)
                 .overlay(alignment: .bottomTrailing) {
                     if collapsed { // the last-used Tool's symbol as the badge
-                        Image(systemName: t.icon).font(.system(size: 9, weight: .bold))
+                        t.iconImage.scaledToFit().frame(width: 11, height: 11)
                             .foregroundStyle(.white.opacity(0.7))
                             .frame(width: 16, height: 16)
                             .background(Circle().fill(.black.opacity(0.85)))
@@ -3543,10 +3548,12 @@ struct ToolbarView: View {
         .foregroundStyle(selected && !lensActive ? Color.wadjetAccent : .white)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
-            // carry it with layout instead of chasing it in row space
+            // carry it with layout instead of chasing it in row space. Colour
+            // icons can't take the accent, so an accent ring marks the cell
             .background {
                 if selected, !lensActive {
                     Capsule().fill(.white.opacity(0.10))
+                        .overlay(Capsule().strokeBorder(Color.wadjetAccent, lineWidth: 1.5))
                         .frame(width: selW, height: selH)
                 }
             }

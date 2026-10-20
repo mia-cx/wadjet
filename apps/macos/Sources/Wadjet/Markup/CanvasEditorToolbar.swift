@@ -115,11 +115,18 @@ struct CanvasEditorToolbar: View {
             }
         } label: {
             VStack(spacing: 4) {
-                Image(systemName: t.icon).font(.system(size: 20))
+                t.iconImage.scaledToFit().frame(width: 24, height: 24)
                 Text(t.shortTitle).font(.system(size: 12, weight: .medium))
             }
             .foregroundStyle(armed ? Color.wadjetAccent : .white)
             .frame(width: 64, height: 64)
+            // colour icons can't take the accent, so an accent ring marks the armed Tool
+            .background {
+                if armed {
+                    RoundedRectangle(cornerRadius: 14).fill(.white.opacity(0.10))
+                        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.wadjetAccent, lineWidth: 1.5))
+                }
+            }
         }
         .buttonStyle(.plain)
         .disabled(state.recrop)
