@@ -1,3 +1,4 @@
+import AppKit
 import WadjetKit
 
 extension MarkupToolKey {
@@ -28,6 +29,11 @@ extension MarkupController {
                 arm(tool)
                 MarkupToolbar.shared.armed(tool)
             }
+        }
+        // a same-Tool variant switch (E/K) arms nothing, so nothing else
+        // swaps the cursor under a resting pointer; the Editor refreshes its own
+        if isScreen, AppDelegate.shared?.overlayCtrl.pointerOverUI != true {
+            panels.first { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) }?.view.setToolCursor()
         }
         AppLog.line("markup key: \(key.character) -> \(tool.title)")
         return true

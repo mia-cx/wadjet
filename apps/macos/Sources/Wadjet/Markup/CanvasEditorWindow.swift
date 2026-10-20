@@ -400,7 +400,10 @@ final class EditorCanvasView: NSView {
            e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
            e.charactersIgnoringModifiers?.count == 1,
            let key = e.charactersIgnoringModifiers?.first.flatMap(MarkupToolKey.key(typing:)),
-           doc.markup.press(key) { return }
+           doc.markup.press(key) {
+            markupView.setToolCursor()
+            return
+        }
         super.keyDown(with: e)
     }
 

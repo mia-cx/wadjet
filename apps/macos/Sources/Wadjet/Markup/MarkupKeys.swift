@@ -54,7 +54,8 @@ final class MarkupKeys {
     }
 
     /// the key code that types `character` with `modifiers` held in the
-    /// current keyboard layout, or nil — Carbon hot keys match key codes,
+    /// current keyboard layout, or nil — command rows look up with ⌘ alone
+    /// (⇧ would turn `[` into `{`), the letters with none — Carbon hot keys match key codes,
     /// which are physical positions (Z sits where US has Y on German QWERTZ),
     /// and layouts with a Command-specific map ("Dvorak - QWERTY ⌘") move the
     /// shortcut's key
@@ -95,7 +96,7 @@ final class MarkupKeys {
         installHandler()
         for (i, k) in Self.keys.enumerated() {
             var ref: EventHotKeyRef?
-            let err = RegisterEventHotKey(UInt32(Self.keyCode(typing: k.character, modifiers: k.modifiers) ?? k.fallback), UInt32(k.modifiers),
+            let err = RegisterEventHotKey(UInt32(Self.keyCode(typing: k.character, modifiers: cmdKey) ?? k.fallback), UInt32(k.modifiers),
                                           EventHotKeyID(signature: Self.signature, id: UInt32(i)),
                                           GetApplicationEventTarget(), 0, &ref)
             if let ref { commandRefs.append(ref) }
