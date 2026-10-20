@@ -180,6 +180,8 @@ final class MarkupController {
         let before = stack
         change(&stack)
         record(from: before)
+        // a layer hidden, locked, or gone takes its anchors out of Direct Select
+        nodes.prune(to: stack.annotations)
         render()
         dismissIdleToolbarIfEmpty()
     }
@@ -492,7 +494,11 @@ final class MarkupController {
         guard let id else { deselect(); return }
         guard let a = stack.annotations.first(where: { $0.id == id }), !a.hidden, !a.locked else { return }
         if armed == nil { isScreen ? AppDelegate.shared?.trigger(.select) : arm(.select) }
-        if armed != nil { nodes.clear(); selection = id; showSelectionAnchors() }
+        guard armed != nil else { return }
+        // the anchors first: the selection's didSet renders
+        nodes.clear()
+        if directSelecting, a.kind.hasAnchors { nodes.show(id, adding: false) }
+        selection = id
     }
 
     /// the clipboard's image or Canvas centred on `p`, selected, Select armed —
@@ -712,7 +718,10 @@ final class MarkupController {
             endRecrop()
             // then the click is handled normally
         }
-        if directSelecting, !command {
+        // a double-click on Text or an image re-edits or recrops it, as under Select
+        if directSelecting, !command,
+           !(clickCount == 2 && stack.topmost(at: p, tolerance: Self.hitTolerance / zoom)
+               .map { !$0.kind.hasAnchors } == true) {
             beginDirect(at: p, adding: constrained)
             return
         }

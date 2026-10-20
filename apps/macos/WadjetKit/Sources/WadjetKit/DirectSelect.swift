@@ -165,7 +165,8 @@ extension Annotation {
             var data = d
             data.nodes = d.nodes.enumerated().filter { !indices.contains($0.offset) }.map(\.element)
             guard data.nodes.count >= 2 else { return nil }
-            if data.nodes.count < 3 { data.closed = false } // two nodes can't enclose anything
+            // two nodes enclose an area only through a curve
+            if data.nodes.count < 3, AnnotationKind.path(data).segments.allSatisfy(\.straight) { data.closed = false }
             data.rawPoints = nil
             data.smoothing = nil
             var a = self

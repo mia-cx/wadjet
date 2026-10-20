@@ -103,6 +103,36 @@ struct DirectSelectTests {
         #expect(line.removingAnchors([0]) == nil)
     }
 
+    // Proves two curved anchors left of a closed filled ellipse still close
+    // and fill, while two corner anchors left of a square open into a line
+    @Test func twoAnchorsStayClosedOnlyIfCurved() throws {
+        var style = Self.style
+        style.fill = style.colour
+        let ellipse = Annotation(kind: .shape(.ellipse, rect: CGRect(x: 0, y: 0, width: 100, height: 60)), style: style)
+        let kept = try #require(ellipse.removingAnchors([1, 3]))
+        guard case let .path(d) = kept.kind else { Issue.record(); return }
+        #expect(d.nodes.count == 2 && d.closed && kept.fillColour != nil)
+        let square = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: CGRect(x: 0, y: 0, width: 50, height: 50)),
+                                style: style)
+        guard case let .path(s)? = square.removingAnchors([1, 3])?.kind else { Issue.record(); return }
+        #expect(s.nodes.count == 2 && !s.closed)
+    }
+
+    // Proves locking or hiding a layer drops its anchors from Direct Select,
+    // and keeps the selection on the others
+    @Test func pruneDropsLockedAndHidden() {
+        var other = Annotation(kind: .line(start: .zero, end: CGPoint(x: 10, y: 10)), style: Self.style)
+        var s = NodeSelection()
+        s.marquee(CGRect(x: -1, y: -1, width: 400, height: 50), in: [Self.curve, other], adding: false)
+        other.locked = true
+        s.prune(to: [Self.curve, other])
+        #expect(s.shown == [Self.curve.id] && s.anchors.allSatisfy { $0.id == Self.curve.id } && !s.anchors.isEmpty)
+        var hidden = Self.curve
+        hidden.hidden = true
+        s.prune(to: [hidden, other])
+        #expect(s.isEmpty)
+    }
+
     // Proves ⌥ on a smooth node's handle breaks it into a corner, while a
     // plain drag keeps the opposite handle collinear
     @Test func optionBreaksHandle() {
