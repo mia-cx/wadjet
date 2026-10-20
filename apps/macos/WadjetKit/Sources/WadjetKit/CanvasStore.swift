@@ -3,11 +3,13 @@ import Foundation
 import Synchronization
 
 /// Persisted in canvas.json, independently of filesystem creation/modification dates.
-/// `id` is the History entry's; packages from before it existed carry it in their name.
+/// `id` is the History entry's and `name` the file name the store gave the
+/// package; packages from before ids existed carry the id in their name.
 struct CanvasStoreMetadata: Codable {
     var createdAt: Date
     var state: CanvasRetentionState = []
     var id: UUID?
+    var name: String?
 }
 
 /// Owns History's .wadjet packages in one directory, the screenshots folder's
@@ -49,7 +51,7 @@ public struct CanvasStore: Sendable {
             let base = CaptureName.unique(name ?? CaptureName.base(for: createdAt), isTaken: taken.contains)
             let url = directory.appendingPathComponent("\(base).wadjet", isDirectory: false)
             var canvas = canvas
-            canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt, id: entryID)
+            canvas.storeMetadata = CanvasStoreMetadata(createdAt: createdAt, id: entryID, name: url.lastPathComponent)
             try canvas.write(to: url)
             return url
         }
@@ -128,32 +130,40 @@ public struct CanvasStore: Sendable {
         (try? FileManager.default.attributesOfItem(atPath: directory.path))?[.modificationDate] as? Date
     }
 
-    /// The History id a package belongs to: its metadata's, else its legacy UUID name.
+    /// The History id a package belongs to. A package carries the file name the
+    /// store gave it, so a Finder duplicate or a renamed copy, which keeps the
+    /// metadata but not the name, never belongs to History and retention never
+    /// touches it. Packages from before ids moved into canvas.json are owned
+    /// by their `<UUID>.wadjet` name.
     func ownedID(at url: URL, manifest: CanvasDocument.Manifest? = nil) throws -> UUID? {
         guard try isPackage(url), let store = try (manifest ?? self.manifest(at: url)).store else { return nil }
-        return store.id ?? UUID(uuidString: url.deletingPathExtension().lastPathComponent)
+        guard let id = store.id else { return UUID(uuidString: url.deletingPathExtension().lastPathComponent) }
+        return store.name == url.lastPathComponent ? id : nil
     }
 
-    /// The store's packages by id. A Finder duplicate carries its original's id;
-    /// the earliest-created package keeps it and the copies stay unowned, so
-    /// retention never touches them. A package without metadata isn't History's.
+    /// Whether `url` is one of History's Canvases in this store, rather than
+    /// a user's file that happens to sit in the same folder.
+    public func owns(_ url: URL) -> Bool {
+        url.deletingLastPathComponent().standardizedFileURL.path == directory.path
+            && (try? ownedID(at: url)) != nil
+    }
+
+    /// The store's packages by id. A package without metadata isn't History's.
     /// `strict` throws on an unreadable package, as retention needs; lookups skip
     /// it, so one damaged file in the folder can't hide every other Canvas.
     func ownedPackages(_ urls: [URL], strict: Bool = false) throws
-        -> [UUID: (url: URL, manifest: CanvasDocument.Manifest, created: Date)] {
-        var owned: [UUID: (url: URL, manifest: CanvasDocument.Manifest, created: Date)] = [:]
-        for url in urls {
+        -> [UUID: (url: URL, manifest: CanvasDocument.Manifest)] {
+        var owned: [UUID: (url: URL, manifest: CanvasDocument.Manifest)] = [:]
+        for url in urls.sorted(by: { $0.path < $1.path }) {
             let manifest: CanvasDocument.Manifest
             do { manifest = try self.manifest(at: url) } catch {
                 if strict { throw error }
                 continue
             }
-            guard let id = try ownedID(at: url, manifest: manifest) else { continue }
-            let created = (try? FileManager.default.attributesOfItem(atPath: url.path))?[.creationDate]
-                as? Date ?? .distantFuture
-            if let other = owned[id], (other.created, other.url.path) <= (created, url.path) { continue }
+            // a legacy `<id>.wadjet` beside its migrated self: the first path wins
+            guard let id = try ownedID(at: url, manifest: manifest), owned[id] == nil else { continue }
             // the same form `add` returns: enumeration adds a trailing slash to packages
-            owned[id] = (directory.appendingPathComponent(url.lastPathComponent, isDirectory: false), manifest, created)
+            owned[id] = (directory.appendingPathComponent(url.lastPathComponent, isDirectory: false), manifest)
         }
         return owned
     }

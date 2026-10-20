@@ -174,11 +174,12 @@ final class CanvasEditorDocument: NSDocument {
         markupCached?.textSessionSaved()
     }
 
-    /// packages in the CanvasStore (original/) are History's — other Canvases
-    /// link to them by path, so renaming or moving them is refused
+    /// History's packages in original/ — other Canvases link to them by path,
+    /// so renaming or moving them is refused. A user's own Canvas saved into
+    /// original/ isn't one of them and saves like any other permanent file.
     private var isStorePackage: Bool {
-        guard let dir = AppDelegate.shared?.canvasStore.directory else { return false }
-        return fileURL?.deletingLastPathComponent().standardizedFileURL.path == dir.path
+        guard let url = fileURL, let store = AppDelegate.shared?.canvasStore else { return false }
+        return store.owns(url)
     }
 
     override func move(to url: URL, completionHandler: (((any Error)?) -> Void)? = nil) {

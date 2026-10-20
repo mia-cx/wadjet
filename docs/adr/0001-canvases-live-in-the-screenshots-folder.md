@@ -7,11 +7,11 @@ Because a Canvas is no longer named by its History id, the id now lives in the p
 ## Consequences
 
 - History retention keeps its stages but only touches store Canvases in the current `original/`. It still deletes them at the deletion stage, now from a user-visible folder. Flattened images and Save file Canvases carry no store metadata and are never touched, even when saved into `original/`.
-- A Finder duplicate of a History Canvas carries the same id. The earliest-created package keeps it, and the copies are left alone.
-- At launch, container Canvases move into `original/` under their capture's date-based name (` 2` on collision), get their id written into `canvas.json`, and every link to them is rewritten. A failed package stays in the container and is retried next launch. Flattened images and recordings already in the old root stay where they are.
+- Store metadata also records the package's file name. A Finder duplicate or a renamed copy keeps the metadata but not the name, so it never belongs to History, and retention never touches it. The Editor treats only History's own packages as History's, so a user's Canvas saved into `original/` saves like any other permanent file.
+- At launch, container Canvases move into `original/` under their capture's date-based name (` 2` on collision), get their id and name written into `canvas.json`, and every link to them is rewritten. A failed move or relink keeps the container folder, which triggers a retry next launch. Flattened images and recordings already in the old root stay where they are.
 - Changing the screenshots folder moves nothing. Canvases already in the old `original/` stay there, but History no longer finds or sweeps them.
 
 ## Considered options
 
 - **Keep Canvases in the container and only move the flattened images.** Rejected: the editable original would stay invisible and couldn't be shared or backed up with the image.
-- **Record each Canvas's path in History (SwiftData).** Rejected: it needs a schema change, and the path breaks when a package is renamed. An id inside the package survives renames and keeps the store self-contained.
+- **Record each Canvas's path in History (SwiftData).** Rejected: it needs a schema change and splits a Canvas's identity between two stores. An id inside the package keeps the store self-contained.

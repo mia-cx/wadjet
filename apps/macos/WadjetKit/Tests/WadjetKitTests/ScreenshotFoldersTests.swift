@@ -151,6 +151,59 @@ struct ScreenshotFoldersTests {
         for url in saved { #expect(FileManager.default.fileExists(atPath: url.path)) }
         #expect(try await store.sweep().isEmpty)
     }
+
+    // Proves a Finder duplicate of a History Canvas never becomes History's:
+    // retention deletes the original and leaves the copy byte-for-byte, sweep after sweep.
+    @Test func finderDuplicateOutlivesRetention() async throws {
+        let directory = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let created = Date(timeIntervalSince1970: 1_792_499_400)
+        let later = { @Sendable in created.addingTimeInterval(100 * 86_400) }
+        let id = UUID()
+        let original = try CanvasStore(directory: directory).add(try canvasFixture(), for: id, createdAt: created)
+        let copy = directory.appendingPathComponent("\(CaptureName.base(for: created)) copy.wadjet")
+        try FileManager.default.copyItem(at: original, to: copy)
+        let bytes = try fileBytes(in: copy)
+
+        #expect(CanvasStore(directory: directory).owns(original))
+        #expect(!CanvasStore(directory: directory).owns(copy))
+        #expect(try await CanvasStore(directory: directory, now: later).sweep().map(\.actions) == [[.delete]])
+        #expect(try await CanvasStore(directory: directory, now: later).sweep().isEmpty)
+        #expect(try CanvasStore(directory: directory).url(for: id) == nil)
+        #expect(try fileBytes(in: copy) == bytes)
+    }
+
+    // Proves a migration whose relinking fails keeps the container folder as its
+    // retry trigger, and the next launch finishes the relink once the package reads again.
+    @Test func failedRelinkRetriesNextLaunch() throws {
+        let root = temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let legacy = root.appendingPathComponent("Container/Canvases")
+        let created = Date(timeIntervalSince1970: 1_792_499_400)
+        let targetID = UUID(), hostID = UUID()
+        let target = try addLegacy(try canvasFixture(), id: targetID, createdAt: created, to: legacy)
+        var host = try canvasFixture()
+        let link = CanvasLink(url: target)
+        host.layerStack = LayerStack([Annotation(kind: .canvas(.linked(link),
+            .init(frame: host.crop, crop: CGRect(x: 8, y: 8, width: 8, height: 8))),
+            style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 1))])
+        let legacyHost = try addLegacy(host, id: hostID, createdAt: created.addingTimeInterval(60), to: legacy)
+        try Data("broken".utf8).write(to: legacyHost.appendingPathComponent("annotations.json"))
+
+        let store = CanvasStore(directory: root.appendingPathComponent("original"))
+        let first = try store.migrate(from: legacy)
+        #expect(first.moved.count == 2 && first.failures.count == 1)
+        #expect(FileManager.default.fileExists(atPath: legacy.path))
+
+        let movedHost = try #require(try store.url(for: hostID))
+        try host.layerStack.json().write(to: movedHost.appendingPathComponent("annotations.json"))
+        let retry = try store.migrate(from: legacy)
+        #expect(retry.moved.isEmpty && retry.relinked == 1 && retry.failures.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: legacy.path))
+        guard case let .canvas(.linked(relinked), _) = try CanvasDocument.read(from: movedHost)
+            .layerStack.annotations[0].kind else { Issue.record("the Annotation must stay linked"); return }
+        #expect(relinked.url.path == (try store.url(for: targetID))?.path)
+    }
 }
 
 /// Writes a Canvas the way the container store named them before ids moved
@@ -169,6 +222,16 @@ private func addLegacy(_ canvas: CanvasDocument, id: UUID, createdAt: Date, to l
     try FileManager.default.moveItem(at: written, to: url)
     try FileManager.default.removeItem(at: staging)
     return url
+}
+
+/// Every regular file in a package, by path inside it.
+private func fileBytes(in package: URL) throws -> [String: Data] {
+    var bytes: [String: Data] = [:]
+    for case let file as URL in FileManager.default.enumerator(at: package, includingPropertiesForKeys: nil)!
+    where (try? file.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true {
+        bytes[String(file.path.dropFirst(package.path.count))] = try Data(contentsOf: file)
+    }
+    return bytes
 }
 
 private func temporaryDirectory() -> URL {

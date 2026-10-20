@@ -13,7 +13,8 @@ extension CanvasStore {
     /// this store under their capture's date-based name, records each id in its
     /// canvas.json, and points every store package's links (root and embedded)
     /// at the moved Canvases. Safe to rerun: a package that fails stays in
-    /// `legacy` for the next launch, and `legacy` is removed only once empty.
+    /// `legacy` for the next launch, and `legacy` is removed only once empty
+    /// and every link is rewritten.
     /// Nothing outside `legacy` is moved or deleted.
     @discardableResult
     public func migrate(from legacy: URL) throws -> CanvasMigrationReport {
@@ -46,6 +47,7 @@ extension CanvasStore {
                     // the id goes in first: once renamed, the name no longer carries it
                     var manifest = try manifest(at: move.from)
                     manifest.store?.id = move.id
+                    manifest.store?.name = move.to.lastPathComponent
                     try encode(manifest).write(to: move.from.appendingPathComponent("canvas.json"), options: .atomic)
                     try fm.moveItem(at: move.from, to: move.to)
                     report.moved.append(move)
@@ -64,8 +66,9 @@ extension CanvasStore {
                     report.failures.append("relink \(package.url.lastPathComponent): \(error.localizedDescription)")
                 }
             }
+            // the folder is the retry trigger: it goes only once every move and relink succeeded
             let left = (try? fm.contentsOfDirectory(atPath: legacy.path))?.filter { $0 != ".DS_Store" } ?? []
-            if left.isEmpty { try? fm.removeItem(at: legacy) }
+            if left.isEmpty, report.failures.isEmpty { try? fm.removeItem(at: legacy) }
             return report
         }
     }
