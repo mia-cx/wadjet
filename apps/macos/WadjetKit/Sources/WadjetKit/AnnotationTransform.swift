@@ -16,10 +16,13 @@ public struct AnnotationTransform: Codable, Equatable, Sendable {
 }
 
 /// which grips a selection shows: a placing Tool's selection gets the
-/// bounding box, Select's gets each kind's own point grips
+/// bounding box (and a Line's bend), Select's gets each kind's own point grips
 public enum GripSet: Sendable {
     /// the bounding box's resize grips and the rotate grip
     case frame
+    /// a placing Tool's: the bounding box, plus a Line's midpoint bend grip
+    /// so it bends into a curve straight away
+    case placed
     /// a Line's ends and bend, a Pen path's nodes and handles; other kinds
     /// fall back to the bounding box
     case points
@@ -503,6 +506,10 @@ extension Annotation {
                         rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
         switch set {
         case .frame: frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .placed:
+            // the bend first: where it lands on a frame grip, a tie picks it
+            handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
+                + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .points: handles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
     }

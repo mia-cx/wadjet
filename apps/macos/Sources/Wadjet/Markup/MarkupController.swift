@@ -126,8 +126,8 @@ final class MarkupController {
     }
     var selecting: Bool { armed == .select || cmdHeld }
     /// the grips the selection shows and takes presses on: Select's own, or
-    /// the bounding box for what a placing Tool just placed
-    var gripSet: GripSet { selecting ? .points : .frame }
+    /// the bounding box (and a Line's bend) for what a placing Tool just placed
+    var gripSet: GripSet { selecting ? .points : .placed }
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored private var snapper: MarkupSnapper?
@@ -725,7 +725,7 @@ final class MarkupController {
                 startEditing(sel.id)
                 return
             }
-            if grabSelection(at: p) { return }
+            if grabSelection(at: p, insertingNodes: armed == .draw) { return }
         }
         // a new Annotation takes the Tool's style and options, not the selection's
         selection = nil
@@ -804,8 +804,9 @@ final class MarkupController {
     }
 
     /// a press on the selection's grips or body starts the drag that adjusts
-    /// it; false when the press missed it
-    private func grabSelection(at p: CGPoint) -> Bool {
+    /// it; false when the press missed it. `insertingNodes` (the Draw Tool):
+    /// a press on a Line's or path's stroke adds a node there and drags it
+    private func grabSelection(at p: CGPoint, insertingNodes: Bool = false) -> Bool {
         guard let sel = selected else { return false }
         if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
                               minExtent: Self.handleMinExtent / zoom,
@@ -816,19 +817,32 @@ final class MarkupController {
         }
         if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
+            // the node joins the stack now; the press's gesture snapshot makes
+            // the insertion and its drag one undo step
+            if insertingNodes, sel.kind.insertsNodes,
+               let (a, i) = sel.insertingNode(near: p, within: Self.hitTolerance / zoom) {
+                stack.replace(a)
+                gesture = .handle(.vertex(i), a, from: p)
+                render()
+                AppLog.line("markup: added a node")
+                return true
+            }
             gesture = Self.moveGesture(sel, at: p)
             return true
         }
         return false
     }
 
-    /// true when `p` lies on the selection's grips or body — where a placing
-    /// Tool's press adjusts it rather than placing; the views show the arrow there
-    func overSelection(at p: CGPoint) -> Bool {
-        guard !selecting, editing == nil, editsSelection(), let sel = selected else { return false }
-        return sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
-                          rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil
-            || PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom)
+    /// the cursor over the selection where a placing Tool's press adjusts it
+    /// rather than placing: the arrow on its grips and body, the open hand on
+    /// a stroke the Draw Tool adds nodes to; nil elsewhere
+    func selectionCursor(at p: CGPoint) -> NSCursor? {
+        guard !selecting, editing == nil, editsSelection(), let sel = selected else { return nil }
+        if sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
+                      rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil { return .arrow }
+        guard PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) else { return nil }
+        return armed == .draw && sel.kind.insertsNodes
+            && sel.insertingNode(near: p, within: Self.hitTolerance / zoom) != nil ? .openHand : .arrow
     }
 
     /// a Step counter click places on the spot — there's no drag. ⌥-click on a
