@@ -74,12 +74,12 @@ extension LayerStack {
     /// ends. A moved Annotation lets go of anything that doesn't move with it:
     /// dragging it away detaches it.
     public mutating func translate(_ ids: Set<Annotation.ID>, by d: CGVector) {
-        // whatever moves rigidly: the ids, and whole Annotations attached to them
+        // whatever moves rigidly: the ids, whole Annotations attached to
+        // them, and Lines and paths whose every point follows them
         var rigid = ids, grew = true
         while grew {
             grew = false
-            for a in annotations where !rigid.contains(a.id)
-                && a.attachments.contains(where: { $0.point == .whole && rigid.contains($0.target) }) {
+            for a in annotations where !rigid.contains(a.id) && a.followsRigidly(rigid) {
                 rigid.insert(a.id); grew = true
             }
         }
@@ -91,10 +91,44 @@ extension LayerStack {
         annotations = list
     }
 
+    /// replaces `a` after an edit that rebuilds its nodes — a Brush refit,
+    /// a node added or removed — so its node and segment indices mean other
+    /// places now. Every attachment that names one moves to the spot on the
+    /// new geometry nearest where it held, so nothing jumps.
+    public mutating func replaceReshaping(_ a: Annotation) {
+        guard let old = annotations.first(where: { $0.id == a.id }) else { return }
+        var list = annotations
+        for i in list.indices {
+            if list[i].id == a.id {
+                var new = a
+                new.attachments = a.attachments.map { at in
+                    guard case .node = at.point, let was = old.position(of: at.point),
+                          let node = new.nearestNode(to: was) else { return at }
+                    var at = at
+                    at.point = node
+                    return at
+                }
+                list[i] = new
+                continue
+            }
+            list[i].attachments = list[i].attachments.map { at in
+                guard at.target == a.id, case .segment = at.anchor, let was = old.position(of: at.anchor),
+                      let anchor = a.nearestSegmentAnchor(to: was) else { return at }
+                var at = at
+                at.anchor = anchor
+                return at
+            }
+        }
+        annotations = list
+    }
+
     /// `list` with every attachment re-solved, targets before what follows
-    /// them; attachments whose target is gone, whose point is gone, or that
-    /// close a cycle (only a hand-edited file can hold one) are dropped. nil
-    /// when nothing changes.
+    /// them. One whose target is missing is skipped: the point stays free
+    /// where it is, and the reference stays only until the stack is saved,
+    /// so a target that is only being moved within the array (or comes back
+    /// on undo) is still followed. Attachments whose point is gone, or that
+    /// close a cycle (only a hand-edited file can hold one), are dropped.
+    /// nil when nothing changes.
     static func resolvingAttachments(_ list: [Annotation]) -> [Annotation]? {
         guard list.contains(where: { !$0.attachments.isEmpty }) else { return nil }
         var out = list, changed = false
@@ -106,7 +140,8 @@ extension LayerStack {
             done[i] = false
             var kept: [Attachment] = []
             for at in out[i].attachments {
-                guard let j = index[at.target], j != i, done[j] != false, out[i].canAttach(at.point) else {
+                guard let j = index[at.target] else { kept.append(at); continue }
+                guard j != i, done[j] != false, out[i].canAttach(at.point) else {
                     changed = true
                     continue
                 }
@@ -114,8 +149,7 @@ extension LayerStack {
                 kept.append(at)
             }
             if kept != out[i].attachments { out[i].attachments = kept }
-            for at in kept {
-                guard let j = index[at.target], let r = out[i].following(at, on: out[j]) else { continue }
+            if let r = out[i].following(kept.compactMap { at in index[at.target].map { (at, out[$0]) } }) {
                 out[i] = r
                 changed = true
             }
@@ -124,17 +158,56 @@ extension LayerStack {
         for i in out.indices { resolve(i) }
         return changed ? out : nil
     }
+
+    /// what gets saved and loaded: attachments whose target is gone are left out
+    static func savedAnnotations(_ annotations: [Annotation]) -> [Annotation] {
+        let ids = Set(annotations.map(\.id))
+        return annotations.map { a in
+            var a = a
+            a.attachments.removeAll { !ids.contains($0.target) }
+            return a
+        }
+    }
 }
 
 extension Annotation {
-    /// a copy put back on `at`'s anchor on `target`, or nil when it already sits there
-    func following(_ at: Attachment, on target: Annotation) -> Annotation? {
+    /// whether this moves exactly as `rigid` does: attached whole to one of
+    /// them, or a Line or path whose every point is attached to them
+    func followsRigidly(_ rigid: Set<Annotation.ID>) -> Bool {
+        guard !attachments.isEmpty, attachments.allSatisfy({ rigid.contains($0.target) }) else { return false }
+        let held = Set(attachments.map(\.point))
+        if held.contains(.whole) { return true }
+        switch kind {
+        case .line: return held.isSuperset(of: [.start, .end])
+        case let .path(d):
+            return d.nodes.indices.allSatisfy { i in
+                held.contains(.node(i)) || (!d.closed && (i == 0 ? held.contains(.start)
+                    : i == d.nodes.count - 1 && held.contains(.end)))
+            }
+        default: return false
+        }
+    }
+
+    /// a copy put back on its attachments' anchors, each paired with its
+    /// target — every point at once — or nil when it already sits there
+    func following(_ attached: [(Attachment, Annotation)]) -> Annotation? {
+        let tolerance = LayerStack.attachTolerance
+        if let (at, target) = attached.first(where: { $0.0.point == .whole }) {
+            return followingWhole(at, on: target)
+        }
+        let moves: [(AttachPoint, CGPoint)] = attached.compactMap { at, target in
+            target.position(of: at.anchor).map { (at.point, $0) }
+        }
+        guard moves.contains(where: { point, p in
+            position(of: point).map { hypot(p.x - $0.x, p.y - $0.y) > tolerance } ?? false
+        }) else { return nil }
+        return placing(moves)
+    }
+
+    /// a whole Annotation put back at its offset and turn from the anchor, or nil when it sits there
+    func followingWhole(_ at: Attachment, on target: Annotation) -> Annotation? {
         guard let p = target.position(of: at.anchor) else { return nil }
         let tolerance = LayerStack.attachTolerance
-        guard at.point == .whole else {
-            guard let now = position(of: at.point), hypot(p.x - now.x, p.y - now.y) > tolerance else { return nil }
-            return placing(at.point, at: p)
-        }
         let th = target.attachRotation
         let centre = CGPoint(x: p.x + at.offset.dx * cos(th) - at.offset.dy * sin(th),
                              y: p.y + at.offset.dx * sin(th) + at.offset.dy * cos(th))

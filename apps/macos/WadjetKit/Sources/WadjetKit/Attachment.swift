@@ -162,29 +162,45 @@ extension Annotation {
     }
 
     /// a copy with `point` moved to screen point `p` and the rest re-solved
-    /// around it: a Line's bend keeps its place relative to the chord, so the
-    /// curve and the ends' heads re-aim; a path node's handles ride along.
-    /// The geometry is baked, so the transform comes back identity.
+    /// around it — `placing(_:)` with one move
     func placing(_ point: AttachPoint, at p: CGPoint) -> Annotation {
+        placing([(point, p)])
+    }
+
+    /// a copy with each point moved to its screen point, solved together so
+    /// the order doesn't matter: a Line's unmoved bend keeps its place
+    /// relative to the chord from the old ends to the new ones, so the curve
+    /// and the ends' heads re-aim; a path node's handles ride along. The
+    /// geometry is baked, so the transform comes back identity. Points this
+    /// kind lacks are ignored.
+    func placing(_ moves: [(AttachPoint, CGPoint)]) -> Annotation {
         var a = baked
-        switch (point, a.kind) {
-        case let (.start, .line(s, e, b)):
-            a.kind = .line(start: p, end: e, bend: b.map { Self.bend($0, keptFrom: (s, e), on: (p, e)) })
-        case let (.end, .line(s, e, b)):
-            a.kind = .line(start: s, end: p, bend: b.map { Self.bend($0, keptFrom: (s, e), on: (s, p)) })
-        case let (.bend, .line(s, e, _)):
-            a.kind = .line(start: s, end: e, bend: p)
-        case (.start, .path(var d)), (.end, .path(var d)), (.node, .path(var d)):
-            let i: Int = switch point {
-            case .start: 0
-            case .end: d.nodes.count - 1
-            case let .node(i): i
-            default: -1
+        switch a.kind {
+        case let .line(s, e, b):
+            var ns = s, ne = e, pinned: CGPoint?
+            for (point, p) in moves {
+                switch point {
+                case .start: ns = p
+                case .end: ne = p
+                case .bend: pinned = p
+                default: break
+                }
             }
-            guard d.nodes.indices.contains(i) else { return self }
-            let n = d.nodes[i], dx = p.x - n.anchor.x, dy = p.y - n.anchor.y
-            func shift(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x + dx, y: q.y + dy) }
-            d.nodes[i] = PathNode(anchor: p, handleIn: n.handleIn.map(shift), handleOut: n.handleOut.map(shift))
+            a.kind = .line(start: ns, end: ne,
+                           bend: pinned ?? b.map { Self.bend($0, keptFrom: (s, e), on: (ns, ne)) })
+        case var .path(d):
+            for (point, p) in moves {
+                let i: Int? = switch point {
+                case .start: 0
+                case .end: d.nodes.count - 1
+                case let .node(i): i
+                case .bend, .whole: nil
+                }
+                guard let i, d.nodes.indices.contains(i) else { continue }
+                let n = d.nodes[i], dx = p.x - n.anchor.x, dy = p.y - n.anchor.y
+                func shift(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x + dx, y: q.y + dy) }
+                d.nodes[i] = PathNode(anchor: p, handleIn: n.handleIn.map(shift), handleOut: n.handleOut.map(shift))
+            }
             a.kind = .path(d)
         default:
             return self
@@ -198,11 +214,56 @@ extension Annotation {
                              on new: (CGPoint, CGPoint)) -> CGPoint {
         let (s, e) = old, (ns, ne) = new
         let chord = CGVector(dx: e.x - s.x, dy: e.y - s.y), d2 = chord.dx * chord.dx + chord.dy * chord.dy
-        guard d2 > 0 else { return bend }
+        // no old chord to measure against: the bend moves as the ends do on average
+        guard d2 > 0 else {
+            return CGPoint(x: bend.x + (ns.x - s.x + ne.x - e.x) / 2, y: bend.y + (ns.y - s.y + ne.y - e.y) / 2)
+        }
         let rx = bend.x - s.x, ry = bend.y - s.y
         let zr = (rx * chord.dx + ry * chord.dy) / d2, zi = (ry * chord.dx - rx * chord.dy) / d2
         let nc = CGVector(dx: ne.x - ns.x, dy: ne.y - ns.y)
         return CGPoint(x: ns.x + zr * nc.dx - zi * nc.dy, y: ns.y + zr * nc.dy + zi * nc.dx)
+    }
+
+    /// the segment anchor on this Line or path nearest screen point `p`;
+    /// nil for kinds without segments
+    func nearestSegmentAnchor(to p: CGPoint) -> AttachAnchor? {
+        let segs = kind.segments, q = p.applying(affineTransform.inverted())
+        guard !segs.isEmpty else { return nil }
+        func d2(_ i: Int, _ t: CGFloat) -> CGFloat {
+            let v = segs[i].strokePoint(at: t)
+            return (v.x - q.x) * (v.x - q.x) + (v.y - q.y) * (v.y - q.y)
+        }
+        // a coarse scan, then a golden-section refine around the best sample
+        let steps = 64
+        var best: (i: Int, t: CGFloat, d: CGFloat)?
+        for i in segs.indices {
+            for k in 0...steps {
+                let t = CGFloat(k) / CGFloat(steps), d = d2(i, t)
+                if best.map({ d < $0.d }) ?? true { best = (i, t, d) }
+            }
+        }
+        guard let b = best else { return nil }
+        var lo = max(0, b.t - 1 / CGFloat(steps)), hi = min(1, b.t + 1 / CGFloat(steps))
+        let g = (sqrt(5) - 1) / 2
+        for _ in 0..<40 {
+            let m1 = hi - g * (hi - lo), m2 = lo + g * (hi - lo)
+            if d2(b.i, m1) < d2(b.i, m2) { hi = m2 } else { lo = m1 }
+        }
+        return .segment(b.i, t: (lo + hi) / 2)
+    }
+
+    /// the attachable path node nearest screen point `p`, named as an
+    /// attachment names it: an open path's ends as start and end
+    func nearestNode(to p: CGPoint) -> AttachPoint? {
+        guard case let .path(d) = kind else { return nil }
+        let m = affineTransform
+        guard let i = d.nodes.indices.min(by: {
+            let a = d.nodes[$0].anchor.applying(m), b = d.nodes[$1].anchor.applying(m)
+            return hypot(a.x - p.x, a.y - p.y) < hypot(b.x - p.x, b.y - p.y)
+        }) else { return nil }
+        if !d.closed, i == 0 { return .start }
+        if !d.closed, i == d.nodes.count - 1 { return .end }
+        return .node(i)
     }
 
     /// the rotation an attached whole Annotation turns with: its own, or 0

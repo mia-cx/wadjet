@@ -138,6 +138,8 @@ struct AttachingTests {
         stack.remove(id: target.id)
         let left = current(stack, a.id)
         #expect(left.attachments.isEmpty)
+        stack.add(target) // the same id back: nothing re-attaches
+        #expect(current(stack, a.id).attachments.isEmpty)
         #expect(near(left.position(of: .end), CGPoint(x: 100, y: 50)))
     }
 
@@ -226,4 +228,74 @@ struct AttachingTests {
         #expect(loaded.annotations[0].attachments.isEmpty)
         #expect(near(loaded.annotations[0].position(of: .end), CGPoint(x: 100, y: 50)))
     }
+
+    // Proves restacking a target, even to the layer it already holds, keeps
+    // what is attached to it following.
+    @Test func restackingKeepsFollowers() {
+        let target = box(), a = arrow(), other = box(CGRect(x: 300, y: 0, width: 5, height: 5))
+        var stack = LayerStack([target, a, other])
+        stack.attach(a.id, .end, to: target.id, at: .frame(CGPoint(x: 1, y: 1)))
+        stack.move(target.id, to: 0)
+        stack.restack(target.id, .front)
+        stack.replace(current(stack, target.id).moved(by: CGVector(dx: 0, dy: 10)))
+        #expect(current(stack, a.id).attachments.count == 1)
+        #expect(near(current(stack, a.id).position(of: .end), CGPoint(x: 100, y: 60)))
+    }
+
+    // Proves a Line's attached points solve together, whatever order they
+    // were attached in. Start (0,0), end (10,0), bend (5,5): with bend and
+    // end attached and both targets moved up 10, the bend sits on its anchor
+    // (5,15); with both ends attached and their targets moved right 10, the
+    // whole curve shifts, bend to (15,5).
+    @Test func linePointsSolveTogether() {
+        let line = arrow(from: .zero, to: CGPoint(x: 10, y: 0), bend: CGPoint(x: 5, y: 5))
+        let atBend = box(CGRect(x: 5, y: 5, width: 2, height: 2)), atEnd = box(CGRect(x: 10, y: 0, width: 2, height: 2))
+        var stack = LayerStack([atBend, atEnd, line])
+        stack.attach(line.id, .bend, to: atBend.id, at: .frame(.zero))
+        stack.attach(line.id, .end, to: atEnd.id, at: .frame(.zero))
+        stack.translate([atBend.id, atEnd.id], by: CGVector(dx: 0, dy: 10))
+        #expect(near(current(stack, line.id).position(of: .bend), CGPoint(x: 5, y: 15)))
+        let settled = stack
+        stack.replace(current(stack, atEnd.id))
+        #expect(stack == settled)
+
+        let atStart = box(CGRect(x: 0, y: 0, width: 2, height: 2))
+        stack = LayerStack([atStart, atEnd, line])
+        stack.attach(line.id, .start, to: atStart.id, at: .frame(.zero))
+        stack.attach(line.id, .end, to: atEnd.id, at: .frame(.zero))
+        stack.translate([atStart.id, atEnd.id], by: CGVector(dx: 10, dy: 0))
+        #expect(near(current(stack, line.id).position(of: .bend), CGPoint(x: 15, y: 5)))
+    }
+
+    // Proves a Brush refit, which rebuilds the stroke's segments, keeps an
+    // attached end near where it held instead of jumping to whatever the old
+    // segment index now names.
+    @Test func refitKeepsAnchorsInPlace() {
+        let brush = Annotation(kind: .path(PathData.fitted(PathDataTests.wavy, smoothing: 0)!), style: red4)
+        let a = arrow(from: CGPoint(x: 40, y: 80), to: CGPoint(x: 40, y: 60))
+        var stack = LayerStack([brush, a])
+        stack.attach(a.id, .end, to: brush.id, at: .segment(20, t: 0.5))
+        let was = current(stack, a.id).position(of: .end)!
+        stack.replaceReshaping(brush.refitted(smoothing: 1))
+        let now = current(stack, a.id).position(of: .end)!
+        // the refit moves the stroke itself by a few points at most
+        #expect(hypot(now.x - was.x, now.y - was.y) < 4)
+    }
+
+    // Proves translate keeps an attachment whose target moves rigidly only
+    // because all of its own points follow the moved Annotations: a label on
+    // a Line strung between two moved boxes.
+    @Test func translateKeepsIndirectTargets() {
+        let b1 = box(CGRect(x: 0, y: 0, width: 10, height: 10)), b2 = box(CGRect(x: 100, y: 0, width: 10, height: 10))
+        let line = arrow(from: .zero, to: CGPoint(x: 100, y: 0))
+        let label = box(CGRect(x: 45, y: 10, width: 10, height: 10))
+        var stack = LayerStack([b1, b2, line, label])
+        stack.attach(line.id, .start, to: b1.id, at: .frame(.zero))
+        stack.attach(line.id, .end, to: b2.id, at: .frame(.zero))
+        stack.attach(label.id, .whole, to: line.id, at: .segment(0, t: 0.5))
+        stack.translate([b1.id, b2.id, label.id], by: CGVector(dx: 7, dy: 3))
+        #expect(current(stack, label.id).attachments.count == 1)
+        #expect(current(stack, label.id).kind.bounds == CGRect(x: 52, y: 13, width: 10, height: 10))
+    }
 }
+
