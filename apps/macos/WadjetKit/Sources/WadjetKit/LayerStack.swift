@@ -4,8 +4,16 @@ import Foundation
 /// `Codable` as a Canvas's `annotations.json`: `{"version":1,"annotations":[…]}`.
 public struct LayerStack: Codable, Equatable, Sendable {
     public static let version = 1 // the annotations.json format this build reads and writes
-    public internal(set) var annotations: [Annotation] // last draws on top; internal(set) so other WadjetKit files can add operations
-    public init(_ annotations: [Annotation] = []) { self.annotations = annotations }
+    /// last draws on top; internal(set) so other WadjetKit files can add
+    /// operations. Every change re-solves attachments (Attaching.swift), so
+    /// whatever follows another Annotation moves in the same change — and the
+    /// same undo snapshot.
+    public internal(set) var annotations: [Annotation] {
+        didSet { if let r = Self.resolvingAttachments(annotations) { annotations = r } }
+    }
+    public init(_ annotations: [Annotation] = []) {
+        self.annotations = Self.resolvingAttachments(annotations) ?? annotations
+    }
     public var isEmpty: Bool { annotations.isEmpty }
     /// on top
     public mutating func add(_ a: Annotation) { annotations.append(a) }
@@ -13,6 +21,10 @@ public struct LayerStack: Codable, Equatable, Sendable {
     public mutating func remove(id: Annotation.ID) {
         renumberCounters(removing: id)
         annotations.removeAll { $0.id == id }
+        // what was attached to it stays where it is, free
+        for i in annotations.indices where annotations[i].attachments.contains(where: { $0.target == id }) {
+            annotations[i].attachments.removeAll { $0.target == id }
+        }
     }
     public mutating func clear() { annotations.removeAll() }
     /// the front-most visible, unlocked Annotation under `point` — what a click selects
@@ -36,8 +48,12 @@ public struct LayerStack: Codable, Equatable, Sendable {
     /// `index` is back-to-front, clamped to the stack; no-op for a missing id
     public mutating func move(_ id: Annotation.ID, to index: Int) {
         guard let i = annotations.firstIndex(where: { $0.id == id }) else { return }
-        let a = annotations.remove(at: i)
-        annotations.insert(a, at: min(max(0, index), annotations.count))
+        // one assignment: the stack never sees the Annotation missing, so
+        // what is attached to it stays attached
+        var list = annotations
+        let a = list.remove(at: i)
+        list.insert(a, at: min(max(0, index), list.count))
+        annotations = list
     }
     /// replace the annotation with the same id, in place
     public mutating func replace(_ a: Annotation) {
@@ -62,11 +78,13 @@ public struct LayerStack: Codable, Equatable, Sendable {
             throw DecodingError.dataCorruptedError(forKey: .version, in: c,
                 debugDescription: "annotations.json version \(v) is newer than this build reads")
         }
-        annotations = try c.decode([Annotation].self, forKey: .annotations)
+        // a saved attachment whose target is missing loads freed
+        let list = LayerStack.savedAnnotations(try c.decode([Annotation].self, forKey: .annotations))
+        annotations = Self.resolvingAttachments(list) ?? list
     }
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         try c.encode(LayerStack.version, forKey: .version)
-        try c.encode(annotations, forKey: .annotations)
+        try c.encode(Self.savedAnnotations(annotations), forKey: .annotations)
     }
 }

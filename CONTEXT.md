@@ -51,6 +51,10 @@ _Avoid_: Node tool, point tool, Direct Selection
 One point Direct Select edits: a Line's end, a path's node, or a Shape's outline vertex. A Shape whose anchor moves becomes a path.
 _Avoid_: Node, vertex, point
 
+**Attach**:
+To pin a Line's or path's end, a point along it, or a whole Annotation to a spot on another Annotation, so it follows when that one moves, resizes, rotates, or reshapes. Dragging it away detaches it; deleting the other Annotation leaves it where it was.
+_Avoid_: Bind, binding, connect, glue, stick
+
 **Canvas**:
 wadjet's editable image document, saved as a `.wadjet` file: every uncropped display, the crop and its corner radius, optionally each window as a layer, and every Annotation as its own layer.
 History keeps a Canvas for each Screenshot in the screenshots folder's `original/`; the clipboard and the Workflow get the flattened image, which Save file writes to `flattened/` under the same name.

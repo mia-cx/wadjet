@@ -105,7 +105,7 @@ extension MarkupController {
         let q = constrained ? PathGeometry.snapAngle(p, from: from) : p
         let d = CGVector(dx: q.x - from.x, dy: q.y - from.y)
         mutateUnrecorded { s in
-            for (_, m) in starts { s.replace(m.start.movingAnchors(m.indices, by: d)) }
+            s.replaceEditingAnchors(starts.values.map { ($0.start.movingAnchors($0.indices, by: d), $0.indices) })
         }
     }
 
@@ -129,7 +129,10 @@ extension MarkupController {
         let picked = nodes
         edit { s in
             for a in s.annotations where !picked.indices(of: a.id).isEmpty {
-                if let kept = a.removingAnchors(picked.indices(of: a.id)) { s.replace(kept) }
+                // a deleted anchor lets go; the rest renumber, attachments and all
+                if let kept = a.removingAnchors(picked.indices(of: a.id)) {
+                    s.replaceRemovingAnchors(kept, removed: picked.indices(of: a.id))
+                }
                 else { s.remove(id: a.id) }
             }
         }
@@ -149,9 +152,8 @@ extension MarkupController {
         guard directSelecting, gesture == nil, !nodes.anchors.isEmpty else { return false }
         let picked = nodes
         edit { s in
-            for a in s.annotations where !picked.indices(of: a.id).isEmpty {
-                s.replace(a.movingAnchors(picked.indices(of: a.id), by: d))
-            }
+            s.replaceEditingAnchors(s.annotations.filter { !picked.indices(of: $0.id).isEmpty }
+                .map { ($0.movingAnchors(picked.indices(of: $0.id), by: d), picked.indices(of: $0.id)) })
         }
         return true
     }

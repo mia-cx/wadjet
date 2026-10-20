@@ -244,7 +244,7 @@ extension MarkupController {
     func nudgeSelection(by d: CGVector) -> Bool {
         guard !selection.isEmpty, gesture == nil else { return false }
         let moved = AnnotationGroup.moved(selectedAnnotations, by: d)
-        edit { s in moved.forEach { s.replace($0) } }
+        edit { $0.replaceGroup(moved) }
         return true
     }
 
@@ -281,12 +281,12 @@ extension MarkupController {
     /// just above the topmost original, in their own order
     private func withCopies(of annotations: [Annotation],
                             offset: CGVector) -> (LayerStack, [Annotation]) {
-        let copies = annotations.map { a -> Annotation in
-            var c = a.moved(by: offset)
-            c.id = UUID()
+        // attachments between the copies follow the copies
+        let ids = Dictionary(uniqueKeysWithValues: annotations.map { ($0.id, UUID()) })
+        let copies = LayerStack.copies(of: annotations.map { $0.moved(by: offset) }, ids: ids)
+        for (a, c) in zip(annotations, copies) {
             // a linked Canvas whose package is gone draws from the snapshot kept under its id
             if let snapshot = assets.images[a.id] { assets.images[c.id] = snapshot }
-            return c
         }
         let top = annotations.compactMap { a in stack.annotations.firstIndex { $0.id == a.id } }.max()
             ?? stack.annotations.count - 1
@@ -326,9 +326,11 @@ extension MarkupController {
         for (k, v) in clip.embedded { assets.embedded[k] = v }
         let box = AnnotationGroup.bounds(of: clip.annotations)
         let d = CGVector(dx: p.x - box.midX, dy: p.y - box.midY)
-        let pasted = clip.annotations.compactMap { a -> Annotation? in
-            var c = a.moved(by: d)
-            c.id = UUID()
+        // attachments between pasted Annotations follow the pasted copies
+        let ids = Dictionary(clip.annotations.map { ($0.id, UUID()) }, uniquingKeysWith: { a, _ in a })
+        let renamed = LayerStack.copies(of: clip.annotations, ids: ids)
+        let pasted = zip(clip.annotations, renamed).compactMap { a, r -> Annotation? in
+            var c = r.moved(by: d)
             c.hidden = false; c.locked = false
             if let snapshot = clip.snapshots[a.id] { assets.images[c.id] = snapshot }
             // a window from another Canvas lands as an image of its pixels:

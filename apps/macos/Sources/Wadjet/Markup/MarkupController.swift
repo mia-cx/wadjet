@@ -697,7 +697,7 @@ final class MarkupController {
     func setEditing(_ id: Annotation.ID?) { editing = id }
     func setSelection(_ ids: AnnotationSelection) { selection = ids }
     /// a drag in flight rewrites these Annotations; its gesture snapshot records the step
-    func replaceDuringGesture(_ annotations: [Annotation]) { for a in annotations { stack.replace(a) } }
+    func replaceDuringGesture(_ annotations: [Annotation]) { stack.replaceGroup(annotations) }
     /// the panel whose screen holds `p`
     func panel(containing p: CGPoint) -> MarkupPanel? {
         panels.first { $0.screen?.frame.contains(p) == true }
@@ -878,9 +878,10 @@ final class MarkupController {
             // the node joins the stack now; the press's gesture snapshot makes
             // the insertion and its drag one undo step
             if insertingNodes, sel.kind.insertsNodes,
-               let (a, i) = sel.insertingNode(near: p, within: Self.hitTolerance / zoom) {
-                stack.replace(a)
-                gesture = .handle(.vertex(i), a, from: p)
+               let (a, i, t) = sel.insertingNodeSplit(near: p, within: Self.hitTolerance / zoom) {
+                // the new node renumbers the path: attachments move with it
+                stack.replaceInsertingNode(a, at: i, splitAt: t)
+                gesture = .handle(.vertex(i), stack.annotations.first { $0.id == a.id } ?? a, from: p)
                 render()
                 AppLog.line("markup: added a node")
                 return true
@@ -1144,10 +1145,13 @@ final class MarkupController {
     /// the Smoothing slider's selection seam: refits a selected Brush stroke
     /// from its kept samples, in place
     func refitSelection(smoothing: CGFloat) {
-        transformSelection { a in
-            guard case let .path(d) = a.kind, d.rawPoints != nil else { return a }
+        // a refit rebuilds the stroke's segments: attachments move with it
+        let changed = selectedAnnotations.compactMap { a -> Annotation? in
+            guard case let .path(d) = a.kind, d.rawPoints != nil else { return nil }
             return a.refitted(smoothing: smoothing)
         }
+        guard !changed.isEmpty else { return }
+        edit { s in changed.forEach { s.replaceReshaping($0) } }
     }
 
     /// the pointer moved: only the Pen rubber-band preview cares
