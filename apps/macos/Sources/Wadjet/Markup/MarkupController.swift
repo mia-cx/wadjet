@@ -36,6 +36,8 @@ final class MarkupController {
     /// the collapsed island shows the Clear's draining Undo ring
     var undoRingShown = false
     @ObservationIgnored var clearUndoWake: Task<Void, Never>?
+    /// the displays whose island or toolbar has the pointer on it
+    @ObservationIgnored var hoveredIslands: Set<Int> = []
     /// a Clear's fade is running; its clear lands when the fade ends
     @ObservationIgnored var clearInFlight = false
     /// an Editor's canvas view; the screen draws on its per-display panels instead
@@ -686,6 +688,8 @@ final class MarkupController {
             document?.updateChangeCount(.changeDone)
             textDirtyMarked = true
         }
+        // a Text placed or typed after a Clear: Undo would take that, not the Clear
+        if isScreen, stack != before { editedAfterClear() }
         render()
     }
     /// records the whole text session's net change as one undo step — a

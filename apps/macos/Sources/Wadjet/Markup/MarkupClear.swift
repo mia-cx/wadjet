@@ -87,6 +87,8 @@ extension MarkupController {
     func offerUndo(ring: Bool) {
         guard isScreen else { return }
         clearUndo.cleared(at: .now, ring: ring)
+        // the pointer may already rest on the island: the ring holds from the start
+        if !hoveredIslands.isEmpty { clearUndo.hover(true, at: .now) }
         clearUndoChanged()
     }
     /// re-reads clearUndo now and wakes at its next change: ⌘Z unbinds at 3 s,
@@ -113,10 +115,16 @@ extension MarkupController {
             AppDelegate.shared?.overlayCtrl.syncDesktopChrome()
         }
     }
-    /// the pointer entered or left the island: the ring holds while it's in
-    func islandHovered(_ inside: Bool) {
-        guard isScreen, clearUndo.isActive else { return }
-        clearUndo.hover(inside, at: .now)
+    /// the pointer entered or left a display's island or toolbar: the ring
+    /// holds while it's on any of them. The pointer itself, not the bar's
+    /// expansion, which an armed Tool keeps up after the pointer leaves
+    func islandHovered(_ inside: Bool, on display: Int) {
+        guard isScreen else { return }
+        let was = !hoveredIslands.isEmpty
+        if inside { hoveredIslands.insert(display) } else { hoveredIslands.remove(display) }
+        let now = !hoveredIslands.isEmpty
+        guard clearUndo.isActive, now != was else { return }
+        clearUndo.hover(now, at: .now)
         clearUndoChanged()
     }
     /// an edit after the Clear: "Undo Clear" would undo that edit instead

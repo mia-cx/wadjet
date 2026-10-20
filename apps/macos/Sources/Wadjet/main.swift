@@ -134,11 +134,7 @@ final class AppState: ObservableObject {
     @Published var clickCircles = false
     @Published var showIslandWhileRecording = true
     // a toolbar opening re-ranks the Markup group (nil → a display)
-    @Published var expandedDisplay: Int? = nil { didSet {
-        if oldValue == nil, expandedDisplay != nil { MarkupToolbar.shared.open() }
-        // the pointer on the island holds a Clear's Undo ring (MarkupClear.swift)
-        if (oldValue == nil) != (expandedDisplay == nil) { MarkupController.shared.islandHovered(expandedDisplay != nil) }
-    } }
+    @Published var expandedDisplay: Int? = nil { didSet { if oldValue == nil, expandedDisplay != nil { MarkupToolbar.shared.open() } } }
     @Published var debugGroup: Tool.Kind? = nil // cmd.sh group <shot|rec|util|markup> — drives the expanded toolbar's openGroup
     @Published var debugTap: Tool? = nil // cmd.sh tap <toolRaw> — runs the tap-release lens travel
     @Published var debugHold: Tool? = nil // cmd.sh hold <toolRaw>|off — pins the pressed lens on that cell
@@ -2998,7 +2994,11 @@ struct ToolbarView: View {
                     hoverInside = pointerInside()
                 }
             }
-            .onChange(of: hoverInside) { syncExpanded(); refitOnLeave() }
+            .onChange(of: hoverInside) { syncExpanded(); refitOnLeave()
+                // the pointer on the island holds a Clear's Undo ring (MarkupClear.swift)
+                MarkupController.shared.islandHovered(hoverInside, on: displayIndex)
+            }
+            .onDisappear { MarkupController.shared.islandHovered(false, on: displayIndex) }
             .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded(); refitOnLeave() }
             .onAppear { syncHit(); syncLensBg()
                 // a Markup Tool armed by a Shortcut or the menu expands the new
