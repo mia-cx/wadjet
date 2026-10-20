@@ -3,21 +3,19 @@ import Carbon
 import WadjetKit
 
 /// Markup's command keys (⌘Z ⇧⌘Z undo, ⌘] ⌘[ ⇧⌘] ⇧⌘[ restack, ⌘⌥L Layers,
-/// ⌘V paste) and the unmodified Markup Tool Keys (V Select, P Pen, R
-/// Rectangle, …) as Carbon hot keys — the same seam Escape uses — so the apps
-/// underneath keep their own keys the rest of the time. Command keys are live
-/// while the toolbar is open; the letters only while a Freeze Frame is up or
-/// a Markup Tool is armed, so typing in other apps is never swallowed. Both
-/// suspend while typing lives on a Markup surface. Keys follow the current
-/// keyboard layout: a character means wherever that character is typed, not
-/// the ANSI key position (Z sits where US has Y on German QWERTZ).
+/// ⌘V paste) as Carbon hot keys — the same seam Escape uses — and the
+/// unmodified Markup Tool Keys (V Select, P Pen, R Rectangle, …) as a local
+/// key monitor, so the apps underneath keep their own keys the rest of the
+/// time. Command keys are live while the toolbar is open; the letters only
+/// while a Freeze Frame is up or a Markup Tool is armed. Both suspend while
+/// typing lives on a Markup surface. Keys follow the current keyboard layout:
+/// a character means wherever that character is typed, not the ANSI key
+/// position (Z sits where US has Y on German QWERTZ).
 @MainActor
 final class MarkupKeys {
     static let shared = MarkupKeys()
     /// 'wmky'; Escape/Measure/Space use 'wdjt' — each handler passes through foreign signatures
     private static let signature = OSType(0x776D6B79)
-    /// hot key ids at or above this are MarkupToolKey.all indices, below are command rows
-    private static let toolKeyBase = 100
     /// the character the key types unmodified, its ANSI fallback, Carbon
     /// modifiers, action — hot key id = row index
     private static let keys: [(character: Character, fallback: Int, modifiers: Int, action: @MainActor () -> Void)] = [
@@ -33,7 +31,7 @@ final class MarkupKeys {
         }),
     ]
     private var commandRefs: [EventHotKeyRef] = []
-    private var toolRefs: [EventHotKeyRef] = []
+    private var toolMonitor: Any?
     private var commandsRegistered = false
     private var toolsRegistered = false
     private var handlerInstalled = false
@@ -53,13 +51,13 @@ final class MarkupKeys {
         if tools != toolsRegistered { tools ? registerTools() : unregisterTools() }
     }
 
-    /// the key code that types `character` with `modifiers` held in the
-    /// current keyboard layout, or nil — command rows look up with ⌘ alone
-    /// (⇧ would turn `[` into `{`), the letters with none — Carbon hot keys match key codes,
+    /// the key code that types `character` with ⌘ held in the current
+    /// keyboard layout, or nil — ⌘ alone, since ⇧ would turn `[` into `{` —
+    /// Carbon hot keys match key codes,
     /// which are physical positions (Z sits where US has Y on German QWERTZ),
     /// and layouts with a Command-specific map ("Dvorak - QWERTY ⌘") move the
     /// shortcut's key
-    private static func keyCode(typing character: Character, modifiers: Int) -> Int? {
+    private static func keyCode(typing character: Character) -> Int? {
         guard let source = TISCopyCurrentKeyboardLayoutInputSource()?.takeRetainedValue(),
               let raw = TISGetInputSourceProperty(source, kTISPropertyUnicodeKeyLayoutData) else { return nil }
         let data = Unmanaged<CFData>.fromOpaque(raw).takeUnretainedValue() as Data
@@ -71,7 +69,7 @@ final class MarkupKeys {
                 var chars = [UniChar](repeating: 0, count: 4)
                 var length = 0
                 let err = UCKeyTranslate(layout, UInt16(code), UInt16(kUCKeyActionDown),
-                                         UInt32((modifiers >> 8) & 0xFF), UInt32(LMGetKbdType()),
+                                         UInt32((cmdKey >> 8) & 0xFF), UInt32(LMGetKbdType()),
                                          OptionBits(kUCKeyTranslateNoDeadKeysBit), &dead, chars.count, &length, &chars)
                 if err == noErr, String(utf16CodeUnits: chars, count: length).lowercased() == want { return code }
             }
@@ -94,16 +92,18 @@ final class MarkupKeys {
 
     private func registerCommands() {
         installHandler()
+        var failed: [String] = []
         for (i, k) in Self.keys.enumerated() {
             var ref: EventHotKeyRef?
-            let err = RegisterEventHotKey(UInt32(Self.keyCode(typing: k.character, modifiers: cmdKey) ?? k.fallback), UInt32(k.modifiers),
+            let err = RegisterEventHotKey(UInt32(Self.keyCode(typing: k.character) ?? k.fallback), UInt32(k.modifiers),
                                           EventHotKeyID(signature: Self.signature, id: UInt32(i)),
                                           GetApplicationEventTarget(), 0, &ref)
             if let ref { commandRefs.append(ref) }
-            if err != noErr { AppLog.line("markup keys: hot key \(i) err=\(err)") }
+            if err != noErr { failed.append("\(i) err=\(err)") }
         }
         commandsRegistered = true
-        AppLog.line("markup keys registered")
+        AppLog.line(failed.isEmpty ? "markup keys registered"
+                    : "markup keys: \(failed.count) of \(Self.keys.count) failed (\(failed.joined(separator: ", ")))")
     }
 
     private func unregisterCommands() {
@@ -113,46 +113,59 @@ final class MarkupKeys {
         AppLog.line("markup keys unregistered")
     }
 
-    /// the Markup Tool Keys, unmodified: translated at modifier state 0, with
-    /// the ANSI key code as fallback
+    /// the Markup Tool Keys, as a local keyDown monitor. Carbon can't carry
+    /// them: in the App Sandbox, RegisterEventHotKey refuses a key that types
+    /// a character with no modifier or ⇧ alone (eventInternalErr, -9868). A
+    /// local monitor sees only keys sent to wadjet, which is active with a
+    /// Markup or Freeze Frame panel key whenever the letters are on, so other
+    /// apps keep their typing. The current layout decides the letter.
     private func registerTools() {
-        installHandler()
-        for (i, key) in MarkupToolKey.all.enumerated() {
-            guard let code = Self.keyCode(typing: key.character, modifiers: 0) ?? key.ansiKeyCode else {
-                AppLog.line("markup keys: no key types '\(key.character)'")
-                continue
+        if toolMonitor == nil {
+            toolMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { e in
+                MarkupKeys.shared.pressToolKey(e) ? nil : e
             }
-            var ref: EventHotKeyRef?
-            let err = RegisterEventHotKey(UInt32(code), 0,
-                                          EventHotKeyID(signature: Self.signature, id: UInt32(Self.toolKeyBase + i)),
-                                          GetApplicationEventTarget(), 0, &ref)
-            if let ref { toolRefs.append(ref) }
-            if err != noErr { AppLog.line("markup keys: tool key '\(key.character)' err=\(err)") }
         }
         toolsRegistered = true
-        AppLog.line("markup tool keys registered")
+        AppLog.line("markup tool keys on")
     }
 
     private func unregisterTools() {
-        for r in toolRefs { UnregisterEventHotKey(r) }
-        toolRefs = []
+        if let m = toolMonitor { NSEvent.removeMonitor(m) }
+        toolMonitor = nil
         toolsRegistered = false
-        AppLog.line("markup tool keys unregistered")
+        AppLog.line("markup tool keys off")
     }
 
-    /// the keyboard layout changed: re-resolve whichever sets are registered
+    /// true when `e` pressed a Markup Tool Key and armed it. Only the screen
+    /// session's own windows take the letters — Settings, Editors (which arm
+    /// their own Markup), and Layers keep them — and text fields and the
+    /// in-place Text editor type the letter instead
+    private func pressToolKey(_ e: NSEvent) -> Bool {
+        let modified = !e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty
+        guard let key = MarkupToolKey.key(pressed: e.charactersIgnoringModifiers, modified: modified),
+              MarkupController.shared.editing == nil,
+              isScreenSession(e.window),
+              !(e.window?.firstResponder is NSText) else { return false }
+        MarkupController.shared.press(key)
+        return true
+    }
+
+    /// a Markup panel, a Freeze Frame, the toolbar, or its Tool menu — or no
+    /// key window at all while wadjet is active for the session
+    private func isScreenSession(_ window: NSWindow?) -> Bool {
+        guard let window else { return true }
+        if window is MarkupPanel || window is OverlayPanel { return true }
+        guard let oc = AppDelegate.shared?.overlayCtrl else { return false }
+        return oc.toolbarPanels.values.contains { $0 === window } || oc.menuPanel === window
+    }
+
+    /// the keyboard layout changed: re-resolve the command keys (the tool
+    /// keys read each event's characters, so they follow on their own)
     private func relayout() {
         if commandsRegistered { unregisterCommands(); registerCommands() }
-        if toolsRegistered { unregisterTools(); registerTools() }
     }
 
     fileprivate func fire(_ id: Int) {
-        if id >= Self.toolKeyBase {
-            let i = id - Self.toolKeyBase
-            guard MarkupToolKey.all.indices.contains(i) else { return }
-            MarkupController.shared.press(MarkupToolKey.all[i])
-            return
-        }
         guard Self.keys.indices.contains(id) else { return }
         Self.keys[id].action()
     }
