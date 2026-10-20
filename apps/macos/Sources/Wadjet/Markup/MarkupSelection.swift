@@ -114,20 +114,59 @@ extension MarkupController {
     /// a body toggles it out instead, so it doesn't grab. False on a miss.
     func grabGroup(at p: CGPoint, shift: Bool) -> Bool {
         guard selection.count > 1 else { return false }
-        let members = selectedAnnotations
-        let box = AnnotationGroup.bounds(of: members)
-        if let h = AnnotationGroup.handle(at: p, of: box, radius: Self.handleHitRadius / zoom,
-                                          minExtent: Self.handleMinExtent / zoom,
-                                          rotateOffset: Self.rotateOffset / zoom) {
-            gesture = .groupHandle(h, members, from: p)
-            return true
-        }
+        if grabGroupHandle(at: p) { return true }
         guard !shift, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
               selection.contains(hit.id) else { return false }
+        moveSelection(from: p, duplicate: selecting && NSEvent.modifierFlags.contains(.option))
+        return true
+    }
+
+    /// a press on the shared box's grips, with several selected, starts the
+    /// drag that resizes or rotates them all; false on a miss
+    func grabGroupHandle(at p: CGPoint) -> Bool {
+        guard selection.count > 1 else { return false }
+        let members = selectedAnnotations
+        let box = AnnotationGroup.bounds(of: members)
+        guard let h = AnnotationGroup.handle(at: p, of: box, radius: Self.handleHitRadius / zoom,
+                                             minExtent: Self.handleMinExtent / zoom,
+                                             rotateOffset: Self.rotateOffset / zoom) else { return false }
+        gesture = .groupHandle(h, members, from: p)
+        return true
+    }
+
+    /// a Select press that missed the grips, after Illustrator (WadjetKit's
+    /// SelectPress): on any Annotation it selects that one, or keeps the
+    /// selection it belongs to, and the drag moves the selection; ⇧ toggles
+    /// it; only empty canvas starts a marquee, adding under ⇧
+    func pressSelect(at p: CGPoint, shift: Bool) {
+        let press = SelectPress.resolve(at: p, in: stack.annotations, selection: selection,
+                                        shift: shift, tolerance: Self.hitTolerance / zoom)
+        setSelection(press.selection)
+        switch press.action {
+        case let .marquee(adding):
+            gesture = .marqueeSelect(from: p, to: p, adding: adding)
+        case .none:
+            AppLog.line("markup: deselected (\(selection.count))")
+        case .move:
+            AppLog.line("markup: grabbed the selection (\(selection.count))")
+            moveSelection(from: p, duplicate: NSEvent.modifierFlags.contains(.option))
+        }
+    }
+
+    /// the drag that moves every selected Annotation from `p`; `duplicate`
+    /// (⌥) copies them once the pointer moves. One Annotation moves on its
+    /// own, so a Magnify's source re-aims when the press was on it.
+    private func moveSelection(from p: CGPoint, duplicate: Bool) {
+        let members = selectedAnnotations
+        if members.count == 1, let sel = members.first {
+            snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds,
+                                    pixelSources: snapPixelSources)
+            gesture = duplicate ? .group(members, from: p, duplicate: true) : Self.moveGesture(sel, at: p)
+            return
+        }
         snapper = MarkupSnapper(stack: LayerStack(stack.annotations.filter { !selection.contains($0.id) }),
                                 excluding: nil, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-        gesture = .group(members, from: p, duplicate: selecting && NSEvent.modifierFlags.contains(.option))
-        return true
+        gesture = .group(members, from: p, duplicate: duplicate)
     }
 
     /// true over the shared box's grips or a selected Annotation's body —

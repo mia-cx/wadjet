@@ -787,26 +787,15 @@ final class MarkupController {
                     render()
                     return
                 }
-                // ⇧ on a grip constrains its drag; ⇧ on the body toggles it out below
-                if !constrained || sel.handle(at: p, radius: Self.handleHitRadius / zoom,
-                                              minExtent: Self.handleMinExtent / zoom,
-                                              rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil,
+                // a grip; ⇧ constrains its drag
+                if sel.handle(at: p, radius: Self.handleHitRadius / zoom,
+                              minExtent: Self.handleMinExtent / zoom,
+                              rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil,
                    grabSelection(at: p) { return }
             }
-            // the shared box's grips, or the body of any selected Annotation
-            if grabGroup(at: p, shift: constrained) { return }
-            // Illustrator's press: ⇧ toggles the hit in or out, a plain press
-            // selects it alone; on empty canvas a marquee starts, adding under ⇧
-            let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom)
-            selection = selection.clicking(hit?.id, shift: constrained)
-            guard let hit else {
-                gesture = .marqueeSelect(from: p, to: p, adding: constrained)
-                return
-            }
-            AppLog.line("markup: \(selection.contains(hit.id) ? "selected" : "deselected") (\(selection.count))")
-            guard !constrained, let sel = single else { return }
-            snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-            gesture = optionDuplicateGesture([sel], at: p) ?? Self.moveGesture(sel, at: p)
+            // the shared box's grips
+            if grabGroupHandle(at: p) { return }
+            pressSelect(at: p, shift: constrained)
             return
         }
         // what a placing Tool just placed stays selected: a press on its grips
