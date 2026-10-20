@@ -2,24 +2,24 @@ import CoreGraphics
 import Foundation
 
 /// One attached point or Annotation: `point` of the Annotation that holds this
-/// follows `anchor` on the Annotation `target`. Like tldraw's arrow bindings
+/// follows `spot` on the Annotation `target`. Like tldraw's arrow bindings
 /// and Excalidraw's bound elements, but held on the attaching side only — the
 /// target knows nothing, so deleting it just leaves the reference dangling,
 /// and the LayerStack drops it. ADR 0001 explains the choice.
 public struct Attachment: Equatable, Sendable {
     public var point: AttachPoint
     public var target: Annotation.ID
-    public var anchor: AttachAnchor
-    /// `.whole` only: the attaching Annotation's centre minus the anchor, in
+    public var spot: AttachSpot
+    /// `.whole` only: the attaching Annotation's centre minus the spot, in
     /// the target's unrotated frame — it turns with the target, never scales
     public var offset: CGVector
     /// `.whole` only: the attaching Annotation's rotation minus the target's
     public var turn: CGFloat
-    public init(point: AttachPoint, target: Annotation.ID, anchor: AttachAnchor,
+    public init(point: AttachPoint, target: Annotation.ID, spot: AttachSpot,
                 offset: CGVector = .zero, turn: CGFloat = 0) {
         self.point = point
         self.target = target
-        self.anchor = anchor
+        self.spot = spot
         self.offset = offset
         self.turn = turn
     }
@@ -36,12 +36,12 @@ public enum AttachPoint: Hashable, Sendable {
     case node(Int)
     /// a Line's bend, the on-curve point at t = 0.5
     case bend
-    /// the whole Annotation, kept at its offset from the anchor
+    /// the whole Annotation, kept at its offset from the spot
     case whole
 }
 
 /// where on the target an attachment holds
-public enum AttachAnchor: Equatable, Sendable {
+public enum AttachSpot: Equatable, Sendable {
     /// a position in the target's untransformed bounds, 0…1 on each axis from
     /// the bottom-left: (0, 0) and (1, 1) are corners, (0.5, 0) the bottom
     /// edge's midpoint. It rides the target's resize, rotation and flips, and
@@ -79,14 +79,14 @@ extension Attachment: Codable {
                 debugDescription: "an attachment names its point: start, end, node, bend, or whole"))
         }
         if c.contains(.frame) {
-            anchor = .frame(try c.decodePoint(forKey: .frame))
+            spot = .frame(try c.decodePoint(forKey: .frame))
         } else {
             let v = try c.decode([CGFloat].self, forKey: .segment)
             guard v.count == 2, let i = Int(exactly: v[0]) else {
                 throw DecodingError.dataCorruptedError(forKey: .segment, in: c,
-                    debugDescription: "a segment anchor is exactly [index, t]")
+                    debugDescription: "a segment spot is exactly [index, t]")
             }
-            anchor = .segment(i, t: v[1])
+            spot = .segment(i, t: v[1])
         }
     }
     public func encode(to encoder: Encoder) throws {
@@ -102,7 +102,7 @@ extension Attachment: Codable {
             try w.encodePoint(CGPoint(x: offset.dx, y: offset.dy), forKey: .offset)
             try w.encode(turn, forKey: .turn)
         }
-        switch anchor {
+        switch spot {
         case let .frame(u): try c.encodePoint(u, forKey: .frame)
         case let .segment(i, t): try c.encode([CGFloat(i), t], forKey: .segment)
         }
@@ -110,10 +110,10 @@ extension Attachment: Codable {
 }
 
 extension Annotation {
-    /// where `anchor` sits on this Annotation, on screen; nil for a segment
-    /// anchor on a kind without segments (a box)
-    public func position(of anchor: AttachAnchor) -> CGPoint? {
-        switch anchor {
+    /// where `spot` sits on this Annotation, on screen; nil for a segment
+    /// spot on a kind without segments (a box)
+    public func position(of spot: AttachSpot) -> CGPoint? {
+        switch spot {
         case let .frame(u):
             let b = kind.bounds
             return CGPoint(x: b.minX + u.x * b.width, y: b.minY + u.y * b.height).applying(affineTransform)
@@ -125,9 +125,9 @@ extension Annotation {
         }
     }
 
-    /// the frame anchor at screen point `p`: its position in the untransformed
+    /// the frame spot at screen point `p`: its position in the untransformed
     /// bounds, 0.5 on an axis the bounds have no extent on
-    public func frameAnchor(at p: CGPoint) -> AttachAnchor {
+    public func frameSpot(at p: CGPoint) -> AttachSpot {
         let b = kind.bounds, q = p.applying(affineTransform.inverted())
         return .frame(CGPoint(x: b.width == 0 ? 0.5 : (q.x - b.minX) / b.width,
                               y: b.height == 0 ? 0.5 : (q.y - b.minY) / b.height))
@@ -224,9 +224,9 @@ extension Annotation {
         return CGPoint(x: ns.x + zr * nc.dx - zi * nc.dy, y: ns.y + zr * nc.dy + zi * nc.dx)
     }
 
-    /// the segment anchor on this Line or path nearest screen point `p`;
+    /// the segment spot on this Line or path nearest screen point `p`;
     /// nil for kinds without segments
-    func nearestSegmentAnchor(to p: CGPoint) -> AttachAnchor? {
+    func nearestSegmentSpot(to p: CGPoint) -> AttachSpot? {
         let segs = kind.segments, q = p.applying(affineTransform.inverted())
         guard !segs.isEmpty else { return nil }
         func d2(_ i: Int, _ t: CGFloat) -> CGFloat {

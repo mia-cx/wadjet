@@ -1,14 +1,14 @@
 import CoreGraphics
 import Foundation
 
-/// one place a point can attach to: the target, the anchor that holds it, and where that is on screen
-public struct AttachSpot: Equatable, Sendable {
+/// one place a point can attach to: the target, the spot that holds it, and where that is on screen
+public struct AttachCandidate: Equatable, Sendable {
     public var target: Annotation.ID
-    public var anchor: AttachAnchor
+    public var spot: AttachSpot
     public var at: CGPoint
-    public init(target: Annotation.ID, anchor: AttachAnchor, at: CGPoint) {
+    public init(target: Annotation.ID, spot: AttachSpot, at: CGPoint) {
         self.target = target
-        self.anchor = anchor
+        self.spot = spot
         self.at = at
     }
 }
@@ -18,8 +18,8 @@ public struct AttachSpot: Equatable, Sendable {
 /// (nil while the point is over the target but near none of its spots or its outline)
 public struct AttachHover: Equatable, Sendable {
     public var target: Annotation
-    public var spots: [AttachSpot]
-    public var snapped: AttachSpot?
+    public var spots: [AttachCandidate]
+    public var snapped: AttachCandidate?
 }
 
 /// Finds attach targets for a dragged point: an Annotation's named spots
@@ -30,23 +30,23 @@ public enum AttachFinder {
     /// an ellipse's or counter's four edge midpoints, the ones on its
     /// outline; a polygon's or star's vertices; a Line's ends and middle; a
     /// path's nodes
-    public static func spots(on a: Annotation) -> [AttachSpot] {
-        func frame(_ u: [CGPoint]) -> [AttachSpot] {
-            u.compactMap { p in a.position(of: .frame(p)).map { AttachSpot(target: a.id, anchor: .frame(p), at: $0) } }
+    public static func spots(on a: Annotation) -> [AttachCandidate] {
+        func frame(_ u: [CGPoint]) -> [AttachCandidate] {
+            u.compactMap { p in a.position(of: .frame(p)).map { AttachCandidate(target: a.id, spot: .frame(p), at: $0) } }
         }
         let corners = [CGPoint(x: 0, y: 0), CGPoint(x: 1, y: 0), CGPoint(x: 1, y: 1), CGPoint(x: 0, y: 1)]
         let midpoints = [CGPoint(x: 0.5, y: 0), CGPoint(x: 1, y: 0.5), CGPoint(x: 0.5, y: 1), CGPoint(x: 0, y: 0.5)]
         switch a.kind {
         case .line:
             return [0, 0.5, 1].compactMap { t in
-                a.position(of: .segment(0, t: t)).map { AttachSpot(target: a.id, anchor: .segment(0, t: t), at: $0) }
+                a.position(of: .segment(0, t: t)).map { AttachCandidate(target: a.id, spot: .segment(0, t: t), at: $0) }
             }
         case let .path(d):
             let n = a.kind.segments.count
             guard n > 0 else { return [] }
-            var anchors = (0..<n).map { AttachAnchor.segment($0, t: 0) }
-            if !d.closed { anchors.append(.segment(n - 1, t: 1)) }
-            return anchors.compactMap { an in a.position(of: an).map { AttachSpot(target: a.id, anchor: an, at: $0) } }
+            var segs = (0..<n).map { AttachSpot.segment($0, t: 0) }
+            if !d.closed { segs.append(.segment(n - 1, t: 1)) }
+            return segs.compactMap { s in a.position(of: s).map { AttachCandidate(target: a.id, spot: s, at: $0) } }
         case .shape(.ellipse, _), .counter:
             return frame(midpoints)
         case let .shape(.polygon(sides), _):
@@ -69,15 +69,15 @@ public enum AttachFinder {
 
     /// the point on `a`'s outline nearest `p`: along a Line's or path's
     /// segments, or around a box's, shape's, or magnifier's edge
-    public static func nearestOnOutline(of a: Annotation, to p: CGPoint) -> AttachSpot? {
+    public static func nearestOnOutline(of a: Annotation, to p: CGPoint) -> AttachCandidate? {
         switch a.kind {
         case .line, .path:
-            guard let anchor = a.nearestSegmentAnchor(to: p) else { return nil }
-            return a.position(of: anchor).map { AttachSpot(target: a.id, anchor: anchor, at: $0) }
+            guard let spot = a.nearestSegmentSpot(to: p) else { return nil }
+            return a.position(of: spot).map { AttachCandidate(target: a.id, spot: spot, at: $0) }
         default:
             guard let q = nearest(on: outline(of: a), to: p) else { return nil }
-            let anchor = a.frameAnchor(at: q)
-            return a.position(of: anchor).map { AttachSpot(target: a.id, anchor: anchor, at: $0) }
+            let spot = a.frameSpot(at: q)
+            return a.position(of: spot).map { AttachCandidate(target: a.id, spot: spot, at: $0) }
         }
     }
 
@@ -98,8 +98,8 @@ public enum AttachFinder {
         let eligible = stack.annotations.reversed().filter {
             !$0.hidden && stack.canAttach(source, point, to: $0.id)
         }
-        func dist(_ s: AttachSpot) -> CGFloat { hypot(s.at.x - p.x, s.at.y - p.y) }
-        var named: (AttachSpot, Annotation, [AttachSpot])?
+        func dist(_ s: AttachCandidate) -> CGFloat { hypot(s.at.x - p.x, s.at.y - p.y) }
+        var named: (AttachCandidate, Annotation, [AttachCandidate])?
         for a in eligible {
             let spots = spots(on: a)
             if let s = spots.filter({ dist($0) <= radius }).min(by: { dist($0) < dist($1) }),

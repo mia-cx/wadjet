@@ -19,7 +19,7 @@ struct AttachFinderTests {
     @Test func dragOverABox() {
         let target = box(), arrow = Annotation(kind: .line(start: CGPoint(x: -90, y: -90), end: .zero), style: red4)
         let stack = LayerStack([target, arrow])
-        let rows: [(String, CGPoint, AttachAnchor?, Bool)] = [
+        let rows: [(String, CGPoint, AttachSpot?, Bool)] = [
             ("corner", CGPoint(x: 103, y: 52), .frame(CGPoint(x: 1, y: 1)), true),
             ("edge midpoint", CGPoint(x: 52, y: -4), .frame(CGPoint(x: 0.5, y: 0)), true),
             // 12 pt up the right edge: (1, 0.24) on the outline, no named spot within 8
@@ -32,7 +32,7 @@ struct AttachFinderTests {
             #expect((h != nil) == hovers, "\(name)")
             guard let h else { continue }
             #expect(h.target.id == target.id, "\(name)")
-            switch (h.snapped?.anchor, anchor) {
+            switch (h.snapped?.spot, anchor) {
             case (nil, nil): break
             case let (.frame(got)?, .frame(want)?):
                 #expect(near(got, want), "\(name): \(got)")
@@ -48,7 +48,7 @@ struct AttachFinderTests {
         let arrow = Annotation(kind: .line(start: CGPoint(x: 0, y: 80), end: CGPoint(x: 30, y: 50)), style: red4)
         var stack = LayerStack([target, arrow])
         let h = AttachFinder.hover(at: CGPoint(x: 30, y: 3), in: stack, attaching: arrow.id, .end, radius: 8)
-        guard case let .segment(i, t)? = h?.snapped?.anchor else { Issue.record("no segment anchor"); return }
+        guard case let .segment(i, t)? = h?.snapped?.spot else { Issue.record("no segment anchor"); return }
         #expect(i == 0 && abs(t - 0.3) < 1e-6)
 
         #expect(AttachFinder.hover(at: CGPoint(x: 0, y: 80), in: stack, attaching: arrow.id, .start, radius: 8) == nil)

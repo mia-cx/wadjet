@@ -1,6 +1,6 @@
 # Attachments live on the attaching Annotation, and geometry stays resolved
 
-An attached point or Annotation records its attachment on itself: which point (start, end, a node, a Line's bend, or the whole Annotation), the target's id, and an anchor on the target. The target records nothing. Every Annotation's geometry is still stored in absolute screen points, already resolved. The layer stack re-solves attachments after every change, so renderers, flattening, hit testing and snapping never read attachments. Undo works unchanged, because it snapshots the stack after the re-solve.
+An attached point or Annotation records its attachment on itself: which point (start, end, a node, a Line's bend, or the whole Annotation), the target's id, and a spot on the target. The target records nothing. Every Annotation's geometry is still stored in absolute screen points, already resolved. The layer stack re-solves attachments after every change, so renderers, flattening, hit testing and snapping never read attachments. Undo works unchanged, because it snapshots the stack after the re-solve.
 
 ## Considered Options
 
@@ -8,9 +8,9 @@ An attached point or Annotation records its attachment on itself: which point (s
 - **References on both sides (Excalidraw's `startBinding` on the arrow plus `boundElements` on the target).** The two sides can drift apart: a delete or an undo that touches one side and not the other leaves a stale reference. With one-sided references, a missing target is just a dangling id that the stack drops, so deleting a target frees its followers with no extra code.
 - **Storing attached geometry relative to the target.** Every reader would need the resolver, including the Canvas flattener, Quick Look, and builds from before attaching. Those older builds would draw attached Lines in the wrong place, where they now ignore the unknown `attachments` key and draw them correctly.
 
-## Anchors
+## Spots
 
-An anchor is either a position in the target's untransformed bounds, normalised 0…1 (tldraw's `normalizedAnchor`), or a segment index plus parameter on a Line or path. A corner is just (0, 0) or (1, 1), and an edge midpoint is (0.5, 0). Both kinds of anchor survive resize, rotation and flips. Points on an ellipse, polygon or star stay on its outline, because those shapes scale with their rect. A segment anchor survives reshaping, and splitting a segment at t maps it exactly. A corner or vertex index was the alternative, but it can't name a point along an edge, and it means something different on each kind.
+A spot is either a position in the target's untransformed bounds, normalised 0…1 (tldraw's `normalizedAnchor`), or a segment index plus parameter on a Line or path. A corner is just (0, 0) or (1, 1), and an edge midpoint is (0.5, 0). Both kinds of spot survive resize, rotation and flips. Points on an ellipse, polygon or star stay on its outline, because those shapes scale with their rect. A segment spot survives reshaping, and splitting a segment at t maps it exactly. A corner or vertex index was the alternative, but it can't name a point along an edge, and it means something different on each kind.
 
 ## Consequences
 

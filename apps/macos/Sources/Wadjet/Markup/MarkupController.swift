@@ -1140,11 +1140,11 @@ final class MarkupController {
         }
         // a dragged end dropped on an attach spot attaches there, in the drag's undo step
         if let (id, point) = draggedAttachPoint, let spot = attachHover?.snapped, !attachSuppressed {
-            stack.attach(id, point, to: spot.target, at: spot.anchor)
+            stack.attach(id, point, to: spot.target, at: spot.spot)
             AppLog.line("markup: attached \(point)")
         }
         if case let .moving(start, _) = gesture, let spot = attachHover?.snapped, !attachSuppressed {
-            stack.attach(start.id, .whole, to: spot.target, at: spot.anchor)
+            stack.attach(start.id, .whole, to: spot.target, at: spot.spot)
             AppLog.line("markup: attached a whole Annotation")
         }
         attachHover = nil
