@@ -75,9 +75,8 @@ struct MagnifyShapeControls: View {
 }
 
 extension ToolMenuView {
-    /// Magnify's rows below its style controls: Leader/Glass/Border toggles
-    /// and Reset Zoom keep the menu open, the Scaling radios behave like the
-    /// other pick rows and close it
+    /// Magnify's rows below its style controls: the Leader/Glass/Border
+    /// toggles, the Scaling radios, and Reset Zoom all keep the menu open
     @ViewBuilder func magnifyRows() -> some View {
         divider()
         MenuRow(title: "Leader Line", icon: "line.diagonal",

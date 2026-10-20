@@ -229,7 +229,6 @@ struct MarkupColourRow: View {
                     let c = styles.swatches[i]
                     MenuCell {
                         styles.useColour(c, for: tool, target: target)
-                        s.openMenu = nil; ctrl.syncMenu()
                     } content: {
                         Circle().fill(Color(red: c.red, green: c.green, blue: c.blue))
                             .overlay(Circle().stroke(.white.opacity(0.25), lineWidth: 0.5)) // black must read on dark glass

@@ -115,11 +115,11 @@ extension MarkupController {
 
 extension ToolMenuView {
     /// Censor's Smart Redact controls: Redact Now, then the category toggles.
-    /// Toggles keep the menu open, so they use MenuRow directly instead of `row`.
+    /// The category toggles keep the menu open; Redact Now runs once and closes it.
     @ViewBuilder func smartRedactRows() -> some View {
         section("Smart Redact") {
             row("Redact Now", icon: "wand.and.rays", on: false,
-                disabled: !MarkupController.active.canSmartRedact) {
+                disabled: !MarkupController.active.canSmartRedact, closes: true) {
                 MarkupController.active.smartRedact()
             }
             ForEach(SmartRedactCategory.menuOrder, id: \.self) { c in

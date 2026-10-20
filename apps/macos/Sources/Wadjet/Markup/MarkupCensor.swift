@@ -82,7 +82,7 @@ struct CensorControls: View {
         [[
             MenuTile(icon: CensorMethod.blackOut.variant.symbol, caption: CensorMethod.blackOut.variant.title, on: method == .blackOut) {
                 styles.setCensorMethod(.blackOut)
-                s.openMenu = nil; ctrl.syncMenu()
+                ctrl.fitMenu() // the strength slider leaves
             },
             MenuTile(icon: CensorMethod.defaultBlur.variant.symbol, caption: CensorMethod.defaultBlur.variant.title, on: isBlur) {
                 if !isBlur { styles.setCensorMethod(.defaultBlur) }
