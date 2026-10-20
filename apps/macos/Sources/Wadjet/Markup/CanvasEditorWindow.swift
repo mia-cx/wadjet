@@ -394,6 +394,13 @@ final class EditorCanvasView: NSView {
             }
             return
         }
+        // the Markup Tool Keys: one unmodified letter arms a Tool or variant —
+        // never while a text is being typed
+        if !state.recrop, doc.markup.editing == nil,
+           e.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+           e.charactersIgnoringModifiers?.count == 1,
+           let key = e.charactersIgnoringModifiers?.first.flatMap(MarkupToolKey.key(typing:)),
+           doc.markup.press(key) { return }
         super.keyDown(with: e)
     }
 
