@@ -70,6 +70,13 @@ import WadjetKit
         var seen = Set<Annotation.ID>()
         var ordered: [NSView] = []
         let renderScale = staticScale ?? scale
+        // live mode: one underlay per sync, so stacked Magnifies render once
+        let underlay = staticSources == nil
+            ? MagnifyUnderlay(annotations: annotations,
+                              base: { ScreenSamples.shared.sources(covering: $0) },
+                              scale: renderScale, images: MarkupController.onScreen.images,
+                              canvasPixels: MarkupController.onScreen.canvasPixels)
+            : nil
         for (i, a) in annotations.enumerated() {
             guard case let .magnify(m) = a.kind, m.frame.intersects(coverage),
                   let shape = layers[a.id] else { continue }
@@ -95,12 +102,10 @@ import WadjetKit
             } else {
                 // the panels never reach the screen samples: draw the
                 // Annotations beneath this Magnify over them
-                sources = ScreenSamples.shared.sources(covering: m.viewport)
-                if let u = MagnifyUnderlay.render(base: sources, below: Array(annotations[..<i]),
-                                                  rect: m.viewport, scale: renderScale,
-                                                  images: MarkupController.onScreen.images,
-                                                  canvasPixels: MarkupController.onScreen.canvasPixels) {
+                if let u = underlay?.source(forMagnifyAt: i) {
                     sources = [(CIImage(cgImage: u.image), u.frame)]
+                } else {
+                    sources = ScreenSamples.shared.sources(covering: m.viewport)
                 }
             }
             var content = MagnifyRenderer.content(m, sources: sources, scale: renderScale)

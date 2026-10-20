@@ -64,36 +64,115 @@ struct MagnifyBeneathTests {
         #expect(px.at(24, 8) == [255, 0, 0, 255], "got \(px.at(24, 8))")
     }
 
+    static func blueBase() throws -> [MagnifyRenderer.Source] {
+        [(CIImage(cgImage: try solid(0, 0, 255, width: 32, height: 16)), CGRect(x: 0, y: 0, width: 32, height: 16))]
+    }
+
+    // Proves a flatten with many Magnifies stacked over one source still
+    // shows the shape beneath them all — each lower lens resolves once per
+    // flatten (twelve would take 2^11 nested flattens without the cache).
+    @Test func flattenManyStackedMagnifies() throws {
+        let lenses = (0..<12).map { _ in Self.lens }.map { l -> Annotation in
+            var c = l; c.id = UUID(); return c
+        }
+        let start = Date()
+        let px = try rgba(try Self.document([Self.under] + lenses).flatten())
+        #expect(px.at(24, 8) == [255, 0, 0, 255], "got \(px.at(24, 8))")
+        #expect(Date().timeIntervalSince(start) < 10)
+    }
+
     // Proves the live underlay draws the visible Annotations below over the
     // screen pixels, and declines when none paints on the viewport.
     @Test func underlayDrawsAnnotationsOverBase() throws {
-        let base: [MagnifyRenderer.Source] = [(CIImage(cgImage: try solid(0, 0, 255, width: 32, height: 16)),
-                                              CGRect(x: 0, y: 0, width: 32, height: 16))]
-        let rect = CGRect(x: 0, y: 0, width: 8, height: 4)
-        let u = try #require(MagnifyUnderlay.render(base: base, below: [Self.under], rect: rect, scale: 1))
-        #expect(u.frame == rect)
+        let base = try Self.blueBase()
+        // the lens's viewport is (0,0)-(4,4) at 4× of a 4×4 source
+        func underlay(_ below: [Annotation]) -> CensorSource? {
+            MagnifyUnderlay(annotations: below + [Self.lens], base: { _ in base }, scale: 1)
+                .source(forMagnifyAt: below.count)
+        }
+        let half = Self.block(CGRect(x: 0, y: 0, width: 2, height: 4))
+        let u = try #require(underlay([half]))
+        #expect(u.frame == CGRect(x: 0, y: 0, width: 4, height: 4))
         let px = try rgba(u.image)
         #expect(px.at(1, 2) == [255, 0, 0, 255], "the shape: got \(px.at(1, 2))")
-        #expect(px.at(6, 2) == [0, 0, 255, 255], "the screen: got \(px.at(6, 2))")
-        #expect(MagnifyUnderlay.render(base: base, below: [], rect: rect, scale: 1) == nil)
-        #expect(MagnifyUnderlay.render(base: base, below: [Self.block(rect, hidden: true)],
-                                       rect: rect, scale: 1) == nil)
-        #expect(MagnifyUnderlay.render(base: base, below: [Self.block(CGRect(x: 20, y: 8, width: 2, height: 2))],
-                                       rect: rect, scale: 1) == nil)
+        #expect(px.at(3, 2) == [0, 0, 255, 255], "the screen: got \(px.at(3, 2))")
+        #expect(underlay([]) == nil)
+        #expect(underlay([Self.block(CGRect(x: 0, y: 0, width: 4, height: 4), hidden: true)]) == nil)
+        #expect(underlay([Self.block(CGRect(x: 20, y: 8, width: 2, height: 2))]) == nil)
+        // a layer above the lens never reaches it
+        #expect(MagnifyUnderlay(annotations: [Self.lens, half], base: { _ in base }, scale: 1)
+            .source(forMagnifyAt: 0) == nil)
     }
 
     // Proves the live underlay resolves an earlier Magnify against its own
-    // shorter prefix: its magnifier shows the shape beneath it.
+    // shorter prefix — its magnifier shows the shape beneath it — and asks the
+    // base for that Magnify's own viewport, so a lens sampling another display
+    // still finds its pixels.
     @Test func underlayMagnifiesAnEarlierMagnify() throws {
-        let base: [MagnifyRenderer.Source] = [(CIImage(cgImage: try solid(0, 0, 255, width: 32, height: 16)),
-                                              CGRect(x: 0, y: 0, width: 32, height: 16))]
-        let tiny = Self.block(CGRect(x: 0, y: 0, width: 2, height: 2))
-        let first = Self.magnify(source: CGRect(x: 0, y: 0, width: 2, height: 2),
+        // the screen is blue except where the base is asked for the first
+        // lens's own viewport — standing in for a second display
+        let green: [MagnifyRenderer.Source] = [(CIImage(cgImage: try solid(0, 255, 0, width: 2, height: 2)),
+                                                CGRect(x: 20, y: 10, width: 2, height: 2))]
+        let blue = try Self.blueBase()
+        let first = Self.magnify(source: CGRect(x: 20, y: 10, width: 2, height: 2),
                                  frame: CGRect(x: 4, y: 0, width: 4, height: 4), zoom: 2)
-        let u = try #require(MagnifyUnderlay.render(base: base, below: [tiny, first],
-                                                    rect: CGRect(x: 4, y: 0, width: 4, height: 4), scale: 1))
+        let second = Self.magnify(source: CGRect(x: 5, y: 1, width: 2, height: 2),
+                                  frame: CGRect(x: 16, y: 0, width: 16, height: 16), zoom: 8)
+        var asked: [CGRect] = []
+        let underlay = MagnifyUnderlay(annotations: [first, second], base: { r in
+            asked.append(r)
+            return r.intersects(CGRect(x: 20, y: 10, width: 2, height: 2)) ? green : blue
+        }, scale: 1)
+        let u = try #require(underlay.source(forMagnifyAt: 1))
         let px = try rgba(u.image)
-        #expect(px.at(2, 2) == [255, 0, 0, 255], "got \(px.at(2, 2))")
+        #expect(px.at(1, 1) == [0, 255, 0, 255], "got \(px.at(1, 1))")
+        #expect(asked.contains(CGRect(x: 20, y: 10, width: 2, height: 2)))
+    }
+
+    // Proves stacked Magnifies over one source render each lower prefix once:
+    // twelve lenses ask the base a linear number of times, not 2^n.
+    @Test func underlayRendersEachMagnifyOnce() throws {
+        let base = try Self.blueBase()
+        let lenses = (0..<12).map { _ in
+            Self.magnify(source: CGRect(x: 0, y: 0, width: 4, height: 4),
+                         frame: CGRect(x: 16, y: 0, width: 16, height: 16), zoom: 4)
+        }
+        var calls = 0
+        let underlay = MagnifyUnderlay(annotations: [Self.under] + lenses,
+                                       base: { _ in calls += 1; return base }, scale: 1)
+        for i in 1...12 { _ = underlay.source(forMagnifyAt: i) }
+        #expect(calls <= 12 * 2, "the base was asked \(calls) times")
+    }
+
+    // Proves the live underlay filters a Pixelate beneath the lens over the
+    // Censor's whole box, so the magnified blocks match the Censor itself.
+    @Test func underlayKeepsACensorsPixelGrid() throws {
+        // a horizontal ramp, so Pixelate's blocks differ
+        var ramp: [UInt8] = []
+        for _ in 0..<16 { for x in 0..<32 { ramp += [UInt8(x * 8), 0, 0, 255] } }
+        let provider = try #require(CGDataProvider(data: Data(ramp) as CFData))
+        let image = try #require(CGImage(width: 32, height: 16, bitsPerComponent: 8, bitsPerPixel: 32,
+            bytesPerRow: 128, space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.premultipliedLast.rawValue),
+            provider: provider, decode: nil, shouldInterpolate: false, intent: .defaultIntent))
+        let base: [MagnifyRenderer.Source] = [(CIImage(cgImage: image), CGRect(x: 0, y: 0, width: 32, height: 16))]
+        let censor = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 32, height: 16), method: .pixelate(blockSize: 4)),
+                                style: .init(colour: Self.red, width: 1))
+        // a lens over an off-grid interior slice of the Censor
+        let lens = Self.magnify(source: CGRect(x: 5, y: 5, width: 6, height: 6),
+                                frame: CGRect(x: 0, y: 0, width: 24, height: 24), zoom: 4)
+        let u = try #require(MagnifyUnderlay(annotations: [censor, lens], base: { _ in base }, scale: 1)
+            .source(forMagnifyAt: 1))
+        // the Censor drawn whole, then read at the same points
+        let ctx = try #require(CGContext(data: nil, width: 32, height: 16, bitsPerComponent: 8, bytesPerRow: 0,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedFirst.rawValue | CGBitmapInfo.byteOrder32Little.rawValue))
+        ctx.draw(censor, sources: [CensorSource(image: image, frame: CGRect(x: 0, y: 0, width: 32, height: 16))])
+        let whole = try rgba(try #require(ctx.makeImage()))
+        let part = try rgba(u.image)
+        for x in 0..<6 { for y in 0..<6 {
+            #expect(part.at(x, y) == whole.at(x + 5, y + 5), "at (\(x + 5), \(y + 5))")
+        } }
     }
 }
 

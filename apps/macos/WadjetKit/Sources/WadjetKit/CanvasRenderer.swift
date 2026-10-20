@@ -16,6 +16,19 @@ extension CanvasDocument {
     /// its asset through its crop, `.canvas` its `linkedDocuments` or
     /// `embeddedCanvases` entry, else its persisted snapshot.
     public func flatten(crop override: CGRect? = nil, scale: CGFloat = 1) throws -> CGImage {
+        try flatten(crop: override, scale: scale, cache: BeneathCache())
+    }
+
+    /// what one flatten has already rendered beneath each Magnify, by id and
+    /// scale: nested flattens keep a Magnify's whole lower prefix, so its
+    /// beneath render is the same wherever it recurs — without this, stacked
+    /// Magnifies re-render their prefixes exponentially
+    final class BeneathCache {
+        struct Key: Hashable { let id: Annotation.ID; let scale: CGFloat }
+        var sources: [Key: CensorSource?] = [:]
+    }
+
+    func flatten(crop override: CGRect?, scale: CGFloat, cache: BeneathCache) throws -> CGImage {
         let crop = override ?? self.crop
         guard Self.validRect(crop), scale.isFinite, scale > 0,
               cornerRadius.isFinite, cornerRadius >= 0 else { throw CanvasDocumentError.invalidGeometry }
@@ -86,9 +99,21 @@ extension CanvasDocument {
             var sources = displaySources
             if let box = annotation.sampledRect {
                 let below = Self.sampledBeneath(annotation, in: layerStack.annotations[..<index])
-                if !below.isEmpty, let b = try beneathSource(layers: below, rect: box, scale: scale) {
-                    sources = [b]
+                let b: CensorSource?
+                if below.isEmpty {
+                    b = nil
+                } else if case .magnify = annotation.kind {
+                    let key = BeneathCache.Key(id: annotation.id, scale: scale)
+                    if let hit = cache.sources[key] {
+                        b = hit
+                    } else {
+                        b = try beneathSource(layers: below, rect: box, scale: scale, cache: cache)
+                        cache.sources[key] = .some(b)
+                    }
+                } else {
+                    b = try beneathSource(layers: below, rect: box, scale: scale, cache: cache)
                 }
+                if let b { sources = [b] }
             }
             context.draw(annotation, sources: sources, images: images,
                          linkedDocuments: linkedDocuments, embeddedCanvases: embeddedCanvases,
@@ -126,6 +151,11 @@ extension CanvasDocument {
     /// valid — callers then keep the display sources unchanged.
     public func beneathSource(layers: [Annotation], rect: CGRect,
                             scale: CGFloat) throws -> CensorSource? {
+        try beneathSource(layers: layers, rect: rect, scale: scale, cache: BeneathCache())
+    }
+
+    func beneathSource(layers: [Annotation], rect: CGRect, scale: CGFloat,
+                       cache: BeneathCache) throws -> CensorSource? {
         let paints = layers.map { PathGeometry.coverage(for: $0).boundingBoxOfPath.intersects(rect) }
         guard paints.contains(true) else { return nil }
         // a sampling layer that paints here reads the layers beneath it
@@ -151,7 +181,7 @@ extension CanvasDocument {
         beneath.layerStack = LayerStack(touching)
         beneath.cornerRadius = 0
         beneath.windowLayers = windowLayers.filter { $0.id != nil }
-        let image = try beneath.flatten(crop: snapped, scale: density)
+        let image = try beneath.flatten(crop: snapped, scale: density, cache: cache)
         return CensorSource(image: image, frame: CGRect(
             origin: snapped.origin,
             size: CGSize(width: CGFloat(image.width) / density,
