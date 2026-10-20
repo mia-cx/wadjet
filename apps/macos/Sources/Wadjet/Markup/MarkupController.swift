@@ -1076,7 +1076,8 @@ final class MarkupController {
         return .movingSource(a, from: p)
     }
 
-    /// scroll over a selected Magnify's magnifier steps its zoom — a trackpad
+    /// scroll over a selected Magnify's magnifier steps its zoom, resizing the
+    /// lens — a trackpad
     /// gesture is one undo step, each wheel tick its own. A phased scroll
     /// stays with the magnifier it began on even when the pointer leaves it
     /// (Magic Mouse reports events to the view under the resting pointer).
@@ -1118,9 +1119,9 @@ final class MarkupController {
         guard steps != 0 else { return true }
         scrollResidual -= CGFloat(steps)
         var a = a
-        guard case var .magnify(m) = a.kind else { return true }
-        m.zoom = MagnifyZoom.stepped(m.effectiveZoom, by: steps)
-        a.kind = .magnify(m)
+        guard case let .magnify(m) = a.kind else { return true }
+        // the lens resizes about its centre; the source stays put
+        a.kind = .magnify(m.zoomed(to: MagnifyZoom.stepped(m.effectiveZoom, by: steps)))
         if e.phase == [] {
             edit { $0.replace(a) } // a wheel tick is its own undo step
         } else {

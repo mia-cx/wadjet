@@ -39,6 +39,9 @@ public enum SelectionHandle: Hashable, Sendable {
     /// a Pen node's bezier handle (outgoing steers the segment after the node)
     case tangent(Int, outgoing: Bool)
     case rotate
+    /// a Magnify's source grip, x and y as in `resize` over the source rect:
+    /// resizing the source keeps the lens's longest edge and lowers or raises the zoom
+    case source(x: Int, y: Int)
 }
 
 extension AnnotationKind {
@@ -108,11 +111,11 @@ extension AnnotationKind {
         }
     }
     /// resizes with one scale on both axes so it keeps its shape — counters
-    /// always; image kinds unless the drag passes `stretch`
+    /// and a Magnify's lens always; image kinds unless the drag passes `stretch`
     var keepsAspect: Bool {
         switch self {
-        case .counter, .window, .image, .canvas: true
-        case .line, .path, .censor, .shape, .magnify, .text: false
+        case .counter, .window, .image, .canvas, .magnify: true
+        case .line, .path, .censor, .shape, .text: false
         }
     }
     /// an upright box that mapPoints re-standardizes, so a negative resize
@@ -295,6 +298,20 @@ extension Annotation {
             // a 0 component leaves that axis alone; dragging past the anchor mirrors (negative scale)
             var sx = x == 0 || grip.x == anchor.x ? 1 : (p.x - anchor.x) / (grip.x - anchor.x)
             var sy = y == 0 || grip.y == anchor.y ? 1 : (p.y - anchor.y) / (grip.y - anchor.y)
+            if case let .magnify(m) = kind {
+                // the lens keeps the source's aspect; only the zoom changes.
+                // One magnitude for both axes, but each moving axis keeps its
+                // own sign, so a grip dragged past the anchor on that axis puts
+                // the lens on the pointer's side — the box re-standardizes and
+                // a Magnify never flips its content
+                let u = x == 0 ? abs(sy) : y == 0 ? abs(sx) : max(abs(sx), abs(sy))
+                let ux = x != 0 && sx < 0 ? -u : u, uy = y != 0 && sy < 0 ? -u : u
+                var new = self
+                new.kind = .magnify(m.resizingLens(to: m.frame.mapCorners {
+                    CGPoint(x: anchor.x + ($0.x - anchor.x) * ux, y: anchor.y + ($0.y - anchor.y) * uy)
+                }))
+                return new
+            }
             if kind.keepsAspect && !(stretch && placement != nil) {
                 // one scale for both axes: the grip's moving axis on an edge
                 // drag (the anchor is the middle, so it grows symmetrically),
@@ -324,6 +341,18 @@ extension Annotation {
         case .rotate:
             let c = CGPoint(x: kind.bounds.midX, y: kind.bounds.midY)
             return rotated(by: atan2(point.y - c.y, point.x - c.x) - atan2(start.y - c.y, start.x - c.x))
+        case let .source(x, y):
+            // the source's dragged edges follow the pointer's delta, at least
+            // 1 pt across so they never cross; the lens refits to it
+            guard case let .magnify(m) = kind else { return self }
+            let s = m.source, dx = point.x - start.x, dy = point.y - start.y
+            var minX = s.minX, maxX = s.maxX, minY = s.minY, maxY = s.maxY
+            if x < 0 { minX = min(minX + dx, maxX - 1) } else if x > 0 { maxX = max(maxX + dx, minX + 1) }
+            if y < 0 { minY = min(minY + dy, maxY - 1) } else if y > 0 { maxY = max(maxY + dy, minY + 1) }
+            var new = self
+            new.kind = .magnify(m.resizingSource(to: CGRect(x: minX, y: minY,
+                                                            width: maxX - minX, height: maxY - minY)))
+            return new
         }
     }
 
@@ -451,6 +480,22 @@ extension Annotation {
             return [(.resize(x: -1, y: 0), CGPoint(x: b.minX, y: b.midY).applying(m)),
                     (.resize(x: 1, y: 0), CGPoint(x: b.maxX, y: b.midY).applying(m)),
                     rotate]
+        // the lens's grips, then the source's: corners always, edge midpoints
+        // when the source is at least `minExtent` both ways
+        case let .magnify(mag):
+            let s = mag.source
+            var out = frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+            for x in [-1, 1] { for y in [-1, 1] {
+                out.append((.source(x: x, y: y), CGPoint(x: s.midX + CGFloat(x) * s.width / 2,
+                                                         y: s.midY + CGFloat(y) * s.height / 2)))
+            } }
+            if s.width >= minExtent && s.height >= minExtent {
+                for (x, y) in [(0, -1), (0, 1), (-1, 0), (1, 0)] {
+                    out.append((.source(x: x, y: y), CGPoint(x: s.midX + CGFloat(x) * s.width / 2,
+                                                             y: s.midY + CGFloat(y) * s.height / 2)))
+                }
+            }
+            return out
         default:
             return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
