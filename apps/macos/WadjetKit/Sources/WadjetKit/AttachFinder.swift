@@ -72,29 +72,7 @@ public enum AttachFinder {
     public static func nearestOnOutline(of a: Annotation, to p: CGPoint) -> AttachSpot? {
         switch a.kind {
         case .line, .path:
-            let segs = a.kind.segments, q = p.applying(a.affineTransform.inverted())
-            guard !segs.isEmpty else { return nil }
-            var best: (i: Int, t: CGFloat, d: CGFloat)?
-            func d2(_ i: Int, _ t: CGFloat) -> CGFloat {
-                let v = segs[i].strokePoint(at: t)
-                return (v.x - q.x) * (v.x - q.x) + (v.y - q.y) * (v.y - q.y)
-            }
-            let steps = 64
-            for i in segs.indices {
-                for k in 0...steps {
-                    let t = CGFloat(k) / CGFloat(steps), d = d2(i, t)
-                    if best == nil || d < best!.d { best = (i, t, d) }
-                }
-            }
-            guard let b = best else { return nil }
-            // golden-section refine around the best sample
-            var lo = max(0, b.t - 1 / CGFloat(steps)), hi = min(1, b.t + 1 / CGFloat(steps))
-            let g = (sqrt(5) - 1) / 2
-            for _ in 0..<40 {
-                let m1 = hi - g * (hi - lo), m2 = lo + g * (hi - lo)
-                if d2(b.i, m1) < d2(b.i, m2) { hi = m2 } else { lo = m1 }
-            }
-            let anchor = AttachAnchor.segment(b.i, t: (lo + hi) / 2)
+            guard let anchor = a.nearestSegmentAnchor(to: p) else { return nil }
             return a.position(of: anchor).map { AttachSpot(target: a.id, anchor: anchor, at: $0) }
         default:
             guard let q = nearest(on: outline(of: a), to: p) else { return nil }
