@@ -725,7 +725,8 @@ final class MarkupController {
             beginDirect(at: p, adding: constrained)
             return
         }
-        if armed == .select || command {
+        // Direct Select reaches here only for a double-click on Text or an image
+        if armed == .select || armed == .directSelect || command {
             if clickCount == 2, let hit = stack.topmost(at: p, tolerance: Self.hitTolerance / zoom),
                case .text = hit.kind {
                 gestureStart = nil // the text session records its own one step
