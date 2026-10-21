@@ -64,7 +64,7 @@ extension SelectionHandle {
 }
 
 extension Annotation {
-    /// how far a sides drag goes per side added or removed, in points
+    /// how far a sides drag goes per side added or removed, in on-screen points
     public static let sidesStep: CGFloat = 10
 
     /// the live-shape widgets on screen. A corner widget sits at its corner's
@@ -102,8 +102,10 @@ extension Annotation {
     /// travel along its bisector sets the radius (clamped to what the shape
     /// holds); the sides diamond adds a side per `sidesStep` dragged down,
     /// removes one per step up; the inner-radius dot follows the pointer
-    /// along the spoke. Ranges are the menu sliders'. Other handles return self.
-    func draggingShapeWidget(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint) -> Annotation {
+    /// along the spoke. Ranges are the menu sliders'. `zoom` (on-screen points
+    /// per Canvas point) keeps the sides step on screen. Other handles return self.
+    public func draggingShapeWidget(_ handle: SelectionHandle, from start: CGPoint, to point: CGPoint,
+                                    zoom: CGFloat = 1) -> Annotation {
         guard case let .shape(k, rect) = kind else { return self }
         let inv = affineTransform.inverted()
         let a = start.applying(inv), b = point.applying(inv)
@@ -117,7 +119,7 @@ extension Annotation {
             new.kind = .shape(k.setting(.cornerRadius, to: Double(radius)), rect: rect)
         case let (.sides, .polygon(n, _)):
             // the screen's down, whatever the shape's rotation
-            let steps = Int((-(point.y - start.y) / Self.sidesStep).rounded())
+            let steps = Int((-(point.y - start.y) * zoom / Self.sidesStep).rounded())
             let range = ShapeOption.sides.range
             new.kind = .shape(k.setting(.sides, to: min(max(Double(n + steps), range.lowerBound), range.upperBound)),
                               rect: rect)

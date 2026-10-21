@@ -66,6 +66,29 @@ struct ShapeWidgetsTests {
         #expect(r.kind == .shape(.polygon(sides: expected, cornerRadius: 6), rect: a.kind.bounds))
     }
 
+    // Proves the sides step counts on-screen travel: the same 20 on-screen
+    // points add two sides at any Editor zoom
+    @Test(arguments: [CGFloat(0.25), 1, 4])
+    func sidesAtZoom(zoom: CGFloat) throws {
+        let a = Self.shape(.polygon(sides: 5))
+        let w = try Self.widget(a, .sides)
+        let r = a.draggingShapeWidget(.sides, from: w, to: CGPoint(x: w.x, y: w.y - 20 / zoom), zoom: zoom)
+        #expect(r.kind == .shape(.polygon(sides: 7), rect: a.kind.bounds))
+    }
+
+    // Proves a rounded polygon offers its side middles to attach to, which
+    // stay on its outline, rather than the tips rounding cut away
+    @Test func roundedPolygonAttachSpots() {
+        let sharp = Self.shape(.polygon(sides: 3))
+        let rounded = Self.shape(.polygon(sides: 3, cornerRadius: 20))
+        #expect(AttachFinder.spots(on: sharp).contains { Self.near($0.at, CGPoint(x: 50, y: 100)) })
+        let spots = AttachFinder.spots(on: rounded)
+        #expect(spots.count == 3 && !spots.contains { Self.near($0.at, CGPoint(x: 50, y: 100)) })
+        let outline = PathGeometry.path(for: rounded).copy(strokingWithWidth: 0.5, lineCap: .butt,
+                                                           lineJoin: .miter, miterLimit: 10)
+        #expect(spots.allSatisfy { outline.contains($0.at) })
+    }
+
     // Proves the star's inner-radius dot sits on the top point's spoke at the
     // inner radius and follows the pointer along it, within the menu's range
     @Test(arguments: [(CGFloat(10), CGFloat(0.6)), (-10, 0.2), (200, 0.8)])
