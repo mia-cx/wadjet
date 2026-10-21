@@ -80,6 +80,9 @@ final class MarkupController {
         /// magnifier stays put
         case movingSource(Annotation, from: CGPoint)
         case handle(SelectionHandle, Annotation, from: CGPoint)
+        /// ⌥ on anchor `i`: release converts it unless the drag `pulled`
+        /// handles out — MarkupAnchorConvert.swift
+        case convertAnchor(Int, Annotation, from: CGPoint, pulled: Bool)
         /// a recrop grip drag: frame and crop edges move together
         case recrop(SelectionHandle, Annotation, from: CGPoint)
         /// a drag inside while recropping: the crop slides within the source
@@ -888,8 +891,9 @@ final class MarkupController {
 
     /// a press on the selection's grips or body starts the drag that adjusts
     /// it; false when the press missed it. `insertingNodes` (the Draw Tool):
-    /// an anchor, then a bend grip, then the stroke — where the press adds a
-    /// node and drags it — then a frame grip (`Annotation.drawPress`)
+    /// an anchor (⌥ converts it), then a curve handle, then a bend grip, then
+    /// the stroke — where the press adds a node and drags it — then a frame
+    /// grip (`Annotation.drawPress`)
     func grabSelection(at p: CGPoint, insertingNodes: Bool = false) -> Bool {
         guard let sel = single else { return false }
         let press: DrawPress? = if insertingNodes {
@@ -906,6 +910,8 @@ final class MarkupController {
             if drawAnchor != was { render() } // the anchor fills on the press
         }
         switch press {
+        case let .grip(.vertex(i))? where insertingNodes && beginConvertingAnchor(i, of: sel, at: p):
+            return true
         case let .grip(h)?:
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
             // dragging an attached end carries it away; the drop may attach it again
@@ -1048,6 +1054,8 @@ final class MarkupController {
             return
         case let .marquee(from, _, adding):
             gesture = .marquee(from: from, to: p, adding: adding)
+        case .convertAnchor:
+            dragConvertingAnchor(to: p, constrained: constrained)
         case let .handle(.tangent(i, out), start, from):
             // ⌥ breaks a smooth node into a corner; a Shape reshapes into its
             // outline path as the handle moves. An Annotation attached whole
@@ -1164,6 +1172,7 @@ final class MarkupController {
                 selection = [d.id] // stays selected for editing, the Tool still armed
             }
         }
+        endConvertingAnchor()
         // a dragged end dropped on an attach spot attaches there exactly, one
         // dropped inside a target loosely — in the drag's undo step
         dropAttaching()
@@ -1183,7 +1192,7 @@ final class MarkupController {
         // it stays its own undo step and the path inserts above it
         switch gesture {
         case nil, .pen, .brush: break
-        case .drawing, .moving, .movingSource, .handle, .recrop, .pan, .erasing, .cutting,
+        case .drawing, .moving, .movingSource, .handle, .convertAnchor, .recrop, .pan, .erasing, .cutting,
              .anchors, .marquee,
              .group, .groupHandle, .marqueeSelect: commitGesture()
         }

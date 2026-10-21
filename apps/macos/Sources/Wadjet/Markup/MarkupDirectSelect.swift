@@ -82,12 +82,16 @@ extension MarkupController {
         render()
     }
 
-    /// Illustrator's anchor press, then a drag that carries every selected anchor
+    /// Illustrator's anchor press, then a drag that carries every selected
+    /// anchor; with ⌥, a click converts the anchor and a drag pulls handles
     private func pressAnchor(_ ref: AnchorRef, at p: CGPoint, adding: Bool) {
         nodes.press(ref, adding: adding)
         // every path with a selected anchor stays in the Annotation selection
         let ids = [ref.id] + anchoredPaths
         setSelection(adding ? selection.adding(ids) : AnnotationSelection(ids))
+        // ⌥ converts the anchor instead of carrying it — MarkupAnchorConvert.swift
+        if !adding, let a = stack.annotations.first(where: { $0.id == ref.id }),
+           beginConvertingAnchor(ref.index, of: a, at: p) { render(); return }
         if nodes.anchors.contains(ref) {
             var starts: [Annotation.ID: (start: Annotation, indices: Set<Int>)] = [:]
             for a in stack.annotations where nodes.shown.contains(a.id) {
