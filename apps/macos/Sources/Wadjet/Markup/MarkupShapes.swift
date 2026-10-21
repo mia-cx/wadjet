@@ -47,6 +47,18 @@ import WadjetKit
         config.update { $0.markup.tools[k.variant.rawValue, default: .init()].shape = k }
     }
 
+    /// the selected shapes that have the option differ in it — its slider reads Mixed
+    static func mixed(_ o: ShapeOption) -> Bool {
+        Mixed(selectedShapes.compactMap { $0.value(of: o) })?.isMixed == true
+    }
+
+    /// one option set on every selected shape that has it, each keeping its
+    /// other options; with no shape selected, on the variant's remembered shape
+    static func set(_ o: ShapeOption, to v: Double) {
+        guard selectedShapes.isEmpty else { setEach { $0.setting(o, to: v) }; return }
+        setShape(shape(for: variant).setting(o, to: v))
+    }
+
     /// each selected shape's kind replaced, its rect kept — one undo step
     private static func setEach(_ change: (ShapeKind) -> ShapeKind) {
         MarkupController.active.transformSelection { a in
@@ -83,27 +95,19 @@ struct ShapeVariantControls: View {
             }
             switch MarkupShapes.variant {
             case .rectangle:
-                slider(icon: "square.dashed", label: "Corner radius", text: "\(Int(radius)) pt",
-                       value: $radius, range: 0...40, step: 1) {
-                    MarkupShapes.setShape(.rectangle(cornerRadius: radius))
-                }
+                slider(.cornerRadius, icon: "square.dashed", label: "Corner radius", text: "\(Int(radius)) pt",
+                       value: $radius, range: 0...40, step: 1)
             case .ellipse:
                 EmptyView()
             case .polygon:
-                slider(icon: "pentagon", label: "Sides", text: "\(Int(sides))",
-                       value: $sides, range: 3...12, step: 1) {
-                    MarkupShapes.setShape(.polygon(sides: Int(sides)))
-                }
+                slider(.sides, icon: "pentagon", label: "Sides", text: "\(Int(sides))",
+                       value: $sides, range: 3...12, step: 1)
             case .star:
-                slider(icon: "star", label: "Points", text: "\(Int(points))",
-                       value: $points, range: 3...12, step: 1) {
-                    commitStar()
-                }
-                slider(icon: "star.leadinghalf.filled", label: "Inner radius",
+                slider(.points, icon: "star", label: "Points", text: "\(Int(points))",
+                       value: $points, range: 3...12, step: 1)
+                slider(.innerRatio, icon: "star.leadinghalf.filled", label: "Inner radius",
                        text: "\(Int((innerRatio * 100).rounded()))%",
-                       value: $innerRatio, range: 0.2...0.8, step: 0.05) {
-                    commitStar()
-                }
+                       value: $innerRatio, range: 0.2...0.8, step: 0.05)
             }
         }
         .onAppear(perform: seed)
@@ -114,12 +118,14 @@ struct ShapeVariantControls: View {
         }
     }
 
-    func commitStar() { MarkupShapes.setShape(.star(points: Int(points), innerRatio: innerRatio)) }
-
-    func slider(icon: String, label: String, text: String, value: Binding<Double>,
-                range: ClosedRange<Double>, step: Double, commit: @escaping () -> Void) -> some View {
-        MenuSliderRow(icon: icon, label: label, text: text,
-                      value: value, range: range, step: step, editing: $editing, commit: commit)
+    /// a slider that reads "Mixed" while the selected shapes differ in its
+    /// option, and on release sets that option alone on all of them
+    func slider(_ o: ShapeOption, icon: String, label: String, text: String, value: Binding<Double>,
+                range: ClosedRange<Double>, step: Double) -> some View {
+        MenuSliderRow(icon: icon, label: label, text: MarkupShapes.mixed(o) && !editing ? "Mixed" : text,
+                      value: value, range: range, step: step, editing: $editing) {
+            MarkupShapes.set(o, to: value.wrappedValue)
+        }
     }
 
     /// reads the current variant's option into the sliders

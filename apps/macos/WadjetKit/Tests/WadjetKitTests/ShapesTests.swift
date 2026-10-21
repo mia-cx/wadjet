@@ -82,4 +82,18 @@ struct ShapesTests {
         let r2 = flipped.dragging(.resize(x: 0, y: 1), from: CGPoint(x: 50, y: 100), to: CGPoint(x: 50, y: -100))
         #expect(r2.transform.flipHorizontal && r2.transform.flipVertical)
     }
+
+    // Proves a Shapes slider reads one option across a multi-selection: the
+    // same value, Mixed, or nothing for variants without it; and setting it
+    // changes that option alone, leaving other variants and fields be.
+    @Test func optionAcrossSelection() {
+        let shapes: [ShapeKind] = [.star(points: 5, innerRatio: 0.4), .star(points: 7, innerRatio: 0.4), .ellipse]
+        #expect(Mixed(shapes.compactMap { $0.value(of: .points) }) == .mixed)
+        #expect(Mixed(shapes.compactMap { $0.value(of: .innerRatio) }) == .same(0.4))
+        #expect(Mixed(shapes.compactMap { $0.value(of: .sides) }) == nil)
+        let set = shapes.map { $0.setting(.points, to: 6) }
+        #expect(set == [.star(points: 6, innerRatio: 0.4), .star(points: 6, innerRatio: 0.4), .ellipse])
+        #expect(ShapeKind.rectangle(cornerRadius: 0).setting(.cornerRadius, to: 8) == .rectangle(cornerRadius: 8))
+        #expect(ShapeKind.polygon(sides: 5).setting(.innerRatio, to: 0.5) == .polygon(sides: 5))
+    }
 }
