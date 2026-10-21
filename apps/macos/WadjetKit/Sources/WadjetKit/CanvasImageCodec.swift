@@ -39,8 +39,7 @@ public enum CanvasImageCodec {
     /// pressure ImageIO can unmap that block while CoreGraphics is still
     /// copying from it (SIGSEGV/SIGBUS in `imageProvider_getBytesAtPosition`).
     /// A Canvas keeps its images while its Editor is open, so it copies once.
-    /// Where ImageIO can't hand its pixels over (CI's virtual Macs), the lazy
-    /// image is returned unchanged.
+    /// Where ImageIO can't hand its pixels over, the lazy image is returned unchanged.
     static func owningPixels(_ lazy: CGImage) -> CGImage {
         guard let pixels = lazy.dataProvider?.data,
               let provider = CGDataProvider(data: pixels),
@@ -50,8 +49,10 @@ public enum CanvasImageCodec {
                 bytesPerRow: lazy.bytesPerRow, space: space, bitmapInfo: lazy.bitmapInfo,
                 provider: provider, decode: lazy.decode, shouldInterpolate: lazy.shouldInterpolate,
                 intent: lazy.renderingIntent) else { return lazy }
-        guard lazy.contentHeadroom > 0 else { return owned }
-        return CGImageCreateCopyWithContentHeadroom(lazy.contentHeadroom, owned) ?? lazy
+        // Only PQ, HLG, and extended colour spaces take a headroom tag; SDR
+        // headroom 1 needs none, so a refused retag keeps the owned copy.
+        guard lazy.contentHeadroom > 0, owned.contentHeadroom != lazy.contentHeadroom else { return owned }
+        return CGImageCreateCopyWithContentHeadroom(lazy.contentHeadroom, owned) ?? owned
     }
 
     /// Encodes an SDR PNG in Display P3 so wide-gamut Screenshots retain their
