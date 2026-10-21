@@ -25,11 +25,31 @@ public enum CanvasImageCodec {
 
     static func decode(_ data: Data) throws -> CGImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [
+              let lazy = CGImageSourceCreateImageAtIndex(source, 0, [
                 kCGImageSourceDecodeRequest: kCGImageSourceDecodeToHDR,
                 kCGImageSourceShouldAllowFloat: true,
-              ] as CFDictionary) else { throw CanvasDocumentError.imageDecodingFailed }
+                kCGImageSourceShouldCache: false,
+              ] as CFDictionary),
+              let image = owningPixels(lazy) else { throw CanvasDocumentError.imageDecodingFailed }
         return image
+    }
+
+    /// Copies an ImageIO image into pixels it owns. A lazily decoded image
+    /// reads from an ImageIO cache block on every draw, and under memory
+    /// pressure ImageIO can unmap that block while CoreGraphics is still
+    /// copying from it (SIGSEGV/SIGBUS in `imageProvider_getBytesAtPosition`).
+    /// A Canvas keeps its images while its Editor is open, so it copies once.
+    static func owningPixels(_ lazy: CGImage) -> CGImage? {
+        guard let pixels = lazy.dataProvider?.data,
+              let provider = CGDataProvider(data: pixels),
+              let space = lazy.colorSpace,
+              let owned = CGImage(width: lazy.width, height: lazy.height,
+                bitsPerComponent: lazy.bitsPerComponent, bitsPerPixel: lazy.bitsPerPixel,
+                bytesPerRow: lazy.bytesPerRow, space: space, bitmapInfo: lazy.bitmapInfo,
+                provider: provider, decode: lazy.decode, shouldInterpolate: lazy.shouldInterpolate,
+                intent: lazy.renderingIntent) else { return nil }
+        guard lazy.contentHeadroom > 0 else { return owned }
+        return CGImageCreateCopyWithContentHeadroom(lazy.contentHeadroom, owned)
     }
 
     /// Encodes an SDR PNG in Display P3 so wide-gamut Screenshots retain their
