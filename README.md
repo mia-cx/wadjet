@@ -27,7 +27,7 @@ What works today:
   Window Capture reaches the real window through the Freeze Frame.
 - HDR Freeze Frames and HDR Screenshots on HDR displays, with HEIC gain-map output.
 - Pick colour, Copy text via Vision OCR, and Measure copy their results to the clipboard.
-- Thumbnail toasts and Pin, with floating Screenshots you can move, pan, zoom, and resize.
+- Thumbnail toasts that open the Editor, and Pin to screen, which places a Screenshot on screen as a Markup image.
 - A toolbar on every display, integrated with the notch or a fake Dynamic Island, expanding on hover.
 
 Recording controls work, but Recording writes no video file yet, only a thumbnail.

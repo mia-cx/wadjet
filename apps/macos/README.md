@@ -66,7 +66,7 @@ shortcut is still registered but flagged with a toast and a log line.
 `defaultWorkflows.screenshot` / `.recording` pick the Workflow each kind runs when
 neither a Shortcut nor the tool's menu overrides it.
 - Esc cancels by priority: open Workflow menu > overlay > countdown > in-flight toast > idle
-  toast > Pin. A global Esc hotkey is registered only while something cancellable is active —
+  toast. A global Esc hotkey is registered only while something cancellable is active —
   it is never claimed while recording, so Esc reaches the app being recorded.
 - The remaining Tools live in the eye menu and the toolbar.
 
@@ -112,10 +112,9 @@ only while the overlay is up or at known app windows.
   (red dot + time); the "Show Island While Recording" option toggles only the island.
   Countdown supported; Esc during countdown cancels.
 - Toasts: iOS-style thumbnail card top-right, status chip, detail line, duration badge on
-  recordings; slide-in, hover pauses, click opens Preview, drag dismisses, stacks to 3.
+  recordings; slide-in, hover pauses, click opens the Canvas in the Editor, drag dismisses, stacks to 3.
   Text-only toasts (Copy Text, Pick Colour) are compact dark pills.
-- Pin: borderless floating panel, drag to move, scroll to pan, pinch to zoom, edge resize,
-  Esc or double-click to close.
+- Pin: places the Screenshot's Canvas where it was captured, as a Markup image Annotation.
 
 ## What's simulated
 
