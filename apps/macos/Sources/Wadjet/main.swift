@@ -2169,6 +2169,7 @@ final class OverlayController {
         AppLog.line("chrome: \(toolbarPanels.count) islands, \(recBubblePanels.count) bubbles on \(chromeScreens.count) screens")
     }
     func closeAllPanelsOnly() {
+        panels.forEach { $0.contentView?.subviews.compactMap { $0 as? OverlayNSView }.forEach { $0.hideConfirmChrome() } }
         panels.forEach { $0.close() }
         panels = []; frozenImageViews = []
         hideMenu()
@@ -2307,7 +2308,7 @@ final class OverlayNSView: NSView {
     // manual region confirm: after mouse-up the selection stays editable —
     // 8 handles resize, a drag inside moves, the button / Return confirms
     var confirming = false
-    var confirmHost: NSView?
+    var chrome: ConfirmChrome?
     enum SelHandle: CaseIterable { case n, s, e, w, ne, nw, se, sw
         func point(in r: CGRect) -> CGPoint {
             CGPoint(x: contains(.w) ? r.minX : contains(.e) ? r.maxX : r.midX,
@@ -2330,37 +2331,21 @@ final class OverlayNSView: NSView {
         if h.contains(.s) { let m = r.maxY; r.origin.y = min(pt.y, m - 8); r.size.height = m - r.minY }
         return r
     }
+    /// the button, outline, handles and dimensions ride their own panels above
+    /// the Markup panels — ConfirmChrome.swift
     func showConfirmHost() {
-        confirmHost?.removeFromSuperview()
+        chrome?.close()
         let freeze = AppState.shared.tool == .freezeRegion
         let label = freeze ? "Freeze" : tool == .capRegion ? "Capture" : "Record"
         let sym = freeze ? "snowflake" : tool == .capRegion ? "camera.fill" : "record.circle"
-        let v = Button { [weak self] in self?.confirmSel() } label: {
-            Image(systemName: sym).font(.system(size: 13, weight: .semibold))
-                .foregroundStyle(.white).frame(width: 30, height: 30)
-                .glassEffect(.regular.interactive(), in: .circle)
-        }
-        .buttonStyle(.plain)
-        .onContinuousHover { ph in
-            if case .active = ph {
-                TipPanel.hover(label, anchor: self.confirmScreenRect())
-            } else { TipPanel.hide() }
-        }
-        let h = NSHostingView(rootView: v); h.frame.size = h.fittingSize
-        addSubview(h); confirmHost = h; positionConfirmHost()
+        chrome = ConfirmChrome(overlay: self, label: label, symbol: sym) { [weak self] in self?.confirmSel() }
+        positionConfirmHost()
     }
-    func confirmScreenRect() -> CGRect {
-        guard let h = confirmHost, let w = window else { return .zero }
-        return w.convertToScreen(h.convert(h.bounds, to: nil))
-    }
-    /// the confirm circle sits just outside the selection's bottom-trailing
-    /// corner, clamped into the overlay
     func positionConfirmHost() {
-        guard let h = confirmHost, let s = sel else { return }
-        h.frame.origin = CGPoint(
-            x: min(bounds.width - 38, s.maxX + 8),
-            y: max(8, s.minY - 38))
+        guard let c = chrome, let s = sel else { return }
+        c.layout(sel: s, in: self)
     }
+    func hideConfirmChrome() { chrome?.close(); chrome = nil }
     /// manual-confirm bookkeeping for a Tool switch: the pending selection
     /// belongs to the Tool it was drawn under — the real Tool and the pick it
     /// borrows, so a Freeze Region selection can't come out as a Capture shot
@@ -2371,7 +2356,7 @@ final class OverlayNSView: NSView {
             lastOwner = owner
             if confirming {
                 confirming = false; selOp = nil; sel = nil
-                confirmHost?.removeFromSuperview(); confirmHost = nil
+                hideConfirmChrome()
                 needsDisplay = true
             }
         }
@@ -2380,7 +2365,7 @@ final class OverlayNSView: NSView {
         guard confirming, let s = sel,
               tool == .capRegion || tool == .recRegion else { return }
         confirming = false; selOp = nil
-        confirmHost?.removeFromSuperview(); confirmHost = nil
+        hideConfirmChrome()
         app?.didSelect(s, on: di) // the exact release path
     }
     init(frame f: NSRect, displayIndex: Int, controller: OverlayController) {
@@ -2425,29 +2410,38 @@ final class OverlayNSView: NSView {
             if let target { p.append(target); p.windingRule = .evenOdd }
             NSColor.black.withAlphaComponent(alpha).setFill(); p.fill()
         }
-        if let s = sel, t == .capRegion || t == .recRegion || t == .copyText {
-            NSColor.white.withAlphaComponent(0.8).setStroke()
-            let p = NSBezierPath(rect: s); p.lineWidth = 0.5; p.stroke()
-            if confirming {
-                NSColor.white.setFill()
-                for h in SelHandle.allCases {
-                    let c = h.point(in: s)
-                    NSBezierPath(rect: CGRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)).fill()
-                }
-            }
-        }
+        // while confirming, the chrome's own panel above the Annotations draws these
+        if chrome == nil { drawSelectionOutline() }
         if t == .measure { drawMeasure() }
         if !overToolbar && t != .measure && t.kind != .markup { drawLoupe(ctx) }
-        if let s = sel, t == .capRegion || t == .recRegion {
-            let str = "\(Int(s.width)) × \(Int(s.height))"
-            let at = CGPoint(x: min(bounds.width - 90, s.maxX + 8), y: min(bounds.height - 26, s.maxY + 8))
-            drawBadge(str, at: at)
-        }
+        if chrome == nil { drawSelectionBadge() }
         // the ruler label carries the flash itself, so it never draws twice
         if let f = flash, Date() < f.until, !(t == .measure && measureMode != "Bounds") {
             drawBadge(f.text, at: CGPoint(x: min(bounds.width - 160, hoverPt.x + 18), y: min(bounds.height - 30, hoverPt.y + 18)))
         }
     }
+    /// the selection's outline, plus the 8 handles while confirming
+    func drawSelectionOutline() {
+        guard let s = sel, tool == .capRegion || tool == .recRegion || tool == .copyText else { return }
+        NSColor.white.withAlphaComponent(0.8).setStroke()
+        let p = NSBezierPath(rect: s); p.lineWidth = 0.5; p.stroke()
+        if confirming {
+            NSColor.white.setFill()
+            for h in SelHandle.allCases {
+                let c = h.point(in: s)
+                NSBezierPath(rect: CGRect(x: c.x - 3, y: c.y - 3, width: 6, height: 6)).fill()
+            }
+        }
+    }
+    /// the selection's dimensions, above its top-trailing corner
+    func drawSelectionBadge() {
+        guard let s = sel, tool == .capRegion || tool == .recRegion else { return }
+        let str = "\(Int(s.width)) × \(Int(s.height))"
+        let at = CGPoint(x: min(bounds.width - 90, s.maxX + 8), y: min(bounds.height - 26, s.maxY + 8))
+        drawBadge(str, at: at)
+    }
+    /// what ConfirmChromeView draws for this overlay, in the same coords
+    func drawConfirmChrome() { drawSelectionOutline(); drawSelectionBadge() }
     func setFlash(_ text: String) {
         flash = (text, Date().addingTimeInterval(1.2))
         needsDisplay = true
@@ -2674,7 +2668,7 @@ final class OverlayNSView: NSView {
                 else if let s = sel, s.contains(pt) { selOp = .move(start: pt, sel: s) }
                 else {
                     confirming = false; selOp = nil
-                    confirmHost?.removeFromSuperview(); confirmHost = nil
+                    hideConfirmChrome()
                     dragStart = pt; sel = CGRect(origin: pt, size: .zero)
                 }
             } else { dragStart = pt; sel = CGRect(origin: pt, size: .zero) }
