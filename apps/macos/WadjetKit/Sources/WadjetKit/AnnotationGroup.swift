@@ -8,8 +8,9 @@ import Foundation
 /// so a long drag can't drift. Strokes keep their width, as Illustrator's
 /// default "Scale Strokes" is off.
 public enum AnnotationGroup {
-    /// the smallest extent a group resize leaves on an axis — dragging a grip
-    /// past the opposite edge stops here instead of collapsing or mirroring
+    /// the smallest extent a group resize leaves on an axis: a grip dragged
+    /// onto the opposite edge never collapses the group, and one dragged past
+    /// it mirrors the group, as Illustrator's does
     public static let minExtent: CGFloat = 1
 
     /// the axis-aligned box around every Annotation's on-screen frame
@@ -92,16 +93,20 @@ public enum AnnotationGroup {
         let target = CGPoint(x: grip.x + point.x - start.x, y: grip.y + point.y - start.y)
         func scale(_ moving: Int, _ t: CGFloat, _ g: CGFloat, _ a: CGFloat, _ extent: CGFloat) -> CGFloat {
             guard moving != 0, g != a else { return 1 }
-            // never past a sliver: a grip dragged across the anchor stops there
-            return max((t - a) / (g - a), minExtent / extent)
+            // past the anchor the scale turns negative and mirrors; near it,
+            // never thinner than a sliver on either side
+            let s = (t - a) / (g - a), floor = minExtent / extent
+            return abs(s) >= floor ? s : s < 0 ? -floor : floor
         }
         var sx = scale(x, target.x, grip.x, anchor.x, b.width)
         var sy = scale(y, target.y, grip.y, anchor.y, b.height)
         if proportional {
-            // an edge grip scales both axes by its own; a corner by the larger
-            let u = x == 0 ? sy : y == 0 ? sx : max(sx, sy)
-            sx = b.width == 0 ? 1 : u
-            sy = b.height == 0 ? 1 : u
+            // an edge grip scales both axes by its own; a corner by the
+            // larger. A moving axis keeps its sign, so it can still mirror;
+            // an edge grip's other axis grows without mirroring
+            let u = x == 0 ? abs(sy) : y == 0 ? abs(sx) : max(abs(sx), abs(sy))
+            sx = b.width == 0 ? 1 : x != 0 && sx < 0 ? -u : u
+            sy = b.height == 0 ? 1 : y != 0 && sy < 0 ? -u : u
         }
         return scaled(annotations, x: sx, y: sy, about: anchor)
     }
@@ -140,15 +145,32 @@ extension Annotation {
     public var centre: CGPoint { CGPoint(x: kind.bounds.midX, y: kind.bounds.midY) }
 
     /// scaled by `sx`, `sy` about `anchor` in screen space, its rotation kept.
-    /// The centre lands exactly where the scale takes it. The size scales along
-    /// the Annotation's own axes: exactly when it's upright, quarter-turned, or
-    /// scaled evenly; otherwise by how much each of its axes stretches, since
-    /// an Annotation can't skew. Kinds that keep their aspect (counters,
-    /// images, windows) take the axis that changes most.
+    /// The centre lands exactly where the scale takes it. A negative scale
+    /// mirrors the Annotation on screen as Flip does. A Line or path at an
+    /// angle the scale would skew takes the scale into its points exactly,
+    /// keeping its rotation, as Illustrator bakes a group scale into its paths.
+    /// Any other kind scales along its own axes: exactly when it's upright,
+    /// quarter-turned, or scaled evenly; otherwise by how much each of its
+    /// axes stretches, since a box can't skew. Kinds that keep their aspect
+    /// (counters, images, windows) take the axis that changes most.
     public func scaled(x sx: CGFloat, y sy: CGFloat, about anchor: CGPoint) -> Annotation {
         let c = centre
         let target = CGPoint(x: anchor.x + (c.x - anchor.x) * sx, y: anchor.y + (c.y - anchor.y) * sy)
         let r = kind.transforms ? transform.rotation : 0
+        if kind.isPoints, abs(sx) != abs(sy), abs(sin(2 * r)) > 1e-9 {
+            // the screen-space scale applied to the drawn points, then taken
+            // back into geometry under the same rotation and flips: exact,
+            // skew included, and a whole follower's frame doesn't jump
+            let m = affineTransform, inv = m.inverted()
+            let s = CGAffineTransform(translationX: anchor.x, y: anchor.y)
+                .scaledBy(x: sx, y: sy).translatedBy(x: -anchor.x, y: -anchor.y)
+            var a = self
+            a.kind = kind.mapPoints { $0.applying(m).applying(s).applying(inv) }
+            // the bounds centre is the pivot and it moved: pin one point back
+            guard let p0 = kind.points.first, let g0 = a.kind.points.first else { return a }
+            let want = p0.applying(m).applying(s), now = g0.applying(a.affineTransform)
+            return a.moved(by: CGVector(dx: want.x - now.x, dy: want.y - now.y))
+        }
         // the lengths the scale gives the Annotation's own unit axes
         var lx = hypot(sx * cos(r), sy * sin(r)), ly = hypot(sx * sin(r), sy * cos(r))
         if kind.keepsAspect {
@@ -157,6 +179,10 @@ extension Annotation {
         }
         var a = self
         a.kind = kind.mapPoints { CGPoint(x: c.x + ($0.x - c.x) * lx, y: c.y + ($0.y - c.y) * ly) }
+        if kind.transforms {
+            if sx < 0 { a = a.flipped(horizontally: true) }
+            if sy < 0 { a = a.flipped(horizontally: false) }
+        }
         // Text and counters rebuild their box, so re-centre on the target
         let now = a.centre
         return a.moved(by: CGVector(dx: target.x - now.x, dy: target.y - now.y))

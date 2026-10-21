@@ -132,6 +132,13 @@ extension AnnotationKind {
         case .censor, .shape, .counter, .magnify, .window, .image, .canvas: true
         }
     }
+    /// drawn from its points alone, so any affine map of them is exact
+    var isPoints: Bool {
+        switch self {
+        case .line, .path: true
+        case .censor, .shape, .counter, .magnify, .window, .image, .canvas, .text: false
+        }
+    }
     /// whether rotation and flips apply — a Magnify's frame only moves and
     /// resizes, so its transform stays identity and it hides the rotate grip
     public var transforms: Bool {

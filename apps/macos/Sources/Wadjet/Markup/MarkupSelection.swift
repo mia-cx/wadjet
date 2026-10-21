@@ -340,8 +340,8 @@ extension MarkupController {
         return (s, copies)
     }
 
-    /// ⌘C: the selection onto the clipboard as Annotations wadjet pastes back
-    /// (other apps see nothing new); false with nothing selected
+    /// ⌘C: the selection onto the clipboard as Annotations wadjet pastes back,
+    /// plus an image of them for other apps; false with nothing selected
     @discardableResult
     func copySelection() -> Bool {
         guard !selection.isEmpty else { return false }
@@ -359,7 +359,7 @@ extension MarkupController {
     }
 
     /// pastes the copied Annotations centred on `p` as one undo step,
-    /// selected with Select armed; false unless the clipboard holds wadjet's copy
+    /// selected with Select armed; false unless the clipboard holds Annotations wadjet copied
     func pasteAnnotations(from pb: NSPasteboard, at p: CGPoint) -> Bool {
         guard let clip = AnnotationClipboard.contents(of: pb) else { return false }
         finishPen(); commitEditing()
@@ -430,28 +430,20 @@ struct SelectionChrome {
     var marquee: CGRect?
 }
 
-/// Annotations copied with ⌘C, kept in memory with the pixels and Canvases
-/// they draw from. The general pasteboard gets a private marker so its
-/// change count says whether wadjet's copy is still the latest one.
+/// Annotations copied with ⌘C. The system pasteboard gets one item: the
+/// Annotations as a private Canvas package wadjet pastes back, even after a
+/// relaunch, and a PNG of them for other apps. The live copy stays in memory
+/// too, so a paste before anything else replaces the clipboard keeps opened
+/// linked Canvases live instead of their snapshots.
 @MainActor
 enum AnnotationClipboard {
     static let type = NSPasteboard.PasteboardType("cx.mia.wadjet.annotations")
-    struct Clip {
-        var annotations: [Annotation]
-        var images: [UUID: CGImage] = [:]
-        var canvases: [URL: CanvasDocument] = [:]
-        var embedded: [String: CanvasDocument] = [:]
-        /// linked Canvases' persisted snapshots, by the copied Annotation's id
-        var snapshots: [UUID: CGImage] = [:]
-        /// captured windows' pixels, by layer id — another Canvas has no such layer
-        var windowImages: [UUID: CGImage] = [:]
-    }
-    private static var clip: Clip?
+    private static var clip: AnnotationClip?
     private static var changeCount = -1
 
     static func copy(_ annotations: [Annotation], assets: MarkupAssets,
                      windowLayers: [UUID: CanvasWindowLayer]) {
-        var c = Clip(annotations: annotations)
+        var c = AnnotationClip(annotations: annotations)
         for a in annotations {
             switch a.kind {
             case let .image(asset, _): c.images[asset] = assets.images[asset]
@@ -463,19 +455,37 @@ enum AnnotationClipboard {
             case .line, .path, .censor, .shape, .counter, .magnify, .text: break
             }
         }
+        let item = NSPasteboardItem()
+        do {
+            let scale = NSScreen.screens.map(\.backingScaleFactor).max() ?? 2
+            let data = try c.pasteboardData(scale: scale)
+            item.setData(data.package, forType: type)
+            item.setData(data.png, forType: .png)
+        } catch {
+            // the in-memory copy still pastes inside wadjet until the clipboard changes
+            AppLog.line("markup: couldn't put annotations on the clipboard: \(error)")
+            item.setData(Data(), forType: type)
+        }
         let pb = NSPasteboard.general
         pb.clearContents()
-        pb.setData(Data(), forType: type)
+        pb.writeObjects([item])
         clip = c
         changeCount = pb.changeCount
         AppState.shared.lastClipboard = "<\(annotations.count) annotations>"
     }
 
-    /// the copied Annotations while `pb` is the general pasteboard and
-    /// nothing has replaced wadjet's copy on it
-    static func contents(of pb: NSPasteboard) -> Clip? {
-        guard pb == .general, pb.changeCount == changeCount,
-              pb.types?.contains(type) == true else { return nil }
-        return clip
+    /// a cheap type check — no decoding — for Edit ▸ Paste
+    static func canRead(_ pb: NSPasteboard) -> Bool { pb.types?.contains(type) == true }
+
+    /// the copied Annotations on `pb`: the live copy while wadjet's own is
+    /// still the latest on the general pasteboard, else decoded from the package
+    static func contents(of pb: NSPasteboard) -> AnnotationClip? {
+        guard canRead(pb) else { return nil }
+        if pb == .general, pb.changeCount == changeCount, let clip { return clip }
+        guard let data = pb.data(forType: type), !data.isEmpty else { return nil }
+        do { return try AnnotationClip(package: data) } catch {
+            AppLog.line("markup: unreadable annotations on the clipboard: \(error)")
+            return nil
+        }
     }
 }

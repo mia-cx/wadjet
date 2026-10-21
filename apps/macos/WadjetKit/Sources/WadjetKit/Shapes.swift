@@ -51,6 +51,37 @@ public enum ShapeKind: Codable, Equatable, Sendable {
     }
 }
 
+/// one slider in the Shapes menu, read and set field by field so a
+/// multi-selection can show "Mixed" for it alone and a change keeps every
+/// shape's other options
+public enum ShapeOption: CaseIterable, Sendable {
+    case cornerRadius, sides, points, innerRatio
+}
+
+extension ShapeKind {
+    /// the option's value, nil for a variant that lacks it
+    public func value(of o: ShapeOption) -> Double? {
+        switch (self, o) {
+        case let (.rectangle(r), .cornerRadius): Double(r)
+        case let (.polygon(n), .sides): Double(n)
+        case let (.star(n, _), .points): Double(n)
+        case let (.star(_, r), .innerRatio): Double(r)
+        default: nil
+        }
+    }
+
+    /// the option set to `v`, everything else kept; a variant that lacks it is unchanged
+    public func setting(_ o: ShapeOption, to v: Double) -> ShapeKind {
+        switch (self, o) {
+        case (.rectangle, .cornerRadius): .rectangle(cornerRadius: CGFloat(v))
+        case (.polygon, .sides): .polygon(sides: Int(v.rounded()))
+        case let (.star(_, r), .points): .star(points: Int(v.rounded()), innerRatio: r)
+        case let (.star(n, _), .innerRatio): .star(points: n, innerRatio: CGFloat(v))
+        default: self
+        }
+    }
+}
+
 /// the Shapes Tool's variants, named as config.json's `markup.tools` keys
 public enum ShapeVariant: String, Codable, CaseIterable, Sendable {
     case rectangle, ellipse, polygon, star
