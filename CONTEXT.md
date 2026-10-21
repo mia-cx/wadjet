@@ -16,8 +16,8 @@ A still of every screen, cursor included, taken the moment a Shortcut or the men
 _Avoid_: Frozen screen, snapshot
 
 **Tool**:
-One thing to do on the Freeze Frame, picked from the toolbar: Capture region, window, or screen; Record region, window, or screen; Pick colour; Copy text; or Measure.
-Capture and Record Tools produce a Capture for a Workflow. The other Tools put their result on the clipboard and run no Workflow.
+One thing to do on the Freeze Frame, picked from the toolbar: Capture region, window, or screen; Record region, window, or screen; Pick colour; Copy text; Measure; or a Markup Tool.
+Capture and Record Tools produce a Capture for a Workflow. Pick colour, Copy text, and Measure put their result on the clipboard and run no Workflow; Markup Tools draw Annotations.
 _Avoid_: Capture Mode, mode
 
 **Screenshot**:
