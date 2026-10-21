@@ -2876,7 +2876,7 @@ struct ToolbarView: View {
     // of the notch, so the toolbar is visible while collapsed.
     /// the wide collapsed island: recording dot + time, or the Annotation count
     var wideIsland: Bool { recording || annotationCount != nil || undoRingShown }
-    var earW: CGFloat { wideIsland ? 48 : 28 }
+    var earW: CGFloat { wideIsland ? (recording && undoRingShown ? 68 : 48) : 28 }
     // A fake island sizes like the notched one: the notch-width formula with
     // a 185 pt stand-in notch on displays that don't have one.
     var islandW: CGFloat { hasNotch ? max(126, notchW + 2 * earW) : (wideIsland ? 120 : 100) }
@@ -2943,7 +2943,7 @@ struct ToolbarView: View {
         // claiming the pointer's display if none is expanded — until Escape
         // or a non-Markup Tool releases it.
         let pointerOnScreen = screen.map { NSMouseInRect(NSEvent.mouseLocation, $0.frame, false) } ?? false
-        let h = hoverInside || lensActive || (s.openMenu != nil && s.expandedDisplay == displayIndex)
+        let h = ringPointer.expands || lensActive || (s.openMenu != nil && s.expandedDisplay == displayIndex)
             || (MarkupController.shared.armed != nil && rowMeasured
                 && (s.expandedDisplay == displayIndex || (s.expandedDisplay == nil && pointerOnScreen)))
         if h != expanded { AppLog.line("hover d\(displayIndex) -> \(h)") }
@@ -2966,7 +2966,8 @@ struct ToolbarView: View {
     }
 
     var body: some View {
-        morph
+        // a click on a Clear's Undo ring undoes it; hover there doesn't expand (MarkupClear.swift)
+        undoRingTracking(morph)
             .frame(width: panelW, height: panelH, alignment: .top)
             #if CLEAR_GLASS_PATCH
             // the lens is its own glass-free layer drawn over the bar —
@@ -2982,13 +2983,14 @@ struct ToolbarView: View {
                     // p is in SwiftUI coords (top-left); hoverRect is in the
                     // view's coords — convert
                     hoverInside = hoverRect.contains(CGPoint(x: p.x, y: panelH - p.y))
+                    trackUndoRing()
                 case .ended:
                     // hover events can stop during a drag — recompute from the
                     // live pointer position, in the view's coords
                     hoverInside = pointerInside()
                 }
             }
-            .onChange(of: hoverInside) { syncExpanded(); refitOnLeave()
+            .onChange(of: hoverInside) { trackUndoRing(); syncExpanded(); refitOnLeave()
                 // the pointer on the island holds a Clear's Undo ring (MarkupClear.swift)
                 MarkupController.shared.islandHovered(hoverInside, on: displayIndex)
             }
@@ -3101,7 +3103,7 @@ struct ToolbarView: View {
             Spacer(minLength: 0)
             if !recording, annotationCount == nil, undoRingShown {
                 // a Clear's Undo ring, concentric with the end cap like the leading badge
-                UndoRing(undo: MarkupController.shared.clearUndo)
+                undoRingButton
                     .padding(.trailing, max(4, (islandSlot - UndoRing.size) / 2))
                     .frame(height: pillH)
             } else if recording || annotationCount != nil {
@@ -3109,7 +3111,10 @@ struct ToolbarView: View {
                 // it and inset its edge like the leading dot's, shrinking the
                 // inset only as far as the glyph itself needs
                 Group {
-                    if recording { Text(fmtT(s.recordingElapsed)) }
+                    if recording, undoRingShown {
+                        // the Recording keeps its time; a Clear's Undo ring rides beside it
+                        HStack(spacing: 6) { Text(fmtT(s.recordingElapsed)); undoRingButton }
+                    } else if recording { Text(fmtT(s.recordingElapsed)) }
                     else {
                         let n = annotationCount ?? 0
                         Text("\(n)").accessibilityLabel(n == 1 ? "1 Annotation" : "\(n) Annotations")
@@ -3208,6 +3213,10 @@ struct ToolbarView: View {
     @State var menuByHold = false
     @State var holdTask: Task<Void, Never>?
     @State var hoverInside = false
+    /// the pointer against a Clear's Undo ring on the collapsed island (MarkupClear.swift)
+    @State var ringPointer = UndoRingPointer()
+    /// the ring's frame in panel space, top-down
+    @State var undoRingFrame = CGRect.null
     var lensActive: Bool { pressing || dragging || travelling }
     /// frozen + expanded: our barSurface draws the bar; system glass off
     var ownBar: Bool {

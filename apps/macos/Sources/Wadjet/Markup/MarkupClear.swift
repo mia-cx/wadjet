@@ -7,7 +7,9 @@ import WadjetKit
 // the island goes the way IslandRule says. With nothing on screen the Clear
 // cell shakes instead. Afterwards (ClearUndo): ⌘Z restores it for 3 s, the
 // Clear cell reads Undo for 6 s, and a Clear that closed the toolbar keeps the
-// collapsed island for 3 s with an Undo ring draining around its glyph.
+// collapsed island for 3 s with an Undo ring draining around its glyph; a
+// Recording's own island shows the ring beside its time. A click on the ring
+// undoes the Clear.
 
 extension MarkupView {
     /// fades the whole Markup view (Annotations, their chrome, Magnify rims)
@@ -147,8 +149,9 @@ extension AppDelegate {
     /// a Clear from the toolbar, a Shortcut, or cmd.sh: fade, then clear.
     /// On the live toolbar Clear disarms the armed Markup Tool first, so the
     /// toolbar closes once the screen is empty and the collapsed island holds
-    /// on with the Undo ring; a Freeze Frame keeps its Tool and stays, and a
-    /// Recording keeps its own island (IslandRule), so neither gets the ring.
+    /// on with the Undo ring; a Recording keeps its own island (IslandRule)
+    /// and shows the ring there. A Freeze Frame keeps its Tool and stays, so
+    /// it gets no ring.
     func clearAnnotationsWithFeedback() {
         let s = AppState.shared, mc = MarkupController.shared, armed = s.tool
         let r = mc.fadeOutThenClear(beforeClear: {
@@ -156,7 +159,7 @@ extension AppDelegate {
             if s.phase == .toolbar, let t = armed, t.kind == .markup, s.tool == t {
                 s.tool = nil; AppLog.line("markup: Clear disarmed")
             }
-            mc.offerUndo(ring: s.phase != .frozen && !(s.recActive && s.showIslandWhileRecording))
+            mc.offerUndo(ring: s.phase != .frozen)
         }, afterClear: { [self] in
             AppLog.line("markup: cleared")
             s.clearing = false
@@ -276,13 +279,90 @@ struct UndoClearAccessibility: ViewModifier {
     }
 }
 
-/// The collapsed island's trailing item after a Clear that closed the toolbar:
-/// an Undo glyph inside a ring that drains clockwise from full to empty over
-/// ClearUndo.ring seconds, holding while the pointer is on the island. Under
-/// Reduce Motion the ring gives way to the seconds left beside the glyph,
-/// stepping 3, 2, 1.
+extension ToolbarView {
+    /// the collapsed island shows a Clear's Undo ring: after a Clear that
+    /// closed the toolbar, or beside a Recording's time
+    var islandShowsRing: Bool { undoRingShown && annotationCount == nil }
+
+    /// the ring as a button: a click undoes the Clear, and the island then
+    /// stays collapsed under the pointer until it leaves
+    var undoRingButton: some View {
+        Button {
+            if ringPointer.clickedRing() { UndoRingHold.displays.insert(displayIndex) }
+            AppLog.line("markup: Undo ring clicked d\(displayIndex)")
+            AppDelegate.shared?.undoClear()
+        } label: {
+            UndoRing(undo: MarkupController.shared.clearUndo, hot: ringPointer.onRing)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel("Undo Clear")
+        // only the collapsed island's ring takes clicks, never the bar's
+        .allowsHitTesting(!expanded)
+        .onGeometryChange(for: CGRect.self) { $0.frame(in: .named("panel")) } action: { undoRingFrame = $0 }
+        .onDisappear { undoRingFrame = .null }
+    }
+
+    /// the bar follows the pointer on and off the ring, and the ring's tooltip
+    /// with it (its own modifiers, so the body's chain stays type-checkable)
+    func undoRingTracking(_ content: some View) -> some View {
+        content
+            .onChange(of: ringPointer) { syncExpanded() }
+            .onChange(of: ringPointer.onRing) { undoRingTip() }
+            .onChange(of: islandShowsRing) { trackUndoRing() }
+            .onAppear {
+                // Undo rebuilt the island under the pointer: it keeps the ring click's hold
+                guard UndoRingHold.displays.contains(displayIndex) else { return }
+                ringPointer = UndoRingPointer(held: true)
+                // the panel may not be registered yet (showToolbars orders it
+                // front first): check the pointer once that has run
+                Task { @MainActor in
+                    guard ctrl.toolbarPanels[displayIndex] != nil, !pointerInside() else { return }
+                    UndoRingHold.displays.remove(displayIndex)
+                    ringPointer.moved(inside: false, onRing: false)
+                }
+            }
+    }
+
+    /// re-reads the pointer against the ring: on its target the island
+    /// stays collapsed; anywhere else on it hover expands as always
+    func trackUndoRing() {
+        var onRing = false
+        if islandShowsRing, !expanded, let p = ctrl.toolbarPanels[displayIndex], !undoRingFrame.isNull {
+            // view coords are bottom-up, the ring's frame top-down
+            let ring = CGRect(x: undoRingFrame.minX, y: panelH - undoRingFrame.maxY,
+                              width: undoRingFrame.width, height: undoRingFrame.height)
+            let q = CGPoint(x: NSEvent.mouseLocation.x - p.frame.minX, y: NSEvent.mouseLocation.y - p.frame.minY)
+            onRing = UndoRingPointer.target(ring: ring, island: shapeRectInView).contains(q)
+        }
+        ringPointer.moved(inside: hoverInside, onRing: onRing)
+        if !ringPointer.held { UndoRingHold.displays.remove(displayIndex) }
+    }
+
+    /// the pointer on the ring names it, since hover there doesn't open the bar
+    func undoRingTip() {
+        if ringPointer.onRing, let a = ctrl.panelScreenRect(undoRingFrame, on: displayIndex) {
+            TipPanel.hover("Undo Clear", anchor: a)
+        } else if TipPanel.current == "Undo Clear" {
+            TipPanel.hide()
+        }
+    }
+}
+
+/// the displays whose ring click holds the island collapsed until the pointer
+/// leaves. Undo rebuilds the toolbar panels, so the hold outlives the view
+@MainActor enum UndoRingHold {
+    static var displays: Set<Int> = []
+}
+
+/// The collapsed island's Undo ring after a Clear, trailing on its own or
+/// beside a Recording's time: an Undo glyph inside a ring that drains
+/// clockwise from full to empty over ClearUndo.ring seconds, holding while the
+/// pointer is on the island. Under Reduce Motion the ring gives way to the
+/// seconds left beside the glyph, stepping 3, 2, 1. `hot` lights it while the
+/// pointer is on it, as a click there undoes the Clear.
 struct UndoRing: View {
     let undo: ClearUndo
+    var hot = false
     var reduceMotion: Bool { NSWorkspace.shared.accessibilityDisplayShouldReduceMotion }
     static let size: CGFloat = 14
     var body: some View {
@@ -310,10 +390,10 @@ struct UndoRing: View {
                 }
             }
         }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Undo Clear")
-        .accessibilityAddTraits(.isButton)
-        .accessibilityAction { AppDelegate.shared?.undoClear() }
+        // the pointer on it: a soft disc behind, like a hovered control
+        .background(Capsule().fill(.white.opacity(hot ? 0.22 : 0)).padding(-4))
+        .contentShape(Rectangle().inset(by: -5))
+        .animation(.easeOut(duration: 0.12), value: hot)
     }
     var glyph: some View {
         Image(systemName: "arrow.uturn.backward").font(.system(size: 7, weight: .bold))
