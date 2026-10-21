@@ -129,7 +129,7 @@ final class MarkupController {
     /// Every change re-renders and reaches `observeSelection` handlers.
     private(set) var selection = AnnotationSelection() {
         didSet {
-            if selection != oldValue { cropping = nil }
+            if selection != oldValue { cropping = nil; drawAnchor = nil }
             if selection.isEmpty { nodes.clear() }
             if isScreen, selection.isEmpty, AppState.shared.openMenu?.kind == .markup {
                 AppState.shared.openMenu = nil
@@ -143,6 +143,18 @@ final class MarkupController {
             render()
         }
     }
+    /// the Draw Tool's active anchor on the single selection, after
+    /// Illustrator's Pen with a path selected: it fills and its curve
+    /// handles show. A press on an anchor sets it; one elsewhere clears it
+    /// (`DrawPress.activeAnchor`). nil once out of the selection's range.
+    var drawAnchor: Int? {
+        get {
+            guard armed == .draw, let i = _drawAnchor, let a = single, i < a.anchorGrips.count else { return nil }
+            return i
+        }
+        set { _drawAnchor = newValue }
+    }
+    @ObservationIgnored private var _drawAnchor: Int?
     /// Direct Select's shown and selected anchors — MarkupDirectSelect.swift
     @ObservationIgnored var nodes = NodeSelection()
     /// selection observers by token — `observeSelection` in MarkupSelection.swift
@@ -305,7 +317,7 @@ final class MarkupController {
         // a Tool switch commits a Pen path or a text session in progress
         if tool != armed { finishPen(); commitEditing() }
         if tool == nil { selection = [] }
-        if tool != armed { nodes.clear() } // anchors belong to Direct Select
+        if tool != armed { nodes.clear(); drawAnchor = nil } // anchors belong to Direct Select
         armed = tool
         showSelectionAnchors()
         render()
@@ -332,6 +344,7 @@ final class MarkupController {
         commitEditing()
         let was = armed
         nodes.clear() // anchors belong to Direct Select
+        drawAnchor = nil // a re-armed Draw Tool starts with no active anchor
         armed = want
         showSelectionAnchors()
         if let want { MarkupToolbar.shared.armed(want) } // arming is the one recorded use
@@ -881,10 +894,16 @@ final class MarkupController {
         guard let sel = single else { return false }
         let press: DrawPress? = if insertingNodes {
             sel.drawPress(at: p, radius: Self.handleHitRadius / zoom, tolerance: Self.hitTolerance / zoom,
-                          minExtent: Self.handleMinExtent / zoom, rotateOffset: Self.rotateOffset / zoom)
+                          minExtent: Self.handleMinExtent / zoom, rotateOffset: Self.rotateOffset / zoom,
+                          active: drawAnchor)
         } else {
             sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
                        rotateOffset: Self.rotateOffset / zoom, set: gripSet).map { .grip($0) }
+        }
+        if insertingNodes {
+            let was = drawAnchor
+            drawAnchor = DrawPress.activeAnchor(after: press, was: was)
+            if drawAnchor != was { render() } // the anchor fills on the press
         }
         switch press {
         case let .grip(h)?:
@@ -922,7 +941,8 @@ final class MarkupController {
         guard let sel = single else { return overGroup(at: p) ? .arrow : nil }
         if armed == .draw {
             switch sel.drawPress(at: p, radius: Self.handleHitRadius / zoom, tolerance: Self.hitTolerance / zoom,
-                                 minExtent: Self.handleMinExtent / zoom, rotateOffset: Self.rotateOffset / zoom) {
+                                 minExtent: Self.handleMinExtent / zoom, rotateOffset: Self.rotateOffset / zoom,
+                                 active: drawAnchor) {
             case .grip?: return .arrow
             case .insert?: return .openHand
             case nil: break

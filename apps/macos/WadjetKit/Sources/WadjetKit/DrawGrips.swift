@@ -33,26 +33,53 @@ extension Annotation {
             .min { hypot($0.at.x - press.x, $0.at.y - press.y) < hypot($1.at.x - press.x, $1.at.y - press.y) }?.at
     }
 
-    /// `.drawing`'s grips: a Line's bend, then the anchors, then each path
-    /// segment's bend grip at least `minExtent` from its anchors, then the
-    /// frame grips not sitting on an anchor — a Line's ends are two of its
-    /// frame's corners, and the anchor would win every press there anyway
-    func drawingHandles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+    /// the curve handles the Draw Tool shows around its active anchor
+    /// `active`, after Illustrator: the anchor's own two, and the handle at
+    /// the far end of each segment it joins (the previous node's outgoing,
+    /// the next node's incoming; a closed path wraps). A handle sitting on
+    /// its anchor draws nothing and gets no grip. Empty without an active
+    /// anchor, or on a Line (its curve is the bend grip).
+    public func activeTangentGrips(_ active: Int?) -> [(handle: SelectionHandle, at: CGPoint)] {
+        guard let i = active, case let .path(data) = kind, data.nodes.indices.contains(i) else { return [] }
+        let n = data.nodes.count, m = affineTransform
+        var out: [(handle: SelectionHandle, at: CGPoint)] = []
+        func add(_ j: Int, outgoing: Bool) {
+            let node = data.nodes[j]
+            guard let h = outgoing ? node.handleOut : node.handleIn, h != node.anchor,
+                  !out.contains(where: { $0.handle == .tangent(j, outgoing: outgoing) }) else { return }
+            out.append((.tangent(j, outgoing: outgoing), h.applying(m)))
+        }
+        if i > 0 || data.closed { add((i - 1 + n) % n, outgoing: true) }
+        add(i, outgoing: false)
+        add(i, outgoing: true)
+        if i < n - 1 || data.closed { add((i + 1) % n, outgoing: false) }
+        return out
+    }
+
+    /// `.drawing`'s grips: a Line's bend, then the anchors, then the curve
+    /// handles around the `active` anchor, then each path segment's bend
+    /// grip at least `minExtent` from its anchors, then the frame grips not
+    /// sitting on an anchor — a Line's ends are two of its frame's corners,
+    /// and the anchor would win every press there anyway
+    func drawingHandles(minExtent: CGFloat, rotateOffset: CGFloat,
+                        active: Int? = nil) -> [(handle: SelectionHandle, at: CGPoint)] {
         let anchors = anchorGrips
         let frame = frameHandles(minExtent: minExtent, rotateOffset: rotateOffset).filter { f in
             !anchors.contains { hypot($0.at.x - f.at.x, $0.at.y - f.at.y) < 0.5 }
         }
         return handles(.placed, minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
-            + anchors + segmentBendGrips(spacing: minExtent) + frame
+            + anchors + activeTangentGrips(active) + segmentBendGrips(spacing: minExtent) + frame
     }
 
     /// what a Draw Tool press on this selected Annotation grabs, in order:
-    /// an anchor within `radius`, then a bend grip, then the stroke within
-    /// `tolerance` (a new node there), then a frame grip. nil when it
-    /// reaches none of them; the body may still take the press as a move.
+    /// an anchor within `radius`, then a curve handle of the `active`
+    /// anchor, then a bend grip, then the stroke within `tolerance` (a new
+    /// node there), then a frame grip. nil when it reaches none of them; the
+    /// body may still take the press as a move.
     public func drawPress(at p: CGPoint, radius: CGFloat, tolerance: CGFloat,
-                          minExtent: CGFloat, rotateOffset: CGFloat) -> DrawPress? {
-        let grip = handle(at: p, radius: radius, minExtent: minExtent, rotateOffset: rotateOffset, set: .drawing)
+                          minExtent: CGFloat, rotateOffset: CGFloat, active: Int? = nil) -> DrawPress? {
+        let grip = handle(at: p, radius: radius, minExtent: minExtent, rotateOffset: rotateOffset,
+                          set: .drawing, active: active)
         if let grip, !grip.isFrame { return .grip(grip) }
         if kind.insertsNodes, let (a, i, t) = insertingNodeSplit(near: p, within: tolerance) {
             return .insert(a, node: i, t: t)
@@ -66,6 +93,18 @@ extension Annotation {
 public enum DrawPress: Equatable, Sendable {
     case grip(SelectionHandle)
     case insert(Annotation, node: Int, t: CGFloat)
+
+    /// the Draw Tool's active anchor after this press, from `active` before
+    /// it: a press on an anchor makes it active (it fills, its curve handles
+    /// show); one on a curve handle or a bend grip keeps it; any other press
+    /// (the stroke, the frame, the body, elsewhere — `nil`) clears it
+    public static func activeAnchor(after press: DrawPress?, was active: Int?) -> Int? {
+        switch press {
+        case let .grip(.vertex(i))?: i
+        case .grip(.tangent)?, .grip(.bend)?, .grip(.segmentBend)?: active
+        default: nil
+        }
+    }
 }
 
 extension SelectionHandle {
@@ -79,14 +118,15 @@ extension SelectionHandle {
         }
     }
 
-    /// the Draw Tool's press order within reach: anchors, bend grips, any
-    /// other point grip, the frame
+    /// the Draw Tool's press order within reach: anchors, the active
+    /// anchor's curve handles, bend grips, any other point grip, the frame
     var drawingRank: Int {
         switch self {
         case .vertex: 0
-        case .bend, .segmentBend: 1
-        case .resize, .rotate: 3
-        default: 2
+        case .tangent: 1
+        case .bend, .segmentBend: 2
+        case .resize, .rotate: 4
+        default: 3
         }
     }
 }

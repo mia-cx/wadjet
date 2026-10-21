@@ -85,16 +85,21 @@ extension Annotation {
     /// the moved handle when the two were collinear (a smooth node) before;
     /// unchanged at a corner, or when either handle was missing
     private static func keptSmooth(_ other: CGPoint?, anchor: CGPoint, was: CGPoint?, now: CGPoint) -> CGPoint? {
-        guard let other, let was else { return other }
-        let ux = was.x - anchor.x, uy = was.y - anchor.y, ox = other.x - anchor.x, oy = other.y - anchor.y
-        let lu = hypot(ux, uy), lo = hypot(ox, oy)
-        guard lu > 1e-9, lo > 1e-9 else { return other }
-        // opposite directions within about half a degree
-        let cos = (ux * ox + uy * oy) / (lu * lo)
-        guard cos < -0.99996 else { return other }
+        guard let other, let was, collinear(was, other, through: anchor) else { return other }
+        let lo = hypot(other.x - anchor.x, other.y - anchor.y)
         let nx = anchor.x - now.x, ny = anchor.y - now.y, ln = hypot(nx, ny)
         guard ln > 1e-9 else { return other }
         return CGPoint(x: anchor.x + nx / ln * lo, y: anchor.y + ny / ln * lo)
+    }
+
+    /// whether handles `a` and `b` leave `anchor` in opposite directions
+    /// within about half a degree — a smooth node's. False when either sits
+    /// on the anchor.
+    static func collinear(_ a: CGPoint, _ b: CGPoint, through anchor: CGPoint) -> Bool {
+        let ux = a.x - anchor.x, uy = a.y - anchor.y, ox = b.x - anchor.x, oy = b.y - anchor.y
+        let lu = hypot(ux, uy), lo = hypot(ox, oy)
+        guard lu > 1e-9, lo > 1e-9 else { return false }
+        return (ux * ox + uy * oy) / (lu * lo) < -0.99996
     }
 }
 

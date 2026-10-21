@@ -40,6 +40,8 @@ final class MarkupView: NSView {
     /// selection chrome, kept above the annotation layers
     let frameLayer = CAShapeLayer()
     let handlesLayer = CAShapeLayer()
+    /// the Draw Tool's active anchor, filled — a sublayer of `handlesLayer`
+    let activeAnchorLayer = CAShapeLayer()
     /// Direct Select's chrome: the shown paths' outlines and handle stems,
     /// the handle grips, the anchors, and the marquee
     let nodeFrameLayer = CAShapeLayer()
@@ -184,9 +186,10 @@ final class MarkupView: NSView {
             frameLayer.strokeColor = accent
             frameLayer.lineWidth = 1 / controller.zoom
             frameLayer.contentsScale = scale
-            let grips = CGMutablePath()
+            let grips = CGMutablePath(), filled = CGMutablePath()
+            let active = controller.drawAnchor
             let hs = selection.handles(controller.gripSet, minExtent: MarkupController.handleMinExtent / controller.zoom,
-                                       rotateOffset: MarkupController.rotateOffset / controller.zoom)
+                                       rotateOffset: MarkupController.rotateOffset / controller.zoom, active: active)
                 // recrop mode has no rotate grip
                 .filter { cropping == nil || $0.handle != .rotate }
             // tangent stems ride the frame layer's accent stroke, under the
@@ -198,10 +201,12 @@ final class MarkupView: NSView {
                 }
             }
             for h in hs {
-                // the Draw Tool's anchors are Direct Select's hollow squares
-                if controller.gripSet == .drawing, case .vertex = h.handle {
+                // the Draw Tool's anchors are Direct Select's hollow squares;
+                // the active one fills
+                if controller.gripSet == .drawing, case let .vertex(i) = h.handle {
                     let r = 3 / controller.zoom
-                    grips.addRect(CGRect(x: h.at.x - r, y: h.at.y - r, width: 2 * r, height: 2 * r))
+                    (i == active ? filled : grips).addRect(CGRect(x: h.at.x - r, y: h.at.y - r,
+                                                                  width: 2 * r, height: 2 * r))
                     continue
                 }
                 // tangent grips read as satellites of their node: smaller
@@ -222,6 +227,12 @@ final class MarkupView: NSView {
             handlesLayer.shadowOpacity = 0.25
             handlesLayer.shadowRadius = 1 / controller.zoom
             handlesLayer.shadowOffset = CGSize(width: 0, height: -0.5 / controller.zoom)
+            activeAnchorLayer.path = filled
+            activeAnchorLayer.fillColor = accent
+            activeAnchorLayer.strokeColor = accent
+            activeAnchorLayer.lineWidth = 1 / controller.zoom
+            activeAnchorLayer.contentsScale = scale
+            if activeAnchorLayer.superlayer !== handlesLayer { handlesLayer.addSublayer(activeAnchorLayer) }
         }
         let chrome = selection != nil && selection?.id != editing ? [frameLayer, handlesLayer] : []
         content.sublayers = annotations.compactMap { shapeLayers[$0.id] ?? imageLayers[$0.id] }
