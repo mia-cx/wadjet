@@ -30,13 +30,22 @@ public struct AnnotationClip {
         self.windowImages = windowImages
     }
 
-    /// the area the copied Annotations paint: their shared box grown by
-    /// enough for strokes and line ends to stay inside, never empty
+    /// the area the copied Annotations paint: each one's frame, its painted
+    /// coverage (strokes and line ends included), and a Magnify's source
+    /// outline, which its leader joins to the lens; grown by a pixel for
+    /// antialiasing
     public var paintedBounds: CGRect {
-        let box = AnnotationGroup.bounds(of: annotations)
+        var box = CGRect.null
+        for a in annotations {
+            box = box.union(AnnotationGroup.bounds(of: [a]))
+            let covered = PathGeometry.coverage(for: a).boundingBoxOfPath // screen space
+            if !covered.isNull { box = box.union(covered) }
+            if case let .magnify(m) = a.kind {
+                box = box.union(m.source.insetBy(dx: -a.style.width, dy: -a.style.width))
+            }
+        }
         guard !box.isNull else { return .null }
-        let pad = (annotations.map(\.style.width).max() ?? 0) * 3 + 2
-        return box.insetBy(dx: -pad, dy: -pad).integral
+        return box.insetBy(dx: -1, dy: -1).integral
     }
 
     /// a Canvas holding only these Annotations over nothing: what the

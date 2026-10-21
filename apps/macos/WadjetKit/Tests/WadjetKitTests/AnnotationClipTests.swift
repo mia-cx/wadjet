@@ -36,16 +36,49 @@ struct AnnotationClipTests {
         #expect(back.snapshots.isEmpty)
     }
 
-    // Proves other apps get an image of the Annotations alone: a PNG the
-    // size of their painted area, room left for the stroke.
+    // Proves other apps get an image of the Annotations alone: a PNG of
+    // their painted area at the requested scale, round caps included.
     @Test func flattenedImage() throws {
         let line = Annotation(kind: .line(start: .zero, end: CGPoint(x: 40, y: 20)), style: Self.red)
         let clip = AnnotationClip(annotations: [line])
-        #expect(clip.paintedBounds == CGRect(x: -14, y: -14, width: 68, height: 48))
-        let png = try clip.pasteboardData(scale: 2).png
+        let b = clip.paintedBounds
+        #expect(b.contains(CGRect(x: -2, y: -2, width: 44, height: 24)) && b.width <= 48 && b.height <= 28)
+        let image = try Self.png(clip)
+        #expect(image.width == Int(b.width * 2) && image.height == Int(b.height * 2))
+    }
+
+    // Proves nothing painted is cut off at the image's edge: a short Line's
+    // filled arrowhead, which reaches well behind its tip, and a Magnify's
+    // source outline far from its lens leave the border pixels clear.
+    @Test(arguments: [
+        Annotation(kind: .line(start: .zero, end: CGPoint(x: 1, y: 0)),
+                   style: AnnotationStyle(colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 4,
+                                          head: .filledArrow, tail: .filledArrow)),
+        Annotation(kind: .magnify(Magnifier(source: CGRect(x: 0, y: 0, width: 10, height: 10),
+                                            frame: CGRect(x: 100, y: 0, width: 40, height: 40),
+                                            options: MagnifierOptions())), style: red),
+    ])
+    func nothingClipped(_ a: Annotation) throws {
+        let clip = AnnotationClip(annotations: [a])
+        if case let .magnify(m) = a.kind { #expect(clip.paintedBounds.contains(m.source)) }
+        let image = try Self.png(clip, scale: 1)
+        let w = image.width, h = image.height
+        var px = [UInt8](repeating: 0, count: w * h * 4)
+        let ctx = try #require(CGContext(data: &px, width: w, height: h, bitsPerComponent: 8, bytesPerRow: w * 4,
+                                         space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                                         bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        ctx.draw(image, in: CGRect(x: 0, y: 0, width: w, height: h))
+        let alpha = { (x: Int, y: Int) in px[(y * w + x) * 4 + 3] }
+        let edge = (0..<w).flatMap { [alpha($0, 0), alpha($0, h - 1)] }
+            + (0..<h).flatMap { [alpha(0, $0), alpha(w - 1, $0)] }
+        #expect(edge.allSatisfy { $0 == 0 })
+        #expect(px.enumerated().contains { $0.offset % 4 == 3 && $0.element > 0 })
+    }
+
+    static func png(_ clip: AnnotationClip, scale: CGFloat = 2) throws -> CGImage {
+        let png = try clip.pasteboardData(scale: scale).png
         let src = try #require(CGImageSourceCreateWithData(png as CFData, nil))
-        let image = try #require(CGImageSourceCreateImageAtIndex(src, 0, nil))
-        #expect(image.width == 136 && image.height == 96)
+        return try #require(CGImageSourceCreateImageAtIndex(src, 0, nil))
     }
 
     // Proves a Window Annotation whose pixels didn't come along is left out
