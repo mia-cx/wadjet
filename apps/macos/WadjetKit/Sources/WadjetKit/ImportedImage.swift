@@ -20,8 +20,7 @@ public enum ImportedImage {
             ] as CFDictionary) else { return nil }
             image = upright
         } else {
-            guard let owned = CanvasImageCodec.owningPixels(lazy) else { return nil }
-            image = owned
+            image = CanvasImageCodec.owningPixels(lazy)
         }
         func dpi(_ key: CFString) -> CGFloat { (props?[key] as? CGFloat) ?? 72 }
         var w = dpi(kCGImagePropertyDPIWidth), h = dpi(kCGImagePropertyDPIHeight)
