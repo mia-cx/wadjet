@@ -79,4 +79,21 @@ struct DrawGripsTests {
         let a = Annotation(kind: .shape(.ellipse, rect: CGRect(x: 0, y: 0, width: 80, height: 40)), style: Self.style)
         #expect(Self.grips(a) == a.handles(.placed, minExtent: 12, rotateOffset: 20).map(\.handle))
     }
+
+    // Proves a fresh Brush stroke's anchor snaps on its first drag: the
+    // anchor shows only under the Draw Tool's set, and the snapping lookup
+    // finds it there, keeping the press offset
+    @Test func freshBrushAnchorSnaps() throws {
+        let raw = (0...20).map { CGPoint(x: CGFloat($0) * 5, y: 0) }
+        let data = try #require(PathData.fitted(raw, smoothing: 0.5))
+        let brush = Annotation(kind: .path(data), style: Self.style)
+        let last = data.nodes.count - 1
+        #expect(brush.anchorGrips[last].at == CGPoint(x: 100, y: 0))
+        let r = brush.dragging(.vertex(last), from: CGPoint(x: 103, y: 3), to: CGPoint(x: 107, y: 6),
+                               minExtent: 12, rotateOffset: 20,
+                               targets: [.x(106), .y(5)], range: 6, skip: false)
+        let moved = try #require(r.annotation.anchorGrips.last?.at)
+        #expect(hypot(moved.x - 106, moved.y - 5) < 1e-6)
+        #expect(r.guides.count == 2)
+    }
 }

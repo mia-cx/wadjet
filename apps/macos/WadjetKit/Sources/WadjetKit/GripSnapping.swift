@@ -16,10 +16,7 @@ extension Annotation {
         default: break
         }
         // the grip may be a point grip or a bounding-box one, whichever set the press took
-        guard let grip = (handles(.points, minExtent: minExtent, rotateOffset: rotateOffset)
-                          + handles(.frame, minExtent: minExtent, rotateOffset: rotateOffset))
-            .filter({ $0.handle == handle })
-            .min(by: { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) })?.at
+        guard let grip = gripPosition(handle, near: from, minExtent: minExtent, rotateOffset: rotateOffset)
         else { return (dragging(handle, from: from, to: to, stretch: stretch), []) }
         let proposed = CGPoint(x: grip.x + to.x - from.x, y: grip.y + to.y - from.y)
         let r = SnappingEngine.snap(points: [proposed], targets: targets,

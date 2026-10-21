@@ -20,6 +20,18 @@ extension Annotation {
         }
     }
 
+    /// where `handle` sits on screen, nearest `press` when it shows twice —
+    /// from whichever set the press took: point grips, the frame, or the Draw
+    /// Tool's anchors (a fresh Brush stroke's only show there)
+    public func gripPosition(_ handle: SelectionHandle, near press: CGPoint,
+                             minExtent: CGFloat, rotateOffset: CGFloat) -> CGPoint? {
+        (handles(.points, minExtent: minExtent, rotateOffset: rotateOffset)
+            + handles(.frame, minExtent: minExtent, rotateOffset: rotateOffset)
+            + anchorGrips)
+            .filter { $0.handle == handle }
+            .min { hypot($0.at.x - press.x, $0.at.y - press.y) < hypot($1.at.x - press.x, $1.at.y - press.y) }?.at
+    }
+
     /// `.drawing`'s grips: a Line's bend, then the anchors, then the frame
     /// grips not sitting on an anchor — a Line's ends are two of its frame's
     /// corners, and the anchor would win every press there anyway

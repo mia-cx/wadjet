@@ -53,10 +53,8 @@ import WadjetKit
     mutating func dragging(_ a: Annotation, _ h: SelectionHandle, from: CGPoint, to: CGPoint,
                            stretch: Bool = false) -> Annotation {
         // the grip may be a point grip or a bounding-box one, whichever set the press took
-        let grip = (a.handles(.points, minExtent: MarkupController.handleMinExtent, rotateOffset: MarkupController.rotateOffset)
-                    + a.handles(.frame, minExtent: MarkupController.handleMinExtent, rotateOffset: MarkupController.rotateOffset))
-            .filter { $0.handle == h }
-            .min { hypot($0.at.x - from.x, $0.at.y - from.y) < hypot($1.at.x - from.x, $1.at.y - from.y) }?.at
+        let grip = a.gripPosition(h, near: from, minExtent: MarkupController.handleMinExtent,
+                                  rotateOffset: MarkupController.rotateOffset)
         let points = grip.map { [CGPoint(x: $0.x + to.x - from.x, y: $0.y + to.y - from.y)] } ?? []
         var rect: CGRect?
         if case .resize = h {
