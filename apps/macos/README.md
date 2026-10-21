@@ -21,7 +21,7 @@ container: `~/Library/Containers/cx.mia.wadjet/Data/Library/Application Support/
 Settings live in `config.json` in that folder and are picked up live when you edit it.
 Screenshots save to `~/Pictures/Wadjet`: each Canvas in `original/`, its flattened image in
 `flattened/`, under the same name. Recordings save to `~/Movies/Wadjet`. `folders` in
-`config.json` (or Settings) moves them.
+`config.json` (or Settings) changes where new Captures save; existing files stay put.
 
 `WADJET_CLEAR_GLASS=0 ./run.sh` builds the store variant without the private
 clear-glass lens patch (the lens then sits behind the toolbar icons with
