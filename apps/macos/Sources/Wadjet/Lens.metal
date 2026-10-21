@@ -104,8 +104,6 @@ static half4 disperse(half4 r, half4 g, half4 b) {
 // beyond the bar's edge to bend.
 #define barEdge 14.0
 #define barPull 12.0
-#define barTone 0.17     // grey the bar's tone leans toward
-#define barToneMix 0.32  // how far it leans
 #define barGlow 5.0      // inner edge glow width (pt)
 
 static float rrSdf(float2 c, float2 half_, float r) {
@@ -136,9 +134,8 @@ static float rrSdf(float2 c, float2 half_, float r) {
     float dk = 0.14 * u;
     o.r = layer.sample(clamp(position - n * pull * (1.0 - dk), lo, hi)).r;
     o.b = layer.sample(clamp(position - n * pull * (1.0 + dk), lo, hi)).b;
-    // tone: pull everything toward a mid-dark grey, so the bar reads as a
-    // surface over dark *and* bright backgrounds (a black tint vanishes on dark)
-    o.rgb = mix(o.rgb, half3(barTone), half(barToneMix));
+    // no tone here: barSurface scrims the layer first (ToolbarView.barTint),
+    // the same tint the system glass bar uses on the live desktop
     // inner edge glow + a crisp rim hairline lit from the pointer, with a
     // hotspot that falls off ~140 pt — a light far above reproduces the old
     // top-lit look; the hotspot rides only the glow band and the hairline
