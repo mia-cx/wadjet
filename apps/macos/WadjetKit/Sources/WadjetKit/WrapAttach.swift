@@ -21,8 +21,8 @@ extension AttachFinder {
     /// `origin` aimed at the focus (halfway from the target's centre to the
     /// spot, Excalidraw's focus) first meets the outline. The deeper the
     /// segment from `origin` to `spot` reaches inside, the nearer the facing
-    /// point, which it reaches at `wrapDepth`. `spot` when `origin` is inside
-    /// the target, or the target has no inside.
+    /// point, which it reaches at `wrapDepth` (less on a thin target).
+    /// `spot` when `origin` is inside the target, or the target has no inside.
     public static func exactEnd(at spot: CGPoint, from origin: CGPoint, on target: Annotation) -> CGPoint {
         guard target.kind.hasAttachInterior else { return spot }
         let outline = outline(of: target)
@@ -32,33 +32,56 @@ extension AttachFinder {
         guard d > 0 else { return spot }
         let c = centre(of: target), focus = CGPoint(x: (c.x + spot.x) / 2, y: (c.y + spot.y) / 2)
         let facing = outlineCrossing(from: focus, to: origin, outline: outline)
-        let x = min(1, d / wrapDepth)
+        // a thin target can't be cut into as deep as `wrapDepth`: scale the
+        // ramp to half the distance from its centre to its outline, so a
+        // segment through its middle always gives way all the way
+        let full = min(wrapDepth, (edges.map { distance(from: c, to: $0) }.min() ?? 0) / 2)
+        guard full > 0, d < full else { return facing }
+        let x = d / full
         return along(edges, from: spot, to: facing, x * x * (3 - 2 * x))
     }
 
     /// how far the segment `a`→`b` reaches inside `outline`: the greatest
-    /// distance from the outline of any point on it that lies inside. A
-    /// coarse scan, then a golden-section refine around the deepest sample.
+    /// distance from the outline of any point on it that lies inside. The
+    /// segment is cut where it crosses the outline, so a short span inside
+    /// a long segment is found however long the segment is; each span inside
+    /// gets a coarse scan, then a golden-section refine around its deepest
+    /// sample.
     static func depth(from a: CGPoint, to b: CGPoint, inside outline: CGPath, edges: [(CGPoint, CGPoint)]) -> CGFloat {
+        let r = CGVector(dx: b.x - a.x, dy: b.y - a.y)
+        func point(_ t: CGFloat) -> CGPoint { CGPoint(x: a.x + r.dx * t, y: a.y + r.dy * t) }
         func at(_ t: CGFloat) -> CGFloat {
-            let p = CGPoint(x: a.x + (b.x - a.x) * t, y: a.y + (b.y - a.y) * t)
+            let p = point(t)
             guard outline.contains(p) else { return 0 }
             return edges.map { distance(from: p, to: $0) }.min() ?? 0
         }
-        let steps = 128
-        var best = (t: CGFloat(0), d: CGFloat(0))
-        for k in 0...steps {
-            let t = CGFloat(k) / CGFloat(steps), d = at(t)
-            if d > best.d { best = (t, d) }
+        // where the segment crosses each chord, as parameters along it
+        var cuts: [CGFloat] = [0, 1]
+        for (p, q) in edges {
+            let s = CGVector(dx: q.x - p.x, dy: q.y - p.y), den = r.dx * s.dy - r.dy * s.dx
+            guard abs(den) > 1e-12 else { continue }
+            let ap = CGVector(dx: p.x - a.x, dy: p.y - a.y)
+            let t = (ap.dx * s.dy - ap.dy * s.dx) / den, u = (ap.dx * r.dy - ap.dy * r.dx) / den
+            if (0...1).contains(t), (0...1).contains(u) { cuts.append(t) }
         }
-        guard best.d > 0 else { return 0 }
-        var lo = max(0, best.t - 1 / CGFloat(steps)), hi = min(1, best.t + 1 / CGFloat(steps))
-        let g = (sqrt(5) - 1) / 2
-        for _ in 0..<30 {
-            let m1 = hi - g * (hi - lo), m2 = lo + g * (hi - lo)
-            if at(m1) > at(m2) { hi = m2 } else { lo = m1 }
+        cuts.sort()
+        var deepest: CGFloat = 0
+        for (lo, hi) in zip(cuts, cuts.dropFirst()) where hi - lo > 1e-12 && outline.contains(point((lo + hi) / 2)) {
+            let steps = 16
+            var best = (t: (lo + hi) / 2, d: at((lo + hi) / 2))
+            for k in 0...steps {
+                let t = lo + (hi - lo) * CGFloat(k) / CGFloat(steps), d = at(t)
+                if d > best.d { best = (t, d) }
+            }
+            let w = (hi - lo) / CGFloat(steps), g = (sqrt(5) - 1) / 2
+            var l = max(lo, best.t - w), h = min(hi, best.t + w)
+            for _ in 0..<30 {
+                let m1 = h - g * (h - l), m2 = l + g * (h - l)
+                if at(m1) > at(m2) { h = m2 } else { l = m1 }
+            }
+            deepest = max(deepest, best.d, at((l + h) / 2))
         }
-        return max(best.d, at((lo + hi) / 2))
+        return deepest
     }
 
     /// the distance from `p` to the chord `e`

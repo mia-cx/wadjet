@@ -95,6 +95,34 @@ struct WrapAttachTests {
         }
     }
 
+    // Proves a far-off neighbour still sees the strip: from 3200 pt above,
+    // an end on the bottom edge's middle moves to the top edge, though the
+    // segment spends only 24 of its 3200 pt inside.
+    @Test func farNeighbourStillWraps() {
+        let r = CGRect(x: 0, y: 0, width: 200, height: 24)
+        let end = AttachFinder.exactEnd(at: CGPoint(x: 100, y: 0), from: CGPoint(x: 100, y: 3200), on: box(r))
+        #expect(near(end, CGPoint(x: 100, y: 24), 0.01), "\(end)")
+    }
+
+    // Proves a thin target gives way all the way: an 8 pt strip whose left
+    // edge's middle faces away from a neighbour level with it puts the end
+    // on its right edge, and nudging the strip up and down through that
+    // level moves the end smoothly, never jumping from edge to edge.
+    @Test func thinTargetWrapsSmoothly() {
+        let o = CGPoint(x: 201, y: 0)
+        func end(_ t: CGFloat) -> CGPoint {
+            AttachFinder.exactEnd(at: CGPoint(x: 0, y: t), from: o,
+                                  on: box(CGRect(x: 0, y: t - 4, width: 200, height: 8)))
+        }
+        #expect(near(end(0), CGPoint(x: 200, y: 0), 0.01), "\(end(0))")
+        var last = end(-20)
+        for k in -1999...2000 {
+            let p = end(CGFloat(k) / 100)
+            #expect(hypot(p.x - last.x, p.y - last.y) <= 2, "t \(CGFloat(k) / 100): \(last) → \(p)")
+            last = p
+        }
+    }
+
     // Proves the attachment itself never changes: it stays exact on the
     // left-edge middle, so moving the strip back restores that spot.
     @Test func movingBackRestoresTheSpot() {
