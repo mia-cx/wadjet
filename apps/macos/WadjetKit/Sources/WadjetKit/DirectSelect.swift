@@ -204,16 +204,6 @@ extension Annotation {
         guard hypot(sp.x - p.x, sp.y - p.y) <= tolerance + style.width / 2 else { return nil }
         return (i, [i, (i + 1) % data.nodes.count])
     }
-
-    /// where a rounded-rectangle's corner widget sits on screen: the top-left
-    /// corner's arc centre, at least `inset` in from the corner so it never
-    /// sits on the anchor; nil for other kinds
-    public func cornerWidget(inset: CGFloat) -> CGPoint? {
-        guard case let .shape(.rectangle(r), rect) = kind else { return nil }
-        let o = max(min(max(0, r), min(rect.width, rect.height) / 2), inset)
-        guard o <= min(rect.width, rect.height) / 2 else { return nil } // too small to hold it
-        return CGPoint(x: rect.minX + o, y: rect.maxY - o).applying(affineTransform)
-    }
 }
 
 extension AnnotationKind {
@@ -226,7 +216,7 @@ extension AnnotationKind {
 /// What Direct Select draws and takes presses on, from the Annotations whose
 /// anchors show: hollow anchors, filled once selected; bezier handles only
 /// on selected anchors and their neighbours (Illustrator's rule); a Line's
-/// bend grip and one on each path segment; a rectangle's corner-radius widget.
+/// bend grip and one on each path segment; a live Shape's widgets.
 public struct DirectSelectChrome: Sendable {
     public struct Anchor: Sendable {
         public let ref: AnchorRef
@@ -288,8 +278,8 @@ public struct DirectSelectChrome: Sendable {
                         grips.append(Grip(id: id, handle: .tangent(i, outgoing: true), at: h.applying(m), stem: anchor))
                     }
                 }
-                if let w = a.cornerWidget(inset: inset) {
-                    grips.append(Grip(id: id, handle: .cornerRadius, at: w, stem: nil))
+                for w in a.shapeWidgets(inset: inset) {
+                    grips.append(Grip(id: id, handle: w.handle, at: w.at, stem: nil))
                 }
             default:
                 break

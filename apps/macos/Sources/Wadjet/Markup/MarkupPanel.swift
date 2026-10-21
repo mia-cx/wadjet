@@ -209,6 +209,7 @@ final class MarkupView: NSView {
                                                                   width: 2 * r, height: 2 * r))
                     continue
                 }
+                if Self.addShapeWidget(h.handle, at: h.at, zoom: controller.zoom, to: grips) { continue }
                 // tangent grips read as satellites of their node: smaller
                 let base: CGFloat = switch h.handle {
                 case .tangent: 2.5
@@ -245,6 +246,30 @@ final class MarkupView: NSView {
         CATransaction.commit()
     }
 
+    /// a live Shape's widget, drawn apart from the resize grips as
+    /// Illustrator draws its own: a corner widget is a ring around a dot, the
+    /// sides widget a diamond, the inner-radius widget a small dot. False for
+    /// any other grip.
+    static func addShapeWidget(_ h: SelectionHandle, at p: CGPoint, zoom z: CGFloat, to path: CGMutablePath) -> Bool {
+        switch h {
+        case .cornerRadius:
+            let r = 3.5 / z, d = 1 / z
+            path.addEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))
+            path.addEllipse(in: CGRect(x: p.x - d, y: p.y - d, width: 2 * d, height: 2 * d))
+        case .sides:
+            let r = 4.5 / z
+            path.addLines(between: [CGPoint(x: p.x, y: p.y + r), CGPoint(x: p.x + r, y: p.y),
+                                    CGPoint(x: p.x, y: p.y - r), CGPoint(x: p.x - r, y: p.y)])
+            path.closeSubpath()
+        case .innerRadius:
+            let r = 3 / z
+            path.addEllipse(in: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r))
+        default:
+            return false
+        }
+        return true
+    }
+
     /// Direct Select's chrome after Illustrator: the shown paths outlined,
     /// hollow square anchors that fill once selected, round handle grips on
     /// stems, and the marquee — the layers to show above the content
@@ -258,7 +283,8 @@ final class MarkupView: NSView {
         }
         for g in chrome.grips {
             if let stem = g.stem { frame.move(to: stem); frame.addLine(to: g.at) }
-            let r = (g.handle == .cornerRadius ? 3.5 : 2.5) / z
+            if Self.addShapeWidget(g.handle, at: g.at, zoom: z, to: grips) { continue }
+            let r = 2.5 / z
             grips.addEllipse(in: CGRect(x: g.at.x - r, y: g.at.y - r, width: 2 * r, height: 2 * r))
         }
         let h = 3 / z

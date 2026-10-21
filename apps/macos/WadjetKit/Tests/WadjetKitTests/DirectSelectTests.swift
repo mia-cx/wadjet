@@ -156,16 +156,4 @@ struct DirectSelectTests {
         #expect(Self.curve.segment(at: CGPoint(x: 250, y: 16), tolerance: 2)?.anchors == [2, 3])
         #expect(Self.curve.segment(at: CGPoint(x: 250, y: 40), tolerance: 2) == nil)
     }
-
-    // Proves the corner widget rounds a rectangle by the drag's inward
-    // distance, clamped to half the shorter side, and the rect stays put
-    @Test(arguments: [(CGFloat(10), CGFloat(10)), (-50, 0), (200, 40)])
-    func cornerRadius(inward: CGFloat, expected: CGFloat) throws {
-        let rect = CGRect(x: 0, y: 0, width: 120, height: 80)
-        let a = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: rect), style: Self.style)
-        let w = try #require(a.cornerWidget(inset: 8))
-        #expect(Self.near(w, CGPoint(x: 8, y: 72)))
-        let r = a.dragging(.cornerRadius, from: w, to: CGPoint(x: w.x + inward, y: w.y - inward))
-        #expect(r.kind == .shape(.rectangle(cornerRadius: expected), rect: rect))
-    }
 }

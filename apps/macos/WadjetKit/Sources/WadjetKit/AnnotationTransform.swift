@@ -49,9 +49,13 @@ public enum SelectionHandle: Hashable, Sendable {
     /// a Magnify's source grip, x and y as in `resize` over the source rect:
     /// resizing the source keeps the lens's longest edge and lowers or raises the zoom
     case source(x: Int, y: Int)
-    /// a rectangle's corner widget under Direct Select — drag it in to round
-    /// the corners
-    case cornerRadius
+    /// a live Shape's corner widget on corner i (ShapeKind.corners) — drag it
+    /// in to round every corner (ShapeWidgets.swift)
+    case cornerRadius(Int)
+    /// a polygon's sides diamond — drag it down to add sides, up to remove them
+    case sides
+    /// a star's inner-radius dot — drag it along the spoke
+    case innerRadius
 }
 
 extension AnnotationKind {
@@ -368,18 +372,8 @@ extension Annotation {
             // the pin where the anchor was on screen
             let was = anchor.applying(m), now = pin.applying(new.affineTransform)
             return new.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y))
-        case .cornerRadius:
-            guard case let .shape(.rectangle(r), rect) = kind else { return self }
-            // in geometry space the widget sits on the top-left corner's
-            // diagonal; the drag's inward component along it changes the radius
-            let inv = affineTransform.inverted()
-            let a = start.applying(inv), b = point.applying(inv)
-            let limit = min(rect.width, rect.height) / 2
-            let inward = ((b.x - a.x) - (b.y - a.y)) / 2
-            var new = self
-            new.kind = .shape(.rectangle(cornerRadius: min(max(0, min(max(0, r), limit) + inward), limit)),
-                              rect: rect)
-            return new
+        case .cornerRadius, .sides, .innerRadius:
+            return draggingShapeWidget(handle, from: start, to: point)
         case .rotate:
             let c = CGPoint(x: kind.bounds.midX, y: kind.bounds.midY)
             return rotated(by: atan2(point.y - c.y, point.x - c.x) - atan2(start.y - c.y, start.x - c.x))
@@ -594,13 +588,16 @@ extension Annotation {
                         active: Int? = nil) -> [(handle: SelectionHandle, at: CGPoint)] {
         // a Magnify's source grips size a box, not points: every set keeps them
         if case .magnify = kind { return handles(minExtent: minExtent, rotateOffset: rotateOffset) }
+        // a live Shape's widgets show with every selecting set, as in
+        // Illustrator, which shows them right after drawing too
+        let widgets = shapeWidgets(inset: minExtent)
         switch set {
-        case .frame: return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .frame: return frameHandles(minExtent: minExtent, rotateOffset: rotateOffset) + widgets
         case .placed:
             // the bend first: where it lands on a frame grip, a tie picks it
             return handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
-                + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
-        case .points: return handles(minExtent: minExtent, rotateOffset: rotateOffset)
+                + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset) + widgets
+        case .points: return handles(minExtent: minExtent, rotateOffset: rotateOffset) + widgets
         case .drawing: return drawingHandles(minExtent: minExtent, rotateOffset: rotateOffset, active: active)
         }
     }

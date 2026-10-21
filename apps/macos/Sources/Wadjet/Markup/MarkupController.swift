@@ -1055,6 +1055,10 @@ final class MarkupController {
             stack.replaceRebasing(start.outlinePath.dragging(.tangent(i, outgoing: out), from: from, to: p,
                                                              constrained: constrained,
                                                              breaking: NSEvent.modifierFlags.contains(.option)))
+        case let .handle(h, start, from) where h.isShapeWidget:
+            // a live Shape's option changes; nothing snaps, and the sides
+            // step counts on-screen travel
+            stack.replaceRebasing(start.draggingShapeWidget(h, from: from, to: p, zoom: zoom))
         case let .handle(h, start, from):
             // Shift's 45° constraint wins on point handles: a point snap
             // would leave the ray — vertex ends and Pen tangents both;

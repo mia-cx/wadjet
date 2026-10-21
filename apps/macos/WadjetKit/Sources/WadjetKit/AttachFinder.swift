@@ -32,7 +32,8 @@ public struct AttachHover: Equatable, Sendable {
 public enum AttachFinder {
     /// the spots worth naming on `a`: corners and edge midpoints of a box;
     /// an ellipse's or counter's four edge midpoints, the ones on its
-    /// outline; a polygon's or star's vertices; a Line's ends and middle; a
+    /// outline; a polygon's or star's vertices (a rounded polygon's or
+    /// rectangle's side middles); a Line's ends and middle; a
     /// path's nodes
     public static func spots(on a: Annotation) -> [AttachCandidate] {
         func frame(_ u: [CGPoint]) -> [AttachCandidate] {
@@ -53,8 +54,16 @@ public enum AttachFinder {
             return segs.compactMap { s in a.position(of: s).map { AttachCandidate(target: a.id, spot: s, at: $0) } }
         case .shape(.ellipse, _), .counter:
             return frame(midpoints)
-        case let .shape(.polygon(sides), _):
-            return frame(vertices(count: max(3, sides)) { _ in 1 })
+        case let .shape(.polygon(sides, r), _):
+            let v = vertices(count: max(3, sides)) { _ in 1 }
+            guard r > 0 else { return frame(v) }
+            // rounding cuts the tips off the outline; each side's middle stays on it
+            return frame(v.indices.map { i in
+                let a = v[i], b = v[(i + 1) % v.count]
+                return CGPoint(x: (a.x + b.x) / 2, y: (a.y + b.y) / 2)
+            })
+        case let .shape(.rectangle(r), _) where r > 0:
+            return frame(midpoints)
         case let .shape(.star(points, ratio), _):
             let r = min(0.95, max(0.05, ratio))
             return frame(vertices(count: 2 * max(3, points)) { $0 % 2 == 1 ? r : 1 })
