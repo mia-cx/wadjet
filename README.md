@@ -19,7 +19,7 @@ I'm building wadjet to fix these frustrations without adding complexity.
 
 ## Status
 
-**v0.0.1. Early, with working Screenshot Tools and simulated Recording and upload flows.**
+**v0.0.1. Early, with working Screenshot, Recording, and Markup Tools. Uploads aren't built yet.**
 
 What works today:
 
@@ -27,17 +27,23 @@ What works today:
   Window Capture reaches the real window through the Freeze Frame.
 - HDR Freeze Frames and HDR Screenshots on HDR displays, with HEIC gain-map output.
 - Pick colour, Copy text via Vision OCR, and Measure copy their results to the clipboard.
+- Markup Tools that draw Annotations on the live screen or the Freeze Frame, which Capture and Record Tools then capture.
+- An editable Canvas for every Screenshot in `~/Pictures/Wadjet/original/`.
+  Save file writes the flattened image to `~/Pictures/Wadjet/flattened/` under the same name.
+- The Editor, which opens a Canvas or any image file to recrop it and edit its Annotations, then save, copy, share, export, or run a Screenshot Workflow.
 - Thumbnail toasts that open the Editor, and Pin to screen, which places a Screenshot on screen as a Markup image.
+- MP4 Recording with pause, saved to `~/Movies/Wadjet`. Recordings have no audio yet.
+- Workflows of local Steps, Shortcuts, and a Settings window.
+- History of every Capture, with the text found in Screenshots, and a Recent submenu of the last 10.
 - A toolbar on every display, integrated with the notch or a fake Dynamic Island, expanding on hover.
 
-Recording controls work, but Recording writes no video file yet, only a thumbnail.
-Uploads and GIF conversion are simulated. Destinations, History, and Settings are disabled stubs.
+Uploads, Destinations, GIF Recording, and the History window aren't built yet.
 
 ## Where it's heading
 
 - Workflows of ordered Steps for saving, copying, opening, pinning, and uploading each Capture.
 - Destinations including Wadjet Servers, cloud storage, and custom `.sxcu` imports from ShareX.
-- MP4 and GIF Recording, with pause and an optional trim Step.
+- GIF Recording, audio, and an optional trim Step.
 - Searchable history across Macs through Wadjet Server listings.
 - A self-hostable Wadjet Server for Cloudflare, Docker, and Kubernetes through a Helm chart.
 
@@ -63,13 +69,11 @@ WADJET_NO_OPEN=1 apps/macos/run.sh
 Grant Screen Recording permission in **System Settings > Privacy & Security > Screen & System Audio Recording**.
 Then trigger a Tool again.
 
-Hotkeys, fixed for now until Shortcuts are configurable:
+wadjet ships no Shortcuts.
+Add them in **Settings > Shortcuts** or in `config.json`, as [the macOS app README](apps/macos/README.md#shortcuts) shows.
+A Record Shortcut pressed again stops the Recording.
 
-- **⌘⇧4** opens Capture region.
-- **⌘⇧3** opens Capture screen.
-- **⌘⇧5** opens Record region. Press again to stop the Recording.
-
-The remaining Tools are in the eye menu and toolbar. Esc dismisses the Freeze Frame or cancels a countdown.
+The Tools are in the eye menu and toolbar. Esc dismisses the Freeze Frame or cancels a countdown.
 Esc does not stop a Recording.
 See [the macOS app README](apps/macos/README.md#debug-command-channel) for the debug command channel.
 
