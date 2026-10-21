@@ -49,13 +49,55 @@ struct AnnotationGroupTests {
         #expect(near(AnnotationGroup.bounds(of: c), CGRect(x: -50, y: 0, width: 200, height: 50)))
     }
 
-    // Proves dragging a grip past the opposite edge stops at a sliver
-    // instead of collapsing or inverting the Annotations.
-    @Test func resizeNeverInverts() {
+    // Proves dragging a grip past the opposite edge mirrors the group, as
+    // Illustrator does: positions reflect across the anchor and each
+    // Annotation flips; a grip dropped on the anchor leaves a sliver.
+    @Test func resizeMirrors() {
         let r = AnnotationGroup.resized([Self.left, Self.right], .resize(x: 1, y: 0),
-                                        from: CGPoint(x: 100, y: 25), to: CGPoint(x: -300, y: 25))
-        let b = AnnotationGroup.bounds(of: r)
-        #expect(b.width > 0 && b.width <= 1 + 1e-6 && near(b.minX, 0))
+                                        from: CGPoint(x: 100, y: 25), to: CGPoint(x: -100, y: 25))
+        #expect(near(Self.box(r[0]), CGRect(x: -20, y: 0, width: 20, height: 20)))
+        #expect(near(Self.box(r[1]), CGRect(x: -100, y: 10, width: 40, height: 40)))
+        #expect(r.allSatisfy { $0.transform.flipHorizontal && !$0.transform.flipVertical })
+        let onto = AnnotationGroup.resized([Self.left, Self.right], .resize(x: 1, y: 0),
+                                           from: CGPoint(x: 100, y: 25), to: CGPoint(x: 0, y: 25))
+        let b = AnnotationGroup.bounds(of: onto)
+        #expect(near(b.width, 1) && near(b.minX, 0))
+        #expect(onto.allSatisfy { !$0.transform.flipHorizontal })
+    }
+
+    // Proves Shift keeps a mirrored corner drag proportional: each axis the
+    // pointer crossed mirrors, at the larger axis's scale.
+    @Test func resizeMirrorsProportional() {
+        let r = AnnotationGroup.resized([Self.left, Self.right], .resize(x: 1, y: 1),
+                                        from: CGPoint(x: 100, y: 50), to: CGPoint(x: -100, y: 30),
+                                        proportional: true)
+        #expect(near(AnnotationGroup.bounds(of: r), CGRect(x: -100, y: 0, width: 100, height: 50)))
+        #expect(r.allSatisfy { $0.transform.flipHorizontal && !$0.transform.flipVertical })
+    }
+
+    // Proves a mirrored rotated Annotation stays where the mirror puts it on
+    // screen: its frame's corners land on the reflected corners.
+    @Test func resizeMirrorsRotated() {
+        var turned = Self.rect(CGRect(x: 60, y: 10, width: 40, height: 20))
+        turned.transform.rotation = 0.3
+        let r = AnnotationGroup.scaled([turned], x: -1, y: 1, about: .zero)[0]
+        let want = turned.frameCorners.map { CGPoint(x: -$0.x, y: $0.y) }
+        #expect(Set(r.frameCorners.map { "\(Int(($0.x * 1e4).rounded())),\(Int(($0.y * 1e4).rounded()))" })
+            == Set(want.map { "\(Int(($0.x * 1e4).rounded())),\(Int(($0.y * 1e4).rounded()))" }))
+    }
+
+    // Proves a rotated Line in a non-proportional group resize skews exactly,
+    // as Illustrator's does: its drawn ends land where the screen-space scale
+    // puts them, and it comes out upright.
+    @Test func resizeSkewsLines() {
+        var line = Annotation(kind: .line(start: CGPoint(x: 0, y: 0), end: CGPoint(x: 10, y: 0)), style: Self.style)
+        line.transform.rotation = .pi / 4
+        let ends = [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0)].map { $0.applying(line.affineTransform) }
+        let r = AnnotationGroup.scaled([line], x: 2, y: 1, about: .zero)[0]
+        guard case let .line(start, end, _) = r.kind else { Issue.record("not a line"); return }
+        #expect(r.transform == .identity)
+        #expect(near(start.x, ends[0].x * 2) && near(start.y, ends[0].y))
+        #expect(near(end.x, ends[1].x * 2) && near(end.y, ends[1].y))
     }
 
     // Proves a rotated Annotation in a proportional resize keeps its rotation
