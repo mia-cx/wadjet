@@ -132,9 +132,11 @@ extension MarkupController {
 
     /// Delete with anchors selected: they go, their neighbours join, and an
     /// Annotation left too short goes too — one undo step. False when no
-    /// anchor was selected.
+    /// anchor was selected. Mid-drag it does nothing (and still eats the
+    /// key): the drag's snapshot would put the anchors back on its next move.
     func deleteAnchors() -> Bool {
         guard directSelecting, !nodes.anchors.isEmpty else { return false }
+        guard gesture == nil else { return true }
         let picked = nodes
         edit { s in
             // a deleted anchor lets go; the rest renumber, attachments and all
