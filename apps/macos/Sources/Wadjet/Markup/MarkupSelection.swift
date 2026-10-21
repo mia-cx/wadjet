@@ -354,6 +354,7 @@ extension MarkupController {
     @discardableResult
     func cutSelection() -> Bool {
         guard copySelection() else { return false }
+        drawAnchor = nil // the whole Annotation was copied, so it goes whole
         deleteSelection()
         return true
     }
