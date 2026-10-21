@@ -217,7 +217,7 @@ extension MarkupController {
     /// and Eraser drags add a sample per run, so they don't re-run.
     var reactsToModifiers: Bool {
         switch gesture {
-        case .drawing, .cutting, .moving, .movingSource, .handle, .anchors, .group, .groupHandle: true
+        case .drawing, .cutting, .moving, .movingSource, .handle, .convertAnchor, .anchors, .group, .groupHandle: true
         default: false
         }
     }

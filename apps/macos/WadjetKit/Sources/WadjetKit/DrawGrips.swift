@@ -96,11 +96,13 @@ public enum DrawPress: Equatable, Sendable {
 
     /// the Draw Tool's active anchor after this press, from `active` before
     /// it: a press on an anchor makes it active (it fills, its curve handles
-    /// show); one on a curve handle or a bend grip keeps it; any other press
-    /// (the stroke, the frame, the body, elsewhere — `nil`) clears it
+    /// show), and so does one on the stroke for the anchor it adds, as
+    /// Illustrator selects a new point; one on a curve handle or a bend grip
+    /// keeps it; any other press (the frame, the body, elsewhere — `nil`)
+    /// clears it
     public static func activeAnchor(after press: DrawPress?, was active: Int?) -> Int? {
         switch press {
-        case let .grip(.vertex(i))?: i
+        case let .grip(.vertex(i))?, let .insert(_, i, _)?: i
         case .grip(.tangent)?, .grip(.bend)?, .grip(.segmentBend)?: active
         default: nil
         }

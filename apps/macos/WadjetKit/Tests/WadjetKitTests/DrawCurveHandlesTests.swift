@@ -65,15 +65,17 @@ struct DrawCurveHandlesTests {
         #expect(SelectionHandle.vertex(0).drawingRank < SelectionHandle.tangent(0, outgoing: true).drawingRank)
     }
 
-    // Proves a press on an anchor activates it, a handle or bend press keeps
-    // it, and any other press clears it
+    // Proves a press on an anchor activates it, a press on the stroke
+    // activates the anchor it adds, a handle or bend press keeps it, and any
+    // other press clears it
     @Test func pressesSetAndClearTheActiveAnchor() {
-        let insert = DrawPress.insert(Self.curve(), node: 1, t: 0.5)
+        let insert = DrawPress.insert(Self.curve(), node: 2, t: 0.5)
         #expect(DrawPress.activeAnchor(after: .grip(.vertex(2)), was: nil) == 2)
         #expect(DrawPress.activeAnchor(after: .grip(.vertex(0)), was: 2) == 0)
         #expect(DrawPress.activeAnchor(after: .grip(.tangent(1, outgoing: true)), was: 1) == 1)
         #expect(DrawPress.activeAnchor(after: .grip(.segmentBend(0)), was: 1) == 1)
-        #expect(DrawPress.activeAnchor(after: insert, was: 1) == nil)
+        #expect(DrawPress.activeAnchor(after: insert, was: 1) == 2)
+        #expect(DrawPress.activeAnchor(after: insert, was: nil) == 2)
         #expect(DrawPress.activeAnchor(after: .grip(.resize(x: 1, y: 1)), was: 1) == nil)
         #expect(DrawPress.activeAnchor(after: nil, was: 1) == nil)
     }
