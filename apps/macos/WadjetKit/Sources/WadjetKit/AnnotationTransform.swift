@@ -39,6 +39,10 @@ public enum SelectionHandle: Hashable, Sendable {
     case vertex(Int)
     /// the Line's on-curve midpoint — drag it to bend
     case bend
+    /// a path segment's on-curve midpoint (segment i runs from node i to the
+    /// next, the last of a closed path back to node 0) — drag it to bend
+    /// that segment (SegmentBend.swift)
+    case segmentBend(Int)
     /// a Pen node's bezier handle (outgoing steers the segment after the node)
     case tangent(Int, outgoing: Bool)
     case rotate
@@ -288,6 +292,8 @@ extension Annotation {
             a.kind = .line(start: s, end: e,
                            bend: hypot(p.x - mid.x, p.y - mid.y) < Self.bendStraightenRadius ? nil : p)
             return a
+        case let .segmentBend(i):
+            return bendingSegment(i, from: start, to: point)
         case let .tangent(i, outgoing):
             var a = baked
             guard case var .path(data) = a.kind, data.nodes.indices.contains(i) else { return a }
@@ -602,8 +608,9 @@ extension Annotation {
         let near = handles(set, minExtent: minExtent, rotateOffset: rotateOffset)
             .map { ($0.handle, hypot($0.at.x - p.x, $0.at.y - p.y)) }
             .filter { $0.1 <= radius }
-        // the Draw Tool grabs an anchor or bend in reach before a frame grip
-        if set == .drawing, let h = near.filter({ !$0.0.isFrame }).min(by: { $0.1 < $1.1 }) { return h.0 }
+        // the Draw Tool grabs an anchor in reach first, then a bend grip,
+        // then a frame grip — each tier by distance
+        if set == .drawing { return near.min { ($0.0.drawingRank, $0.1) < ($1.0.drawingRank, $1.1) }?.0 }
         return near.min { $0.1 < $1.1 }?.0
     }
 }

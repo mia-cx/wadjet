@@ -875,30 +875,38 @@ final class MarkupController {
 
     /// a press on the selection's grips or body starts the drag that adjusts
     /// it; false when the press missed it. `insertingNodes` (the Draw Tool):
-    /// a press on a Line's or path's stroke adds a node there and drags it
+    /// an anchor, then a bend grip, then the stroke — where the press adds a
+    /// node and drags it — then a frame grip (`Annotation.drawPress`)
     func grabSelection(at p: CGPoint, insertingNodes: Bool = false) -> Bool {
         guard let sel = single else { return false }
-        if let h = sel.handle(at: p, radius: Self.handleHitRadius / zoom,
-                              minExtent: Self.handleMinExtent / zoom,
-                              rotateOffset: Self.rotateOffset / zoom, set: gripSet) {
+        let press: DrawPress? = if insertingNodes {
+            sel.drawPress(at: p, radius: Self.handleHitRadius / zoom, tolerance: Self.hitTolerance / zoom,
+                          minExtent: Self.handleMinExtent / zoom, rotateOffset: Self.rotateOffset / zoom)
+        } else {
+            sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
+                       rotateOffset: Self.rotateOffset / zoom, set: gripSet).map { .grip($0) }
+        }
+        switch press {
+        case let .grip(h)?:
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
             // dragging an attached end carries it away; the drop may attach it again
             gesture = .handle(h, sel.attachPoint(for: h).map { sel.detaching($0) } ?? sel, from: p)
             return true
+        case let .insert(a, i, t)?:
+            snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
+            // the node joins the stack now; the press's gesture snapshot makes
+            // the insertion and its drag one undo step. The new node
+            // renumbers the path: attachments move with it
+            stack.replaceInsertingNode(a, at: i, splitAt: t)
+            gesture = .handle(.vertex(i), stack.annotations.first { $0.id == a.id } ?? a, from: p)
+            render()
+            AppLog.line("markup: added a node")
+            return true
+        case nil:
+            break
         }
         if PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) {
             snapper = MarkupSnapper(stack: stack, excluding: sel.id, canvasBounds: snapBounds, pixelSources: snapPixelSources)
-            // the node joins the stack now; the press's gesture snapshot makes
-            // the insertion and its drag one undo step
-            if insertingNodes, sel.kind.insertsNodes,
-               let (a, i, t) = sel.insertingNodeSplit(near: p, within: Self.hitTolerance / zoom) {
-                // the new node renumbers the path: attachments move with it
-                stack.replaceInsertingNode(a, at: i, splitAt: t)
-                gesture = .handle(.vertex(i), stack.annotations.first { $0.id == a.id } ?? a, from: p)
-                render()
-                AppLog.line("markup: added a node")
-                return true
-            }
             gesture = (selecting ? optionDuplicateGesture([sel], at: p) : nil) ?? Self.moveGesture(sel, at: p)
             return true
         }
@@ -912,11 +920,16 @@ final class MarkupController {
     func selectionCursor(at p: CGPoint) -> NSCursor? {
         guard !selecting, editing == nil, editsSelection() else { return nil }
         guard let sel = single else { return overGroup(at: p) ? .arrow : nil }
-        if sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
-                      rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil { return .arrow }
-        guard PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) else { return nil }
-        return armed == .draw && sel.kind.insertsNodes
-            && sel.insertingNode(near: p, within: Self.hitTolerance / zoom) != nil ? .openHand : .arrow
+        if armed == .draw {
+            switch sel.drawPress(at: p, radius: Self.handleHitRadius / zoom, tolerance: Self.hitTolerance / zoom,
+                                 minExtent: Self.handleMinExtent / zoom, rotateOffset: Self.rotateOffset / zoom) {
+            case .grip?: return .arrow
+            case .insert?: return .openHand
+            case nil: break
+            }
+        } else if sel.handle(at: p, radius: Self.handleHitRadius / zoom, minExtent: Self.handleMinExtent / zoom,
+                             rotateOffset: Self.rotateOffset / zoom, set: gripSet) != nil { return .arrow }
+        return PathGeometry.hitTest(sel, at: p, tolerance: Self.hitTolerance / zoom) ? .arrow : nil
     }
 
     /// a Step counter click places on the spot — there's no drag. ⌥-click on a
