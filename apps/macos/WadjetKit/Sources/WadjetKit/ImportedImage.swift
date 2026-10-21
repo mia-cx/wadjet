@@ -6,7 +6,9 @@ import ImageIO
 public enum ImportedImage {
     /// the CGImage and its point size; nil when the source doesn't decode
     public static func decode(_ source: CGImageSource) -> (image: CGImage, size: CGSize)? {
-        guard var image = CGImageSourceCreateImageAtIndex(source, 0, nil) else { return nil }
+        guard let lazy = CGImageSourceCreateImageAtIndex(source, 0,
+            [kCGImageSourceShouldCache: false] as CFDictionary) else { return nil }
+        let image: CGImage
         let props = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any]
         let orientation = (props?[kCGImagePropertyOrientation] as? Int) ?? 1
         if orientation != 1 {
@@ -14,9 +16,11 @@ public enum ImportedImage {
             guard let upright = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                 kCGImageSourceCreateThumbnailFromImageAlways: true,
                 kCGImageSourceCreateThumbnailWithTransform: true,
-                kCGImageSourceThumbnailMaxPixelSize: max(image.width, image.height),
+                kCGImageSourceThumbnailMaxPixelSize: max(lazy.width, lazy.height),
             ] as CFDictionary) else { return nil }
             image = upright
+        } else {
+            image = CanvasImageCodec.owningPixels(lazy)
         }
         func dpi(_ key: CFString) -> CGFloat { (props?[key] as? CGFloat) ?? 72 }
         var w = dpi(kCGImagePropertyDPIWidth), h = dpi(kCGImagePropertyDPIHeight)

@@ -737,6 +737,34 @@ struct CanvasDocumentTests {
         let top = Array(px[0..<4]) // the top row's first pixel
         #expect(abs(top[0] - red) < 0.05 && abs(top[2] - blue) < 0.05)
     }
+
+    // Proves opened and imported images draw from pixels they own, not from
+    // ImageIO's cache, which ImageIO can unmap mid-draw under memory pressure.
+    // ImageIO hands out a fresh copy on every read; owned pixels are one buffer.
+    @Test(arguments: [false, true]) func decodedImagesOwnTheirPixels(hdr: Bool) throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        let url = directory.appendingPathComponent("owned.wadjet")
+        let display = try hdr ? hdrFixture() : solidImage([1, 0, 0, 1])
+        try CanvasDocument(layout: [.init(id: 1, frame: CGRect(x: 0, y: 0, width: 8, height: 8), scaleFactor: 1)],
+            crop: CGRect(x: 0, y: 0, width: 8, height: 8), displayImages: [1: display]).write(to: url)
+        let opened = try #require(CanvasDocument.read(from: url).displayImages[1])
+        #expect(try ownsPixels(opened))
+        if hdr { #expect(opened.contentHeadroom > 1) }
+        let png = NSMutableData()
+        let dest = try #require(CGImageDestinationCreateWithData(png, "public.png" as CFString, 1, nil))
+        CGImageDestinationAddImage(dest, try solidImage([0, 0, 1, 1]), nil)
+        try #require(CGImageDestinationFinalize(dest))
+        let source = try #require(CGImageSourceCreateWithData(png, nil))
+        let imported = try #require(ImportedImage.decode(source))
+        #expect(try ownsPixels(imported.image))
+    }
+}
+
+private func ownsPixels(_ image: CGImage) throws -> Bool {
+    let first = try #require(image.dataProvider?.data), second = try #require(image.dataProvider?.data)
+    return CFDataGetBytePtr(first) == CFDataGetBytePtr(second)
 }
 
 private func image(width: Int, height: Int, pixels: [UInt8]) throws -> CGImage {

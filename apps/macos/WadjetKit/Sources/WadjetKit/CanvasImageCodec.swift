@@ -25,11 +25,34 @@ public enum CanvasImageCodec {
 
     static func decode(_ data: Data) throws -> CGImage {
         guard let source = CGImageSourceCreateWithData(data as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, [
+              let lazy = CGImageSourceCreateImageAtIndex(source, 0, [
                 kCGImageSourceDecodeRequest: kCGImageSourceDecodeToHDR,
                 kCGImageSourceShouldAllowFloat: true,
-              ] as CFDictionary) else { throw CanvasDocumentError.imageDecodingFailed }
-        return image
+                kCGImageSourceShouldCache: false,
+              ] as CFDictionary)
+        else { throw CanvasDocumentError.imageDecodingFailed }
+        return owningPixels(lazy)
+    }
+
+    /// Copies an ImageIO image into pixels it owns. A lazily decoded image
+    /// reads from an ImageIO cache block on every draw, and under memory
+    /// pressure ImageIO can unmap that block while CoreGraphics is still
+    /// copying from it (SIGSEGV/SIGBUS in `imageProvider_getBytesAtPosition`).
+    /// A Canvas keeps its images while its Editor is open, so it copies once.
+    /// Where ImageIO can't hand its pixels over, the lazy image is returned unchanged.
+    static func owningPixels(_ lazy: CGImage) -> CGImage {
+        guard let pixels = lazy.dataProvider?.data,
+              let provider = CGDataProvider(data: pixels),
+              let space = lazy.colorSpace,
+              let owned = CGImage(width: lazy.width, height: lazy.height,
+                bitsPerComponent: lazy.bitsPerComponent, bitsPerPixel: lazy.bitsPerPixel,
+                bytesPerRow: lazy.bytesPerRow, space: space, bitmapInfo: lazy.bitmapInfo,
+                provider: provider, decode: lazy.decode, shouldInterpolate: lazy.shouldInterpolate,
+                intent: lazy.renderingIntent) else { return lazy }
+        // Only PQ, HLG, and extended colour spaces take a headroom tag; SDR
+        // headroom 1 needs none, so a refused retag keeps the owned copy.
+        guard lazy.contentHeadroom > 0, owned.contentHeadroom != lazy.contentHeadroom else { return owned }
+        return CGImageCreateCopyWithContentHeadroom(lazy.contentHeadroom, owned) ?? owned
     }
 
     /// Encodes an SDR PNG in Display P3 so wide-gamut Screenshots retain their
