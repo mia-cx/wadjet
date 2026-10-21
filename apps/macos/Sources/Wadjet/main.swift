@@ -2853,6 +2853,9 @@ struct ToolbarView: View {
     /// glass's tint on the live desktop, and barSurface's over the Freeze
     /// Frame crop. Darkens in Dark Mode, lightens in Light Mode
     var barTint: Color { colorScheme == .dark ? .black.opacity(0.35) : .white.opacity(0.3) }
+    /// icons, labels, dividers and highlights on the expanded bar, contrasting
+    /// barTint. The collapsed island stays black, so its contents stay white
+    var barInk: Color { colorScheme == .dark ? .white : .black }
     var screen: NSScreen? {
         displayIndex < ctrl.chromeScreens.count ? ctrl.chromeScreens[displayIndex] : NSScreen.main
     }
@@ -3157,7 +3160,7 @@ struct ToolbarView: View {
     }
 
     @ViewBuilder var expandedContent: some View {
-        if recording { recControls } else { toolRow }
+        if recording { recControls.foregroundStyle(barInk) } else { toolRow }
     }
 
     @State var recRowSize = CGSize(width: 220, height: 64)
@@ -3386,7 +3389,7 @@ struct ToolbarView: View {
         HStack(spacing: twoRows ? 0 : cellGap) { // Two Rows' hidden groups take no gap either
             ForEach(Tool.Kind.allCases, id: \.self) { k in
                 if k != Tool.Kind.allCases.first, !twoRows { // thin divider between groups, clear of the highlight capsule
-                    Rectangle().fill(.white.opacity(0.14))
+                    Rectangle().fill(barInk.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                         .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
                 }
@@ -3479,7 +3482,7 @@ struct ToolbarView: View {
         rowContent { t, collapsed in
             iconCell(t, collapsed: collapsed).scaleEffect((1 + lensIconBoost) / lensSqueeze)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(barInk)
         .frame(width: shapeW, height: shapeH, alignment: .top)
         .padding(.top, shapeTop + rowTop)
         .offset(x: barDX)
@@ -3603,18 +3606,18 @@ struct ToolbarView: View {
                     }
                 }
         }
-        .foregroundStyle(marked && !lensActive ? Color.wadjetAccent : .white)
+        .foregroundStyle(marked && !lensActive ? Color.wadjetAccent : barInk)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space. Colour
             // icons can't take the accent, so an accent ring marks the cell
             .background {
                 if marked, !lensActive {
-                    Capsule().fill(.white.opacity(0.10))
+                    Capsule().fill(barInk.opacity(0.10))
                         .overlay(Capsule().strokeBorder(Color.wadjetAccent, lineWidth: 1.5))
                         .frame(width: selW, height: selH)
                 } else if collapsed, hoverKind == t.kind { // Steady: the group a click or dwell opens
-                    Capsule().fill(.white.opacity(0.10)).frame(width: selW, height: selH)
+                    Capsule().fill(barInk.opacity(0.10)).frame(width: selW, height: selH)
                 }
             }
             .contentShape(Rectangle()) // whole cell, not just the glyph
@@ -3894,7 +3897,7 @@ struct RecControlsView: View {
                 recButton("arrow.uturn.backward", label: "Undo Clear") { AppDelegate.shared?.undoClear() }
             }
         }
-        .foregroundStyle(.white)
+        // no foreground here: the caller sets it (barInk on the bar, white on the black bubble)
         // the outer circles' edges sit so their centres meet the corner
         // centres (radius 32 + 10) — concentric, like the tool capsule
         .padding(.horizontal, 18)
