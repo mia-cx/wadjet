@@ -306,8 +306,11 @@ extension Annotation {
             data.rawPoints = nil
             data.smoothing = nil
             // a smooth node stays smooth: the opposite handle turns to stay
-            // collinear through the anchor at its own length; a nil one stays nil
-            if !breaking, let other = outgoing ? n.handleIn : n.handleOut {
+            // collinear through the anchor at its own length; a nil one stays
+            // nil, and a corner's (handles not collinear at drag start, as
+            // Illustrator keeps them) stays where it is
+            if !breaking, let other = outgoing ? n.handleIn : n.handleOut,
+               old.map({ Self.collinear($0, other, through: n.anchor) }) ?? true {
                 let ux = n.anchor.x - h.x, uy = n.anchor.y - h.y, l = hypot(ux, uy)
                 if l > 1e-9 {
                     let len = hypot(other.x - n.anchor.x, other.y - n.anchor.y)
@@ -585,9 +588,10 @@ extension Annotation {
         return out
     }
 
-    /// the grips `set` shows on this Annotation
-    public func handles(_ set: GripSet, minExtent: CGFloat,
-                        rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
+    /// the grips `set` shows on this Annotation; `active` is the Draw
+    /// Tool's active anchor, whose curve handles `.drawing` adds
+    public func handles(_ set: GripSet, minExtent: CGFloat, rotateOffset: CGFloat,
+                        active: Int? = nil) -> [(handle: SelectionHandle, at: CGPoint)] {
         // a Magnify's source grips size a box, not points: every set keeps them
         if case .magnify = kind { return handles(minExtent: minExtent, rotateOffset: rotateOffset) }
         switch set {
@@ -597,19 +601,19 @@ extension Annotation {
             return handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
                 + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .points: return handles(minExtent: minExtent, rotateOffset: rotateOffset)
-        case .drawing: return drawingHandles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .drawing: return drawingHandles(minExtent: minExtent, rotateOffset: rotateOffset, active: active)
         }
     }
 
     /// the grip nearest `p`, if within `radius` — nearest, not first, so grips
     /// crowded closer than `radius` resolve to the one the press meant
     public func handle(at p: CGPoint, radius: CGFloat, minExtent: CGFloat,
-                       rotateOffset: CGFloat, set: GripSet = .points) -> SelectionHandle? {
-        let near = handles(set, minExtent: minExtent, rotateOffset: rotateOffset)
+                       rotateOffset: CGFloat, set: GripSet = .points, active: Int? = nil) -> SelectionHandle? {
+        let near = handles(set, minExtent: minExtent, rotateOffset: rotateOffset, active: active)
             .map { ($0.handle, hypot($0.at.x - p.x, $0.at.y - p.y)) }
             .filter { $0.1 <= radius }
-        // the Draw Tool grabs an anchor in reach first, then a bend grip,
-        // then a frame grip — each tier by distance
+        // the Draw Tool grabs an anchor in reach first, then a curve handle,
+        // then a bend grip, then a frame grip — each tier by distance
         if set == .drawing { return near.min { ($0.0.drawingRank, $0.1) < ($1.0.drawingRank, $1.1) }?.0 }
         return near.min { $0.1 < $1.1 }?.0
     }
