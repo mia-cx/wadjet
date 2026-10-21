@@ -312,8 +312,14 @@ extension ToolbarView {
             .onAppear {
                 // Undo rebuilt the island under the pointer: it keeps the ring click's hold
                 guard UndoRingHold.displays.contains(displayIndex) else { return }
-                if pointerInside() { ringPointer = UndoRingPointer(held: true) }
-                else { UndoRingHold.displays.remove(displayIndex) }
+                ringPointer = UndoRingPointer(held: true)
+                // the panel may not be registered yet (showToolbars orders it
+                // front first): check the pointer once that has run
+                Task { @MainActor in
+                    guard ctrl.toolbarPanels[displayIndex] != nil, !pointerInside() else { return }
+                    UndoRingHold.displays.remove(displayIndex)
+                    ringPointer.moved(inside: false, onRing: false)
+                }
             }
     }
 
