@@ -677,7 +677,7 @@ final class MarkupController {
     }
 
     func deleteSelection() {
-        if deleteAnchors() { return }
+        if deleteAnchors() || deleteDrawAnchor() { return }
         guard !selection.isEmpty else { return }
         edit { $0.remove(ids: selection.ids) }
         selection = []

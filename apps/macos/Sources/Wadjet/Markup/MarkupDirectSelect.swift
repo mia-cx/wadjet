@@ -137,12 +137,9 @@ extension MarkupController {
         guard directSelecting, !nodes.anchors.isEmpty else { return false }
         let picked = nodes
         edit { s in
+            // a deleted anchor lets go; the rest renumber, attachments and all
             for a in s.annotations where !picked.indices(of: a.id).isEmpty {
-                // a deleted anchor lets go; the rest renumber, attachments and all
-                if let kept = a.removingAnchors(picked.indices(of: a.id)) {
-                    s.replaceRemovingAnchors(kept, removed: picked.indices(of: a.id))
-                }
-                else { s.remove(id: a.id) }
+                s.removeAnchors(picked.indices(of: a.id), of: a.id)
             }
         }
         nodes.prune(to: stack.annotations)
