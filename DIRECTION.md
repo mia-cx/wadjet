@@ -18,13 +18,18 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - Settings hold two capture defaults, both on: Freeze Frame and cursor. With Freeze Frame off, Tools select over the live desktop and Screenshots are taken at confirm, like macOS's own; Utilities always freeze, because they read the frozen pixels. The Tool menu's Cursor tile overrides the default for one capture.
 - Whether a Tool opens on a Freeze Frame or the live screen follows, from weakest to strongest: the global toggle, an optional while-recording setting, an optional per-Shortcut setting, and an optional per-Shortcut while-recording setting. Markup defaults to the live screen during a Recording.
 - The toolbar shows on every display at once: as the notch on the built-in display, or a black fake Dynamic Island on other displays, showing the current Tool. It expands on hover into Liquid Glass with touch-size Tool buttons; on displays without a notch it drops below the menu bar instead of covering it. Only the hovered toolbar expands, and only the pointer's display shows the loupe.
-- The expanded toolbar groups its Tools: still (Region, Window, Screen) | video (Region, Window, Screen) | utilities (Pick colour, Copy text, Measure), split by thin dividers. One group is open at a time and shows all its Tools; the others collapse to their group's icon (camera, video camera, tools) with a tiny badge of their last-used Tool. Hovering a group opens it, and so does dragging the lens into it, with the same smooth centred expand either way. Markup is its own group: Markup Tools draw Annotations on the live screen or the Freeze Frame, and Capture and Record Tools capture them.
+- The expanded toolbar groups its Tools: Markup | still (Region, Window, Screen) | video (Region, Window, Screen) | utilities (Pick colour, Copy text, Measure), split by thin dividers. One group is open at a time and shows all its Tools; the others collapse to their group's icon (pencil, camera, video camera, tools) with a tiny badge of their last-used Tool. Hovering a group opens it, and so does dragging the lens into it, with the same smooth centred expand either way. Markup Tools draw Annotations on the live screen or the Freeze Frame, and Capture and Record Tools capture them.
 - Region selection either confirms on release or waits for a manual confirm, so a region can be moved and resized before the Screenshot is taken or the Recording starts. A toggle switches between the two. There are no typed width/height fields.
 - Clicking the selected Tool opens its menu: its Workflow, Recording options, copy format, or Measure mode. Each Tool keeps its own Workflow.
 - Each Tool shows a short permanent label under its icon (collapsed groups read Still / Video / Utilities); Tools have no hover tooltips — the recording and confirm buttons keep theirs. The loupe flips to stay on screen.
 - Scroll cycles the selected Tool's variants: Region, Window, Screen (within Capture or within Record), Measure modes, or copy formats. Option+scroll changes the Tool's value, such as Measure's tolerance. Space toggles Region and Window, as in macOS.
 - Freeze Frames and Screenshots keep HDR on HDR displays; HDR Screenshots save as HEIC with a gain map. Recordings are SDR in v1.
-- Tools are Capture region, window, and screen; Record region, window, and screen; Pick colour; Copy text; and Measure. Markup Tools arrive with the Markup map.
+- Tools are Capture region, window, and screen; Record region, window, and screen; Pick colour; Copy text; and Measure. Markup Tools are Select, Direct Select, Eraser, Knife, Draw (Line, Pen, Brush, Highlighter), Shapes, Text, Step counter, Censor, Magnify, and Freeze region.
+- Select works on whole Annotations through their bounding box; Direct Select works on their Anchors. Holding ⌘ doesn't turn an armed Tool into Select.
+- Each Markup Tool has a single-letter key, as in Figma: V Select, A Direct Select, E Eraser, K Knife, L Line, P Pen, B Brush, H Highlighter, T Text, R Rectangle, O Ellipse, N Step counter, C Censor, M Magnify, F Freeze region. The letters work through a local key monitor while Markup or a Freeze Frame is up, because the App Sandbox refuses Carbon hotkeys for bare letters.
+- Annotations attach to each other: a Line's or path's end, a point along it, or a whole Annotation follows the Annotation it's attached to. During a drag, ⌘ skips snapping, ⌃ skips attaching, and ⇧⌘ attaches a moved Annotation whole.
+- Annotations sit above the Freeze Frame by window level: the Freeze Frame panels sit one level below the Markup panels.
+- Clear removes every Annotation and can be undone: ⌘Z brings them back for 3 s, and the Clear button reads Undo for 6 s.
 - Pick colour, Copy text, and Measure put their result on the clipboard and run no Workflow.
 - Measure works like PowerToys Screen Ruler: Bounds (drag a box; Shift keeps it), Spacing, Horizontal, and Vertical, which find edges from the pointer on the Freeze Frame. Values are in points; a click copies them.
 - Pick colour's loupe shows hex, rgb, hsl, oklch, and lab. It copies hex by default; the format is set in Settings or the Tool's menu.
@@ -35,8 +40,8 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - A Workflow can repeat a Step, with separate options for each instance.
 - Use built-in Steps in v1. Custom command and script Steps are deferred.
 - After-capture Steps are Save file, Copy image, Copy file, Open in an app, Show toast, and Pin to screen.
-- Show toast is an iOS-style thumbnail in the top-right; clicking it opens the file until the Editor exists, then the Screenshot's Canvas in the Editor.
-- Pin to screen opens a Screenshot in a borderless, always-on-top window you can drag, pan, zoom, and resize. Once Markup ships, it places the Screenshot's Canvas on screen as an image Annotation instead.
+- Show toast is an iOS-style thumbnail in the top-right; clicking it opens the Screenshot's Canvas in the Editor, or a Recording's file.
+- Pin to screen places the Screenshot's Canvas on screen where it was captured, as an image Annotation you can move, resize, and recrop.
 - After-upload Steps retain that catalogue and add Copy link, Copy image + link in one clipboard item, and Open link.
 - Order Copy image before Copy link for the image-then-link sequence.
 - Copy image is unavailable for Recordings; use Copy file instead.
@@ -51,8 +56,8 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - MP4 resolution and fps are configurable (1920 px, 30 fps by default) with no length limit.
 - GIFs default to 960 px, 15 fps, a 60 s max, 128 colours, and ordered dithering, all configurable.
 - GIFs are encoded by ditherette's GPU encoder, not ffmpeg. GIF Recording is in v1 but waits for that encoder; TestFlight alphas ship without it.
-- The app is sandboxed so alphas can go through TestFlight; the store listing stays a public-release concern. Screenshots save to `~/Pictures/Wadjet` and Recordings to `~/Movies/Wadjet` by default; other folders are granted through a folder picker.
-- The selection lens keeps its private glass patch behind a build flag. With the flag off, the lens sits behind the toolbar icons so blur and tint never hide them.
+- The app is sandboxed so alphas can go through TestFlight; the store listing stays a public-release concern. Screenshots save to `~/Pictures/Wadjet`, each Canvas in `original/` and its flattened image in `flattened/` under the same name, and Recordings to `~/Movies/Wadjet` by default; other folders are granted through a folder picker.
+- The selection lens keeps its private glass patch behind a build flag. Its Liquid Glass shader bends only the toolbar layer (bar and icons); the backdrop behind the bar is drawn 1:1, so it never slides as the lens drags. With the flag off, the lens sits behind the toolbar icons so blur and tint never hide them.
 - A Recording goes straight to its Workflow. An optional Trim video Step opens a trim window first.
 - v1 Destinations are Wadjet Servers, Google Drive, Dropbox, OneDrive, S3-compatible storage, WebDAV, SFTP, and Custom `.sxcu` imports. Imgur and FTP are out.
 - A Wadjet Server supports upload, list, and delete, so history can span several Macs. It authenticates with an API key or OAuth, through its own OAuth server or an external IdP.
@@ -63,13 +68,13 @@ Not yet checked on a real Mac: anything that needs a capture, because Wadjet has
 - `apps/macos` becomes an Xcode project, for the Settings window, other Apple platforms, and a possible Mac App Store build. Its UI-free core (Workflows, config, `.sxcu`, Destinations, history) is a testable library.
 - The Mac app and the Wadjet Server get separate PRDs, joined by the protocol. The Swift protocol client is hand-written.
 - v1 builds in this order: Workflows, history, Recording, Wadjet Server uploads, then the other Destinations.
-- Shortcuts use the KeyboardShortcuts package for hotkeys and the Settings recorder.
+- Shortcuts use the KeyboardShortcuts package for hotkeys and the Settings recorder. Markup Tool letters are not Shortcuts.
 - i.mia.cx stays as it is. w.mia.cx runs the Wadjet Server once it can replace iShare.
 - S3, WebDAV, and SFTP links come from a public URL prefix the user sets. Cloud drives create an anyone-with-the-link share.
 - Destinations are edited in a Settings form. Secret-looking values move to the Keychain, and deletion URLs stay there too.
 - Failed uploads retry 3 times on network and server errors, then offer Retry. Offline uploads fail at once instead of queueing.
 - The toast shows upload progress and Cancel. Known size limits are checked before uploading.
-- History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default. Their Canvases degrade instead: SDR and lossy after 7 days, unused displays dropped after 30, deleted after 90, all configurable; a Canvas another Canvas links to lives as long as that one.
+- History shows in a Recent submenu (last 10) and a History window. Entries outlive their temporary files, which wadjet deletes after 7 days by default. Their Canvases in `original/` degrade instead: SDR and lossy after 7 days, unused displays dropped after 30, deleted after 90, all configurable; a Canvas another Canvas links to lives as long as that one.
 - History searches the text inside Screenshots, filters by kind, Destination, and date, and merges Wadjet Server listings from other Macs.
 - Include Screenshots, MP4 and GIF Recording, capture history, and every Tool above in v1.
 - Keep settings in a human-readable JSON config file in the app's container, reloaded live on outside edits, and secrets in the Keychain.
