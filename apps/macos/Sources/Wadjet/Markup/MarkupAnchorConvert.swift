@@ -13,10 +13,16 @@ extension MarkupController {
     /// when ⌥ isn't held or the anchor has nothing to convert (a Line's end),
     /// so the press keeps its usual grip
     func beginConvertingAnchor(_ i: Int, of a: Annotation, at p: CGPoint) -> Bool {
-        guard NSEvent.modifierFlags.contains(.option),
-              a.convertingAnchor(i) != nil || a.pullingHandles(i, to: p) != nil else { return false }
+        guard convertsAnchor(i, of: a, at: p) else { return false }
         gesture = .convertAnchor(i, a, from: p, pulled: false)
         return true
+    }
+
+    /// whether a press at `p` on anchor `i` of `a` converts it: ⌥ is held
+    /// and the anchor can take handles
+    func convertsAnchor(_ i: Int, of a: Annotation, at p: CGPoint) -> Bool {
+        NSEvent.modifierFlags.contains(.option)
+            && (a.convertingAnchor(i) != nil || a.pullingHandles(i, to: p) != nil)
     }
 
     /// a ⌥-drag past the click slop pulls symmetric handles to the pointer;

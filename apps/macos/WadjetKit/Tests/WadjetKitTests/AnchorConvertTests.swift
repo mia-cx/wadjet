@@ -106,6 +106,23 @@ struct AnchorConvertTests {
         #expect(back[1].handleIn == nil && back[1].handleOut == nil)
     }
 
+    // Proves a rotated path keeps its rotation (the frame anything attached
+    // to it resolves in) and every anchor stays put on screen, while a
+    // pulled handle lands on the pointer
+    @Test func rotatedPathKeepsItsFrame() throws {
+        var a = Self.path([PathNode(anchor: .zero), PathNode(anchor: CGPoint(x: 100, y: 50)),
+                           PathNode(anchor: CGPoint(x: 200, y: 0))])
+        a.transform.rotation = .pi / 4
+        let screen = a.anchorGrips.map(\.at)
+        for edited in [a.convertingAnchor(1), a.convertingAnchor(0), a.pullingHandles(1, to: CGPoint(x: 40, y: 90))] {
+            let e = try #require(edited)
+            #expect(e.transform.rotation == .pi / 4)
+            for (was, now) in zip(screen, e.anchorGrips.map(\.at)) { #expect(Self.near(now, was)) }
+        }
+        let pulled = try #require(a.pullingHandles(1, to: CGPoint(x: 40, y: 90)))
+        #expect(Self.near(Self.nodes(pulled)[1].handleOut?.applying(pulled.affineTransform), CGPoint(x: 40, y: 90)))
+    }
+
     // Proves converting or pulling a Brush stroke's anchor drops its raw
     // samples, so a later Smoothing change can't refit the edit away
     @Test func brushEditsDropTheSamples() throws {

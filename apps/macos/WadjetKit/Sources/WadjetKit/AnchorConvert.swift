@@ -3,8 +3,8 @@ import Foundation
 
 /// ⌥ on an anchor, after Illustrator's Anchor Point tool (the Pen with ⌥):
 /// a click converts the anchor between smooth and corner, a drag pulls out
-/// new smooth handles. Both work on a path's baked geometry; a Shape becomes
-/// its outline path first, as any anchor edit makes it. A Brush stroke drops
+/// new smooth handles. A Shape becomes its outline path first, as any
+/// anchor edit makes it. A Brush stroke drops
 /// its raw samples, so a later Smoothing change can't refit the edit away.
 extension PathNode {
     /// both handles off the anchor and leaving it in opposite directions
@@ -21,52 +21,62 @@ extension Annotation {
     /// neighbour, aims at it). nil when `i` has no anchor to convert, or no
     /// neighbour to aim along: Lines and other kinds keep their own grips.
     public func convertingAnchor(_ i: Int) -> Annotation? {
-        guard var (a, data) = anchorEditable(i) else { return nil }
-        let n = data.nodes[i]
-        if n.isSmooth {
-            data.nodes[i].handleIn = nil
-            data.nodes[i].handleOut = nil
-        } else {
-            guard let t = Self.smoothTangent(data, at: i) else { return nil }
-            data.nodes[i].handleIn = CGPoint(x: n.anchor.x - t.dx, y: n.anchor.y - t.dy)
-            data.nodes[i].handleOut = CGPoint(x: n.anchor.x + t.dx, y: n.anchor.y + t.dy)
+        editingAnchor(i) { data, _ in
+            let n = data.nodes[i]
+            if n.isSmooth {
+                data.nodes[i].handleIn = nil
+                data.nodes[i].handleOut = nil
+            } else {
+                guard let t = Self.smoothTangent(data, at: i) else { return false }
+                data.nodes[i].handleIn = CGPoint(x: n.anchor.x - t.dx, y: n.anchor.y - t.dy)
+                data.nodes[i].handleOut = CGPoint(x: n.anchor.x + t.dx, y: n.anchor.y + t.dy)
+            }
+            return true
         }
-        a.kind = .path(data)
-        return a
     }
 
     /// the ⌥-drag from anchor `i` to `p` on screen: its outgoing handle
     /// follows the pointer and the incoming one mirrors it through the
     /// anchor — a smooth node, whatever it was. `constrained` (Shift) holds
-    /// the handle on a 45° ray. Handles dragged back onto the anchor retract.
+    /// the handle on a 45° ray on screen. Handles dragged back onto the
+    /// anchor retract.
     public func pullingHandles(_ i: Int, to p: CGPoint, constrained: Bool = false) -> Annotation? {
-        guard var (a, data) = anchorEditable(i) else { return nil }
-        let anchor = data.nodes[i].anchor
-        let h = constrained ? PathGeometry.snapAngle(p, from: anchor) : p
-        if hypot(h.x - anchor.x, h.y - anchor.y) < 1e-9 {
-            data.nodes[i].handleIn = nil
-            data.nodes[i].handleOut = nil
-        } else {
-            data.nodes[i].handleOut = h
-            data.nodes[i].handleIn = CGPoint(x: 2 * anchor.x - h.x, y: 2 * anchor.y - h.y)
+        editingAnchor(i) { data, m in
+            let anchor = data.nodes[i].anchor
+            let h = (constrained ? PathGeometry.snapAngle(p, from: anchor.applying(m)) : p).applying(m.inverted())
+            if hypot(h.x - anchor.x, h.y - anchor.y) < 1e-9 {
+                data.nodes[i].handleIn = nil
+                data.nodes[i].handleOut = nil
+            } else {
+                data.nodes[i].handleOut = h
+                data.nodes[i].handleIn = CGPoint(x: 2 * anchor.x - h.x, y: 2 * anchor.y - h.y)
+            }
+            return true
         }
-        a.kind = .path(data)
-        return a
     }
 
-    /// this Annotation baked to screen coordinates as a path, with Brush
-    /// samples dropped — nil unless it's a path or Shape with anchor `i`
-    private func anchorEditable(_ i: Int) -> (Annotation, PathData)? {
+    /// `edit` applied to this path's nodes (a Shape's outline path's), Brush
+    /// samples dropped; nil unless it has anchor `i` and `edit` returns true.
+    /// The transform stays, so a rotated target keeps its frame for what's
+    /// attached to it; anchor `i` is pinned on screen, because the bounds
+    /// centre the transform pivots on can move. `edit` gets the transform.
+    private func editingAnchor(_ i: Int, _ edit: (inout PathData, CGAffineTransform) -> Bool) -> Annotation? {
         let a: Annotation
         switch kind {
-        case .path: a = baked
-        case .shape: a = outlinePath.baked
+        case .path: a = self
+        case .shape: a = outlinePath
         default: return nil
         }
         guard case var .path(data) = a.kind, data.nodes.indices.contains(i) else { return nil }
         data.rawPoints = nil
         data.smoothing = nil
-        return (a, data)
+        let m = a.affineTransform
+        guard edit(&data, m) else { return nil }
+        var out = a
+        out.kind = .path(data)
+        let pin = data.nodes[i].anchor
+        let was = pin.applying(m), now = pin.applying(out.affineTransform)
+        return out.moved(by: CGVector(dx: was.x - now.x, dy: was.y - now.y))
     }
 
     /// the outgoing handle's offset for a smooth node `i`: a sixth of the
