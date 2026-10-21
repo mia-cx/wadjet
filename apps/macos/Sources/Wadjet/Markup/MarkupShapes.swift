@@ -96,18 +96,20 @@ struct ShapeVariantControls: View {
             switch MarkupShapes.variant {
             case .rectangle:
                 slider(.cornerRadius, icon: "square.dashed", label: "Corner radius", text: "\(Int(radius)) pt",
-                       value: $radius, range: 0...40, step: 1)
+                       value: $radius, step: 1)
             case .ellipse:
                 EmptyView()
             case .polygon:
                 slider(.sides, icon: "pentagon", label: "Sides", text: "\(Int(sides))",
-                       value: $sides, range: 3...12, step: 1)
+                       value: $sides, step: 1)
+                slider(.cornerRadius, icon: "square.dashed", label: "Corner radius", text: "\(Int(radius)) pt",
+                       value: $radius, step: 1)
             case .star:
                 slider(.points, icon: "star", label: "Points", text: "\(Int(points))",
-                       value: $points, range: 3...12, step: 1)
+                       value: $points, step: 1)
                 slider(.innerRatio, icon: "star.leadinghalf.filled", label: "Inner radius",
                        text: "\(Int((innerRatio * 100).rounded()))%",
-                       value: $innerRatio, range: 0.2...0.8, step: 0.05)
+                       value: $innerRatio, step: 0.05)
             }
         }
         .onAppear(perform: seed)
@@ -121,9 +123,9 @@ struct ShapeVariantControls: View {
     /// a slider that reads "Mixed" while the selected shapes differ in its
     /// option, and on release sets that option alone on all of them
     func slider(_ o: ShapeOption, icon: String, label: String, text: String, value: Binding<Double>,
-                range: ClosedRange<Double>, step: Double) -> some View {
+                step: Double) -> some View {
         MenuSliderRow(icon: icon, label: label, text: MarkupShapes.mixed(o) && !editing ? "Mixed" : text,
-                      value: value, range: range, step: step, editing: $editing) {
+                      value: value, range: o.range, step: step, editing: $editing) {
             MarkupShapes.set(o, to: value.wrappedValue)
         }
     }
@@ -133,7 +135,7 @@ struct ShapeVariantControls: View {
         switch MarkupShapes.shape(for: MarkupShapes.variant) {
         case let .rectangle(r): radius = r
         case .ellipse: break
-        case let .polygon(n): sides = Double(n)
+        case let .polygon(n, r): sides = Double(n); radius = r
         case let .star(n, r): points = Double(n); innerRatio = r
         }
     }

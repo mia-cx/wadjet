@@ -53,7 +53,7 @@ public enum AttachFinder {
             return segs.compactMap { s in a.position(of: s).map { AttachCandidate(target: a.id, spot: s, at: $0) } }
         case .shape(.ellipse, _), .counter:
             return frame(midpoints)
-        case let .shape(.polygon(sides), _):
+        case let .shape(.polygon(sides, _), _):
             return frame(vertices(count: max(3, sides)) { _ in 1 })
         case let .shape(.star(points, ratio), _):
             let r = min(0.95, max(0.05, ratio))

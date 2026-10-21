@@ -74,7 +74,7 @@ public enum AnnotationGroup {
             var angle = atan2(point.y - c.y, point.x - c.x) - atan2(start.y - c.y, start.x - c.x)
             if proportional { angle = (angle / (.pi / 4)).rounded() * (.pi / 4) }
             return rotated(annotations, by: angle)
-        case .vertex, .bend, .segmentBend, .tangent, .source, .cornerRadius:
+        case .vertex, .bend, .segmentBend, .tangent, .source, .cornerRadius, .sides, .innerRadius:
             return annotations
         }
     }
