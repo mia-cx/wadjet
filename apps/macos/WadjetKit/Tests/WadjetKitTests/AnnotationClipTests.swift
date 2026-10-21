@@ -58,4 +58,18 @@ struct AnnotationClipTests {
             .pasteboardData(scale: 1).package)
         #expect(back.annotations == [line])
     }
+
+    // Proves Annotations that sample the screen still copy: with nothing
+    // beneath them in the clip, Blur and Magnify flatten without failing.
+    @Test func samplersFlatten() throws {
+        let blur = Annotation(kind: .censor(rect: CGRect(x: 0, y: 0, width: 20, height: 20), method: .defaultBlur),
+                              style: Self.red)
+        let black = Annotation(kind: .censor(rect: CGRect(x: 30, y: 0, width: 20, height: 20), method: .blackOut),
+                               style: Self.red)
+        let lens = Annotation(kind: .magnify(Magnifier(source: CGRect(x: 0, y: 30, width: 10, height: 10),
+                                                       frame: CGRect(x: 20, y: 30, width: 20, height: 20),
+                                                       options: MagnifierOptions())), style: Self.red)
+        let data = try AnnotationClip(annotations: [blur, black, lens]).pasteboardData(scale: 1)
+        #expect(try AnnotationClip(package: data.package).annotations.count == 3)
+    }
 }
