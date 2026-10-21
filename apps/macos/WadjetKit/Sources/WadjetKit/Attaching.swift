@@ -396,15 +396,26 @@ extension Annotation {
         func unclipped(_ at: Attachment, _ target: Annotation) -> CGPoint? {
             at.loose ? AttachFinder.centre(of: target) : target.position(of: at.spot)
         }
+        // an end aims from its neighbour, as that neighbour will be placed:
+        // never from the Line's bend, which re-solves from the ends and
+        // would never settle
+        func origin(of point: AttachPoint) -> (CGPoint, Annotation.ID?)? {
+            guard let n = neighbour(of: point) else { return nil }
+            if let (at, target) = attached.first(where: { $0.0.point == n }) {
+                return unclipped(at, target).map { ($0, target.id) }
+            }
+            return position(of: n).map { ($0, nil) }
+        }
         let moves: [(AttachPoint, CGPoint)] = attached.compactMap { at, target in
-            guard at.loose else { return target.position(of: at.spot).map { (at.point, $0) } }
-            // a loose end aims from its neighbour, as that neighbour will be
-            // placed: never from the Line's bend, which re-solves from the
-            // ends and would never settle
-            guard let n = neighbour(of: at.point),
-                  let origin = attached.first(where: { $0.0.point == n }).flatMap({ unclipped($0.0, $0.1) })
-                    ?? position(of: n) else { return nil }
-            return (at.point, AttachFinder.looseEnd(from: origin, on: target))
+            guard at.loose else {
+                guard let spot = target.position(of: at.spot) else { return nil }
+                // an exact end wraps round its target, unless its neighbour
+                // is on the same target and there's no outside to come from
+                guard let (o, held) = origin(of: at.point), held != target.id else { return (at.point, spot) }
+                return (at.point, AttachFinder.exactEnd(at: spot, from: o, on: target))
+            }
+            guard let (o, _) = origin(of: at.point) else { return nil }
+            return (at.point, AttachFinder.looseEnd(from: o, on: target))
         }
         guard moves.contains(where: { point, p in
             position(of: point).map { hypot(p.x - $0.x, p.y - $0.y) > tolerance } ?? false

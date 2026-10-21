@@ -8,7 +8,7 @@ struct AttachingTests {
     func box(_ r: CGRect = CGRect(x: 0, y: 0, width: 100, height: 50)) -> Annotation {
         Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: r), style: red4)
     }
-    func arrow(from s: CGPoint = CGPoint(x: -50, y: -50), to e: CGPoint = .zero, bend: CGPoint? = nil) -> Annotation {
+    func arrow(from s: CGPoint = CGPoint(x: -50, y: 200), to e: CGPoint = .zero, bend: CGPoint? = nil) -> Annotation {
         Annotation(kind: .line(start: s, end: e, bend: bend), style: red4)
     }
     func near(_ a: CGPoint?, _ b: CGPoint, _ tolerance: CGFloat = 1e-6) -> Bool {
@@ -40,7 +40,7 @@ struct AttachingTests {
             #expect(near(current(stack, a.id).position(of: .end), CGPoint(x: 100, y: 50)), "\(name): attaching")
             stack.replace(edit(target))
             #expect(near(current(stack, a.id).position(of: .end), want), "\(name)")
-            #expect(near(current(stack, a.id).position(of: .start), CGPoint(x: -50, y: -50)), "\(name): start stays")
+            #expect(near(current(stack, a.id).position(of: .start), CGPoint(x: -50, y: 200)), "\(name): start stays")
         }
     }
 
@@ -153,7 +153,7 @@ struct AttachingTests {
         stack.attach(label.id, .whole, to: target.id, at: .frame(CGPoint(x: 1, y: 0)))
         stack.translate([target.id, a.id], by: d)
         #expect(near(current(stack, a.id).position(of: .end), CGPoint(x: 130, y: 40)))
-        #expect(near(current(stack, a.id).position(of: .start), CGPoint(x: -20, y: -60)))
+        #expect(near(current(stack, a.id).position(of: .start), CGPoint(x: -20, y: 190)))
         #expect(current(stack, label.id).kind.bounds == CGRect(x: 150, y: -10, width: 10, height: 10))
         #expect(current(stack, a.id).attachments.count == 1)
 

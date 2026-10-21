@@ -103,9 +103,10 @@ public enum AttachFinder {
 
     /// what a point of `source` dragged to `p` would attach to. A named spot
     /// within `radius` wins, the nearest of all; then the nearest outline
-    /// point within `radius` of the front-most Annotation that has one; then,
-    /// unsnapped, the front-most Annotation under `p` or inside its outline,
-    /// which an end attaches to loosely when it has an inside. `snapping`
+    /// point within `radius` of the front-most Annotation that has one,
+    /// which for an end counts only from outside; then, unsnapped, the
+    /// front-most Annotation under `p` or inside its outline, which an end
+    /// attaches to loosely when it has an inside. `snapping`
     /// false (⌘ held) skips the spots and the outline, so only that last
     /// step is left. Hidden Annotations, the source, and anything that would
     /// close a cycle are skipped.
@@ -124,7 +125,12 @@ public enum AttachFinder {
             }
         }
         if let (s, a, spots) = named { return AttachHover(target: a, spots: spots, snapped: s) }
+        let end = point == .start || point == .end
         for a in eligible where snapping {
+            // an end inside an Annotation attaches loosely there, as tldraw's
+            // does: its edge snaps only from outside, so a small Text, all
+            // edge within the radius, still takes a loose end
+            if end, a.kind.hasAttachInterior, outline(of: a).contains(p) { break }
             if let s = nearestOnOutline(of: a, to: p), dist(s) <= radius {
                 return AttachHover(target: a, spots: spots(on: a), snapped: s)
             }
@@ -133,8 +139,7 @@ public enum AttachFinder {
         // outline an end attaches loosely; merely near the stroke it doesn't
         for a in eligible {
             if a.kind.hasAttachInterior, outline(of: a).contains(p) {
-                return AttachHover(target: a, spots: spots(on: a), snapped: nil,
-                                   loose: point == .start || point == .end)
+                return AttachHover(target: a, spots: spots(on: a), snapped: nil, loose: end)
             }
             if PathGeometry.hitTest(a, at: p, tolerance: radius) {
                 return AttachHover(target: a, spots: spots(on: a), snapped: nil)
