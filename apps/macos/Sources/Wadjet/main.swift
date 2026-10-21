@@ -2966,7 +2966,8 @@ struct ToolbarView: View {
     }
 
     var body: some View {
-        morph
+        // a click on a Clear's Undo ring undoes it; hover there doesn't expand (MarkupClear.swift)
+        undoRingTracking(morph)
             .frame(width: panelW, height: panelH, alignment: .top)
             #if CLEAR_GLASS_PATCH
             // the lens is its own glass-free layer drawn over the bar —
@@ -2994,10 +2995,6 @@ struct ToolbarView: View {
                 MarkupController.shared.islandHovered(hoverInside, on: displayIndex)
             }
             .onDisappear { MarkupController.shared.islandHovered(false, on: displayIndex) }
-            // a click on a Clear's Undo ring undoes it; hover there doesn't expand (MarkupClear.swift)
-            .onChange(of: ringPointer) { syncExpanded() }
-            .onChange(of: ringPointer.onRing) { undoRingTip() }
-            .onChange(of: islandShowsRing) { trackUndoRing() }
             .onChange(of: lensActive) { AppLog.line("lensActive d\(displayIndex) -> \(lensActive) bg=\(lensBg != nil)"); syncExpanded(); refitOnLeave() }
             .onAppear { syncHit(); syncLensBg()
                 // a Markup Tool armed by a Shortcut or the menu expands the new

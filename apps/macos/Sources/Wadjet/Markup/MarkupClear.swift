@@ -302,6 +302,15 @@ extension ToolbarView {
         .onDisappear { undoRingFrame = .null }
     }
 
+    /// the bar follows the pointer on and off the ring, and the ring's tooltip
+    /// with it (its own modifiers, so the body's chain stays type-checkable)
+    func undoRingTracking(_ content: some View) -> some View {
+        content
+            .onChange(of: ringPointer) { syncExpanded() }
+            .onChange(of: ringPointer.onRing) { undoRingTip() }
+            .onChange(of: islandShowsRing) { trackUndoRing() }
+    }
+
     /// re-reads the pointer against the ring: on its target the island
     /// stays collapsed; anywhere else on it hover expands as always
     func trackUndoRing() {
