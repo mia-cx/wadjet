@@ -582,7 +582,7 @@ extension EditorCanvasView: NSMenuItemValidation {
     func validateMenuItem(_ item: NSMenuItem) -> Bool {
         switch item.action {
         case #selector(paste(_:)):
-            MarkupPasteboard.canRead(.general) || AnnotationClipboard.contents(of: .general) != nil
+            MarkupPasteboard.canRead(.general) || AnnotationClipboard.canRead(.general)
         case #selector(cut(_:)): !doc.markup.selection.isEmpty
         case #selector(selectAll(_:)): !doc.markup.stack.isEmpty
         default: true
