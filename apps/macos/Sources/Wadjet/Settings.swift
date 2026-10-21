@@ -107,14 +107,21 @@ enum SettingsPanes: String, CaseIterable {
 
 @MainActor struct GeneralPane: View {
     var body: some View {
-        Section("Save folders") {
+        Section {
             LabeledContent("Screenshots") { FolderRow(key: \.screenshots) }
             LabeledContent("Recordings") { FolderRow(key: \.recordings) }
+        } header: { Text("Save folders") } footer: {
+            Text("Each Screenshot keeps its editable Canvas in original and its image in flattened, under one name.")
+                .foregroundStyle(.secondary)
         }
         Section("Capture") {
             Toggle("Freeze the screen while selecting", isOn: cfgBinding(\.capture.freeze))
+            Picker("Freeze while recording", selection: cfgBinding(\.capture.freezeWhileRecording)) {
+                Text("Default").tag(Bool?.none); Text("On").tag(Bool?(true)); Text("Off").tag(Bool?(false))
+            }
             Toggle("Capture the cursor", isOn: cfgBinding(\.capture.cursor))
         }
+        CanvasRetentionRows()
         Section {
             Button("Reveal config.json") {
                 NSWorkspace.shared.activateFileViewerSelecting([AppState.shared.config.file])
@@ -134,6 +141,7 @@ enum SettingsPanes: String, CaseIterable {
         Section("Screenshots") { ForEach(Tool.allCases.filter { $0.kind == .shot }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
         Section("Recordings") { ForEach(Tool.allCases.filter { $0.kind == .rec }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
         Section("Utilities") { ForEach(Tool.allCases.filter { $0.kind == .util }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
+        Section("Markup") { ForEach(Tool.allCases.filter { $0.kind == .markup && !$0.isAction }, id: \.rawValue) { ToolShortcuts(tool: $0, pendingTool: $pendingTool) } }
     }
 }
 
@@ -149,22 +157,35 @@ enum SettingsPanes: String, CaseIterable {
             HStack {
                 Label(tool.title, systemImage: tool.symbol)
                 Spacer()
-                Button { pendingTool = tool } label: { Image(systemName: "plus.circle") }
-                    .buttonStyle(.plain).foregroundStyle(.secondary)
-                    .help("Add Shortcut")
-                    .accessibilityLabel("Add Shortcut for \(tool.title)")
+                ForEach(MarkupToolKey.all.filter { $0.markupTool == tool }, id: \.character) { key in
+                    HStack(spacing: 4) {
+                        if let variant = key.variant { Text(variant.title).font(.caption).foregroundStyle(.secondary) }
+                        Text(String(key.character).uppercased())
+                            .font(.caption.monospaced())
+                            .padding(.horizontal, 4)
+                            .background(.quaternary, in: .rect(cornerRadius: 4))
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Key \(String(key.character).uppercased())\(key.variant.map { ", \($0.title)" } ?? "")")
+                }
+                if tool.toolID != nil {
+                    Button { pendingTool = tool } label: { Image(systemName: "plus.circle") }
+                        .buttonStyle(.plain).foregroundStyle(.secondary)
+                        .help("Add Shortcut")
+                        .accessibilityLabel("Add Shortcut for \(tool.title)")
+                }
             }
             ForEach(mine, id: \.self) { ShortcutRow(i: $0) }
             if pendingTool == tool {
                 HStack {
                     KeyboardShortcuts.Recorder(for: .init("settings.newShortcut")) { ks in
-                        guard let ks else { return }
+                        guard let ks, let id = tool.toolID else { return }
                         guard let keys = KeyCombo(keyCode: ks.carbonKeyCode, carbonModifiers: ks.carbonModifiers) else {
                             AppLog.line("settings: recorded key isn't a config KeyCombo — try another")
                             KeyboardShortcuts.reset(.init("settings.newShortcut"))
                             return
                         }
-                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: tool.toolID)) }
+                        edit { $0.shortcuts.append(Shortcut(keys: keys, tool: id)) }
                         KeyboardShortcuts.reset(.init("settings.newShortcut"))
                         pendingTool = nil
                     }
@@ -218,16 +239,22 @@ enum SettingsPanes: String, CaseIterable {
                            }
                        }))
             }
-            if tool?.kind == .rec {
+            if let tool, tool.kind != .util {
                 DisclosureGroup("Options") {
-                    Picker("Countdown", selection: opt(\.countdown, i: i)) {
-                        Text("Default").tag(-1); Text("Off").tag(0)
-                        Text("3 seconds").tag(3); Text("5 seconds").tag(5); Text("10 seconds").tag(10)
+                    optionRow("Freeze the screen", \.freeze)
+                    if tool.kind != .rec { // a Record Shortcut during a Recording only stops it
+                        optionRow("Freeze while recording", \.freezeWhileRecording)
                     }
-                    optionRow("System audio", \.systemAudio)
-                    optionRow("Microphone", \.microphone)
-                    optionRow("Cursor", \.cursor)
-                    optionRow("Click circles", \.clickCircles)
+                    if tool.kind == .rec {
+                        Picker("Countdown", selection: opt(\.countdown, i: i)) {
+                            Text("Default").tag(-1); Text("Off").tag(0)
+                            Text("3 seconds").tag(3); Text("5 seconds").tag(5); Text("10 seconds").tag(10)
+                        }
+                        optionRow("System audio", \.systemAudio)
+                        optionRow("Microphone", \.microphone)
+                        optionRow("Cursor", \.cursor)
+                        optionRow("Click circles", \.clickCircles)
+                    }
                 }
             }
         }
@@ -396,17 +423,20 @@ private func uniqueName(_ base: String, in cfg: WadjetConfig, skipping: Int? = n
         return AnyView(VStack(alignment: .leading) {
             Text(st.title)
             switch st {
-            case .saveFile(let folder):
+            case .saveFile(let folder, let format):
+                if cfg.workflows[wf].takes == .screenshot {
+                    SaveFileFormatPicker(workflow: wf, step: step, folder: folder, format: format)
+                }
                 HStack {
                     Text(folder ?? "Default folder").font(.caption).foregroundStyle(.secondary)
                     Button("Choose…") {
                         guard let pick = pickFolder() else { return }
                         edit { guard step < $0.workflows[wf].steps.count else { return }
-                            $0.workflows[wf].steps[step] = .saveFile(folder: pick.path)
+                            $0.workflows[wf].steps[step] = .saveFile(folder: pick.path, format: format)
                             if let mark = pick.bookmark { $0.bookmarks[pick.path] = mark } }
                     }.font(.caption)
                     if folder != nil {
-                        Button("Use Default") { edit { $0.workflows[wf].steps[step] = .saveFile(folder: nil) } }.font(.caption)
+                        Button("Use Default") { edit { $0.workflows[wf].steps[step] = .saveFile(folder: nil, format: format) } }.font(.caption)
                     }
                 }
             case .openIn(let app):

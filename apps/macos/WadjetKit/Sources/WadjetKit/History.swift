@@ -60,10 +60,11 @@ import SwiftData
         container = try ModelContainer(for: HistoryEntry.self, configurations: configuration)
     }
 
-    /// Records a finished Capture and persists it immediately.
+    /// Records a finished Capture and persists it immediately. Screenshots supply
+    /// the ID already used for their CanvasStore package.
     @discardableResult
-    public func record(kind: CaptureKind, createdAt: Date, file: URL?, errors: [String] = []) throws -> HistoryEntry {
-        let entry = HistoryEntry(kind: kind, createdAt: createdAt, file: file, errors: errors)
+    public func record(id: UUID = UUID(), kind: CaptureKind, createdAt: Date, file: URL?, errors: [String] = []) throws -> HistoryEntry {
+        let entry = HistoryEntry(id: id, kind: kind, createdAt: createdAt, file: file, errors: errors)
         container.mainContext.insert(entry)
         try container.mainContext.save()
         return entry

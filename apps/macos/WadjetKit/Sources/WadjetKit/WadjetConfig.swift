@@ -19,8 +19,12 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     public var bookmarks: [String: Data] = [:]
     /// Days before temporary Capture files are swept; their history entries stay.
     public var retentionDays = 7
+    public var canvasRetention = CanvasRetention()
     public var recording = Recording()
     public var capture = Capture()
+    public var markup = Markup()
+    /// the expanded toolbar's layout, switched from the Debug menu
+    public var toolbarLayout = ToolbarLayoutStyle.current
     public init() {}
     public struct Folders: Codable, Equatable, Sendable {
         public var screenshots = "~/Pictures/Wadjet"
@@ -34,12 +38,31 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     }
     public struct Tools: Codable, Equatable, Sendable {
         public var pickColour = PickColour(); public var measure = Measure(); public var region = Region()
+        public var captureRegion = CaptureTool()
+        public var captureWindow = CaptureTool()
+        public var captureScreen = CaptureTool()
         public init() {}
         public init(from decoder: Decoder) throws { // members keep defaults when a section is partial
             let c = try decoder.container(keyedBy: CodingKeys.self)
             pickColour = try c.decodeIfPresent(PickColour.self, forKey: .pickColour) ?? PickColour()
             measure = try c.decodeIfPresent(Measure.self, forKey: .measure) ?? Measure()
             region = try c.decodeIfPresent(Region.self, forKey: .region) ?? Region()
+            captureRegion = try c.decodeIfPresent(CaptureTool.self, forKey: .captureRegion) ?? CaptureTool()
+            captureWindow = try c.decodeIfPresent(CaptureTool.self, forKey: .captureWindow) ?? CaptureTool()
+            captureScreen = try c.decodeIfPresent(CaptureTool.self, forKey: .captureScreen) ?? CaptureTool()
+        }
+    }
+    /// one Capture Tool's settings at `tools.<toolID>`; `smartRedact` blacks
+    /// out Smart Redact matches in each Screenshot before its Workflow runs,
+    /// `windowLayers` keeps each window as its own layer in the Canvas
+    public struct CaptureTool: Codable, Equatable, Sendable {
+        public var smartRedact = false
+        public var windowLayers = false
+        public init() {}
+        public init(from decoder: Decoder) throws {
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            smartRedact = try c.decodeIfPresent(Bool.self, forKey: .smartRedact) ?? false
+            windowLayers = try c.decodeIfPresent(Bool.self, forKey: .windowLayers) ?? false
         }
     }
     public struct PickColour: Codable, Equatable, Sendable { public var format = ColourFormat.hex; public init() {} }
@@ -64,15 +87,20 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
     }
     /// `freeze` — take a Freeze Frame when a Tool opens; off leaves the desktop
     /// live and shoots at confirm (Utilities always freeze — they read pixels).
+    /// `freezeWhileRecording` — the same during a Recording; nil inherits
+    /// `freeze` (Markup falls back to live drawing instead).
     /// `cursor` — the cursor's default in Screenshots and Recordings; the Tool
     /// menu overrides it per capture.
     public struct Capture: Codable, Equatable, Sendable {
         public var freeze = true
+        /// nil inherits `freeze`; set only while a Recording runs
+        public var freezeWhileRecording: Bool? = nil
         public var cursor = true
         public init() {}
         public init(from decoder: Decoder) throws {
             let c = try decoder.container(keyedBy: CodingKeys.self)
             freeze = try c.decodeIfPresent(Bool.self, forKey: .freeze) ?? true
+            freezeWhileRecording = try c.decodeIfPresent(Bool.self, forKey: .freezeWhileRecording)
             cursor = try c.decodeIfPresent(Bool.self, forKey: .cursor) ?? true
         }
     }
@@ -88,8 +116,11 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         defaultWorkflows = try c.decodeIfPresent(DefaultWorkflows.self, forKey: .defaultWorkflows) ?? DefaultWorkflows()
         bookmarks = try c.decodeIfPresent([String: Data].self, forKey: .bookmarks) ?? [:]
         retentionDays = try c.decodeIfPresent(Int.self, forKey: .retentionDays) ?? 7
+        canvasRetention = try c.decodeIfPresent(CanvasRetention.self, forKey: .canvasRetention) ?? CanvasRetention()
         recording = try c.decodeIfPresent(Recording.self, forKey: .recording) ?? Recording()
         capture = try c.decodeIfPresent(Capture.self, forKey: .capture) ?? Capture()
+        markup = try c.decodeIfPresent(Markup.self, forKey: .markup) ?? Markup()
+        toolbarLayout = try c.decodeIfPresent(ToolbarLayoutStyle.self, forKey: .toolbarLayout) ?? .current
 
         func bad(_ msg: String, path: [CodingKey]) throws -> Never {
             throw DecodingError.dataCorrupted(
@@ -138,11 +169,14 @@ public struct WadjetConfig: Codable, Equatable, Sendable {
         try c.encode(defaultWorkflows, forKey: .defaultWorkflows)
         try c.encode(bookmarks, forKey: .bookmarks)
         try c.encode(retentionDays, forKey: .retentionDays)
+        try c.encode(canvasRetention, forKey: .canvasRetention)
         try c.encode(recording, forKey: .recording)
         try c.encode(capture, forKey: .capture)
+        try c.encode(markup, forKey: .markup)
+        try c.encode(toolbarLayout, forKey: .toolbarLayout)
     }
     private enum CodingKeys: String, CodingKey {
-        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture
+        case tools, folders, workflows, shortcuts, defaultWorkflows, bookmarks, retentionDays, recording, resolution, fps, workflow, screenshot, capture, markup, canvasRetention, toolbarLayout
     }
     private struct Idx: CodingKey {
         var stringValue: String { String(intValue!) }

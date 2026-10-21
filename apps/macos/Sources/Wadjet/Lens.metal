@@ -12,16 +12,32 @@ using namespace metal;
 // pixels so it stays a soft ~3 px line at 1× and 2×. Gotchas: stitchable
 // functions read program-scope `constant` globals as 0 (use #define), and
 // writing a constant alpha (`o.a = 1`) blacks out the sampled channels —
-// keep the whole sampled half4 and overwrite only r and b.
-#define kCentre 1.1111 // 1 / 0.9: the bar reads squeezed to 0.9× inside the lens
+// derive alpha from the samples (see disperse). The layer holds
+// only the toolbar (bar surface and Tool icons), transparent elsewhere: the
+// world behind is drawn unbent beneath it, so its texture never slides as
+// the lens moves, and the hairline adds light over it. The caller
+// pre-scales the icons by kCentre so they still read grown at the centre,
+// which is why kCentre comes in as an argument rather than a #define.
 #define kRim 2.1       // how far the rim reaches outward
 #define band 9.0       // rim band width in points
 #define disp 0.07      // dispersion at the very edge
 
 
+// Dispersion over a transparent layer: each channel's sample carries its own
+// coverage. Taking alpha from the green sample alone leaves r or b without
+// matching coverage (additive halos). Keep each channel's premultiplied value
+// as sampled and take the largest of the three alphas: every channel stays
+// <= alpha, and both are continuous as an edge's coverage falls to zero (no
+// per-channel normalisation, which jumps at zero). Where only one channel is
+// covered the others read dark, which is the fringe.
+static half4 disperse(half4 r, half4 g, half4 b) {
+    return half4(r.r, g.g, b.b, max(max(r.a, g.a), b.a));
+}
+
 [[ stitchable ]] half4 lens(float2 position, SwiftUI::Layer layer,
                             float2 centre, float2 size, float2 stretch,
-                            float2 bounds, float2 light, float px) {
+                            float2 bounds, float2 light, float px,
+                            float kCentre) {
     float2 c = position - centre;
     float2 half_ = size / 2.0;
     // capsule SDF in the (velocity-)stretched space, in points
@@ -49,18 +65,19 @@ using namespace metal;
         float dksdf = (kRim - kCentre) * 3.0 * u * u / band;
         float fp = fabs(k + length(c) * dksdf) * px;
         float2 dir = c / max(length(c), 1e-3); // radial direction, source space
-        half4 acc = 0;
+        // premultiplied taps average correctly; disperse() after
+        half4 accR = 0, accG = 0, accB = 0;
         for (int i = -2; i <= 2; i++) {
             float t = float(i) * 0.2 * fp;
-            acc.ga += layer.sample(clamp(centre + c * k + dir * t, lo, hi)).ga;
-            acc.r += layer.sample(clamp(centre + c * (k - dk) + dir * t, lo, hi)).r;
-            acc.b += layer.sample(clamp(centre + c * (k + dk) + dir * t, lo, hi)).b;
+            accG += layer.sample(clamp(centre + c * k + dir * t, lo, hi));
+            accR += layer.sample(clamp(centre + c * (k - dk) + dir * t, lo, hi));
+            accB += layer.sample(clamp(centre + c * (k + dk) + dir * t, lo, hi));
         }
-        o = acc / 5.0;
+        o = disperse(accR / 5.0h, accG / 5.0h, accB / 5.0h);
     } else {
-        o = layer.sample(clamp(centre + c * k, lo, hi));
-        o.r = layer.sample(clamp(centre + c * (k - dk), lo, hi)).r;
-        o.b = layer.sample(clamp(centre + c * (k + dk), lo, hi)).b;
+        o = disperse(layer.sample(clamp(centre + c * (k - dk), lo, hi)),
+                     layer.sample(clamp(centre + c * k, lo, hi)),
+                     layer.sample(clamp(centre + c * (k + dk), lo, hi)));
     }
     // faint hairline lit from the pointer, plus a small hotspot near it; a
     // light far above reproduces the old top-lit look. Measured in device
@@ -87,8 +104,6 @@ using namespace metal;
 // beyond the bar's edge to bend.
 #define barEdge 14.0
 #define barPull 12.0
-#define barTone 0.17     // grey the bar's tone leans toward
-#define barToneMix 0.32  // how far it leans
 #define barGlow 5.0      // inner edge glow width (pt)
 
 static float rrSdf(float2 c, float2 half_, float r) {
@@ -119,9 +134,8 @@ static float rrSdf(float2 c, float2 half_, float r) {
     float dk = 0.14 * u;
     o.r = layer.sample(clamp(position - n * pull * (1.0 - dk), lo, hi)).r;
     o.b = layer.sample(clamp(position - n * pull * (1.0 + dk), lo, hi)).b;
-    // tone: pull everything toward a mid-dark grey, so the bar reads as a
-    // surface over dark *and* bright backgrounds (a black tint vanishes on dark)
-    o.rgb = mix(o.rgb, half3(barTone), half(barToneMix));
+    // no tone here: barSurface scrims the layer first (ToolbarView.barTint),
+    // the same tint the system glass bar uses on the live desktop
     // inner edge glow + a crisp rim hairline lit from the pointer, with a
     // hotspot that falls off ~140 pt — a light far above reproduces the old
     // top-lit look; the hotspot rides only the glow band and the hairline

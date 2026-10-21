@@ -55,6 +55,21 @@ struct ConfigStoreTests {
         #expect(errors.count == 1)
     }
 
+    // Proves each Capture Tool's Keep Windows as Layers decodes independently
+    // and a missing or partial section keeps the defaults.
+    @Test func screenshotToolWindowLayers() throws {
+        let c = try JSONDecoder().decode(WadjetConfig.self,
+            from: Data(#"{"tools":{"captureWindow":{"windowLayers":true}}}"#.utf8))
+        #expect(c.tools.captureWindow.windowLayers)
+        #expect(!c.tools.captureRegion.windowLayers)
+        #expect(!c.tools.captureScreen.windowLayers)
+        #expect(c.tools.pickColour.format == .hex)
+        #expect(c.tools.measure.mode == .spacing)
+        #expect(c.tools.region.confirm == .release)
+        let empty = try JSONDecoder().decode(WadjetConfig.self, from: Data(#"{"tools":{"captureWindow":{}}}"#.utf8))
+        #expect(!empty.tools.captureWindow.windowLayers)
+    }
+
     @Test func recordingDefaultsAndValidation() throws {
         let minimal = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
         #expect(minimal.recording.resolution == 1920)
@@ -79,6 +94,27 @@ struct ConfigStoreTests {
         let b = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
         #expect(b.value.tools.pickColour.format == .oklch)
         #expect(b.value.tools.measure.mode == .vertical)
+    }
+
+    // Proves per-Tool styles, recent colours and the Tool ranking survive a save and reload
+    @Test func markupSettingsSurviveReload() throws {
+        let url = tempFile()
+        let a = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        a.update {
+            $0.markup.tools["draw"] = WadjetConfig.MarkupTool(style: AnnotationStyle(
+                colour: RGBAColour(red: 1, green: 0, blue: 0, alpha: 1), width: 8, opacity: 0.5))
+            $0.markup.recentColours.recordUse(of: "#FF3B30")
+            $0.markup.recentColours.refresh(candidates: ["#FF3B30", "#007AFF"])
+            $0.markup.toolRanking.recordUse(of: "censor")
+        }
+        let b = ConfigStore(file: url, defaults: WadjetConfig(), keychain: FakeKeychain()) { Issue.record("unexpected error: \($0)") }
+        #expect(b.value.markup.tools["draw"]?.style?.width == 8)
+        #expect(b.value.markup.tools["draw"]?.style?.opacity == 0.5)
+        #expect(b.value.markup.recentColours.rankedItems.first == "#FF3B30")
+        var ranking = b.value.markup.toolRanking
+        #expect(MarkupShortlist.open(["select", "draw", "text", "censor"], pinned: ["select"], ranking: &ranking).slots.first == "censor")
+        let empty = try JSONDecoder().decode(WadjetConfig.self, from: Data("{}".utf8))
+        #expect(empty.markup.tools.isEmpty)
     }
 
     // atomic: editor replaces the file (vim); in-place: it truncates and writes (VS Code, >)

@@ -1,0 +1,289 @@
+import CoreGraphics
+import Foundation
+
+/// One attached point or Annotation: `point` of the Annotation that holds this
+/// follows `spot` on the Annotation `target`. Like tldraw's arrow bindings
+/// and Excalidraw's bound elements, but held on the attaching side only — the
+/// target knows nothing, so deleting it just leaves the reference dangling,
+/// and the LayerStack drops it. ADR 0001 explains the choice.
+public struct Attachment: Equatable, Sendable {
+    public var point: AttachPoint
+    public var target: Annotation.ID
+    public var spot: AttachSpot
+    /// `.whole` only: the attaching Annotation's centre minus the spot, in
+    /// the target's unrotated frame — it turns with the target, never scales
+    public var offset: CGVector
+    /// `.whole` only: the attaching Annotation's rotation minus the target's
+    public var turn: CGFloat
+    /// `.start` and `.end` only: attached loosely (tldraw's imprecise
+    /// binding) rather than exactly on `spot`. The end aims at the target's
+    /// centre and stops on its outline; `spot` is the centre.
+    public var loose: Bool
+    public init(point: AttachPoint, target: Annotation.ID, spot: AttachSpot,
+                offset: CGVector = .zero, turn: CGFloat = 0, loose: Bool = false) {
+        self.point = point
+        self.target = target
+        self.spot = spot
+        self.offset = offset
+        self.turn = turn
+        self.loose = loose
+    }
+}
+
+/// which part of the attaching Annotation follows. Ends are named rather than
+/// numbered so they survive points added along the path.
+public enum AttachPoint: Hashable, Sendable {
+    /// a Line's start or an open path's first node
+    case start
+    /// a Line's end or an open path's last node
+    case end
+    /// a path node by index — the points between the ends, or any node of a closed path
+    case node(Int)
+    /// a Line's bend, the on-curve point at t = 0.5
+    case bend
+    /// the whole Annotation, kept at its offset from the spot
+    case whole
+}
+
+/// where on the target an attachment holds
+public enum AttachSpot: Equatable, Sendable {
+    /// a position in the target's untransformed bounds, 0…1 on each axis from
+    /// the bottom-left: (0, 0) and (1, 1) are corners, (0.5, 0) the bottom
+    /// edge's midpoint. It rides the target's resize, rotation and flips, and
+    /// stays on an ellipse's, polygon's or star's outline because those
+    /// scale with their rect.
+    case frame(CGPoint)
+    /// a position along a Line's or path's segment `index` at parameter `t`
+    /// (0…1) — t = 0 is the segment's first node, so a vertex is (i, 0) and
+    /// an open path's end is (last, 1). It rides the path's reshaping.
+    case segment(Int, t: CGFloat)
+}
+
+extension Attachment: Codable {
+    enum CodingKeys: String, CodingKey { case target, start, end, node, bend, whole, frame, segment, loose }
+    enum WholeKeys: String, CodingKey { case offset, turn }
+    /// `{"target":"…","end":true,"frame":[1,0.5]}`, `{"target":"…","node":2,"segment":[1,0.25]}`,
+    /// `{"target":"…","whole":{"offset":[12,-4],"turn":0},"frame":[1,1]}`,
+    /// `{"target":"…","end":true,"frame":[0.5,0.5],"loose":true}` — `loose`
+    /// only when true, so files from before it load as exact attachments
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        target = try c.decode(UUID.self, forKey: .target)
+        offset = .zero
+        turn = 0
+        loose = try c.decodeIfPresent(Bool.self, forKey: .loose) ?? false
+        if c.contains(.start) { point = .start }
+        else if c.contains(.end) { point = .end }
+        else if c.contains(.bend) { point = .bend }
+        else if c.contains(.node) { point = .node(try c.decode(Int.self, forKey: .node)) }
+        else if c.contains(.whole) {
+            point = .whole
+            let w = try c.nestedContainer(keyedBy: WholeKeys.self, forKey: .whole)
+            let o = try w.decodePoint(forKey: .offset)
+            offset = CGVector(dx: o.x, dy: o.y)
+            turn = try w.decode(CGFloat.self, forKey: .turn)
+        } else {
+            throw DecodingError.dataCorrupted(DecodingError.Context(codingPath: decoder.codingPath,
+                debugDescription: "an attachment names its point: start, end, node, bend, or whole"))
+        }
+        if c.contains(.frame) {
+            spot = .frame(try c.decodePoint(forKey: .frame))
+        } else {
+            let v = try c.decode([CGFloat].self, forKey: .segment)
+            guard v.count == 2, let i = Int(exactly: v[0]) else {
+                throw DecodingError.dataCorruptedError(forKey: .segment, in: c,
+                    debugDescription: "a segment spot is exactly [index, t]")
+            }
+            spot = .segment(i, t: v[1])
+        }
+    }
+    public func encode(to encoder: Encoder) throws {
+        var c = encoder.container(keyedBy: CodingKeys.self)
+        try c.encode(target, forKey: .target)
+        switch point {
+        case .start: try c.encode(true, forKey: .start)
+        case .end: try c.encode(true, forKey: .end)
+        case .bend: try c.encode(true, forKey: .bend)
+        case let .node(i): try c.encode(i, forKey: .node)
+        case .whole:
+            var w = c.nestedContainer(keyedBy: WholeKeys.self, forKey: .whole)
+            try w.encodePoint(CGPoint(x: offset.dx, y: offset.dy), forKey: .offset)
+            try w.encode(turn, forKey: .turn)
+        }
+        switch spot {
+        case let .frame(u): try c.encodePoint(u, forKey: .frame)
+        case let .segment(i, t): try c.encode([CGFloat(i), t], forKey: .segment)
+        }
+        if loose { try c.encode(true, forKey: .loose) }
+    }
+}
+
+extension Annotation {
+    /// where `spot` sits on this Annotation, on screen; nil for a segment
+    /// spot on a kind without segments (a box)
+    public func position(of spot: AttachSpot) -> CGPoint? {
+        switch spot {
+        case let .frame(u):
+            let b = kind.bounds
+            return CGPoint(x: b.minX + u.x * b.width, y: b.minY + u.y * b.height).applying(affineTransform)
+        case let .segment(i, t):
+            let segs = kind.segments
+            guard !segs.isEmpty else { return nil }
+            let s = segs[min(max(0, i), segs.count - 1)]
+            return s.strokePoint(at: min(max(0, t), 1)).applying(affineTransform)
+        }
+    }
+
+    /// the frame spot at screen point `p`: its position in the untransformed
+    /// bounds, 0.5 on an axis the bounds have no extent on
+    public func frameSpot(at p: CGPoint) -> AttachSpot {
+        let b = kind.bounds, q = p.applying(affineTransform.inverted())
+        return .frame(CGPoint(x: b.width == 0 ? 0.5 : (q.x - b.minX) / b.width,
+                              y: b.height == 0 ? 0.5 : (q.y - b.minY) / b.height))
+    }
+
+    /// which points can attach: a Line's ends and bend, an open path's ends
+    /// and nodes between, a closed path's nodes — and any Annotation whole
+    public func canAttach(_ point: AttachPoint) -> Bool {
+        switch (point, kind) {
+        case (.whole, _): true
+        case (.start, .line), (.end, .line), (.bend, .line): true
+        case let (.start, .path(d)), let (.end, .path(d)): !d.closed && d.nodes.count > 1
+        case let (.node(i), .path(d)): d.nodes.indices.contains(i)
+        default: false
+        }
+    }
+
+    /// where `point` sits now, on screen; nil for `.whole` or a point this kind lacks
+    public func position(of point: AttachPoint) -> CGPoint? {
+        let m = affineTransform
+        switch (point, kind) {
+        case let (.start, .line(s, _, _)): return s.applying(m)
+        case let (.end, .line(_, e, _)): return e.applying(m)
+        case let (.bend, .line(s, e, b)):
+            return (b ?? CGPoint(x: (s.x + e.x) / 2, y: (s.y + e.y) / 2)).applying(m)
+        case let (.start, .path(d)): return d.nodes.first.map { $0.anchor.applying(m) }
+        case let (.end, .path(d)): return d.nodes.last.map { $0.anchor.applying(m) }
+        case let (.node(i), .path(d)):
+            return d.nodes.indices.contains(i) ? d.nodes[i].anchor.applying(m) : nil
+        default: return nil
+        }
+    }
+
+    /// a copy with `point` moved to screen point `p` and the rest re-solved
+    /// around it — `placing(_:)` with one move
+    func placing(_ point: AttachPoint, at p: CGPoint) -> Annotation {
+        placing([(point, p)])
+    }
+
+    /// a copy with each point moved to its screen point, solved together so
+    /// the order doesn't matter: a Line's unmoved bend keeps its place
+    /// relative to the chord from the old ends to the new ones, so the curve
+    /// and the ends' heads re-aim; a path node's handles ride along. The
+    /// geometry is baked, so the transform comes back identity. Points this
+    /// kind lacks are ignored.
+    func placing(_ moves: [(AttachPoint, CGPoint)]) -> Annotation {
+        var a = baked
+        switch a.kind {
+        case let .line(s, e, b):
+            var ns = s, ne = e, pinned: CGPoint?
+            for (point, p) in moves {
+                switch point {
+                case .start: ns = p
+                case .end: ne = p
+                case .bend: pinned = p
+                default: break
+                }
+            }
+            a.kind = .line(start: ns, end: ne,
+                           bend: pinned ?? b.map { Self.bend($0, keptFrom: (s, e), on: (ns, ne)) })
+        case var .path(d):
+            for (point, p) in moves {
+                let i: Int? = switch point {
+                case .start: 0
+                case .end: d.nodes.count - 1
+                case let .node(i): i
+                case .bend, .whole: nil
+                }
+                guard let i, d.nodes.indices.contains(i) else { continue }
+                let n = d.nodes[i], dx = p.x - n.anchor.x, dy = p.y - n.anchor.y
+                func shift(_ q: CGPoint) -> CGPoint { CGPoint(x: q.x + dx, y: q.y + dy) }
+                d.nodes[i] = PathNode(anchor: p, handleIn: n.handleIn.map(shift), handleOut: n.handleOut.map(shift))
+            }
+            a.kind = .path(d)
+        default:
+            return self
+        }
+        return a
+    }
+
+    /// the bend that sits where `bend` sat relative to the old chord, on the
+    /// new one: z = (B−S)/(E−S) as complex numbers, B' = S' + z·(E'−S')
+    private static func bend(_ bend: CGPoint, keptFrom old: (CGPoint, CGPoint),
+                             on new: (CGPoint, CGPoint)) -> CGPoint {
+        let (s, e) = old, (ns, ne) = new
+        let chord = CGVector(dx: e.x - s.x, dy: e.y - s.y), d2 = chord.dx * chord.dx + chord.dy * chord.dy
+        // no old chord to measure against: the bend moves as the ends do on average
+        guard d2 > 0 else {
+            return CGPoint(x: bend.x + (ns.x - s.x + ne.x - e.x) / 2, y: bend.y + (ns.y - s.y + ne.y - e.y) / 2)
+        }
+        let rx = bend.x - s.x, ry = bend.y - s.y
+        let zr = (rx * chord.dx + ry * chord.dy) / d2, zi = (ry * chord.dx - rx * chord.dy) / d2
+        let nc = CGVector(dx: ne.x - ns.x, dy: ne.y - ns.y)
+        return CGPoint(x: ns.x + zr * nc.dx - zi * nc.dy, y: ns.y + zr * nc.dy + zi * nc.dx)
+    }
+
+    /// the segment spot on this Line or path nearest screen point `p`;
+    /// nil for kinds without segments
+    func nearestSegmentSpot(to p: CGPoint) -> AttachSpot? {
+        let segs = kind.segments, q = p.applying(affineTransform.inverted())
+        guard !segs.isEmpty else { return nil }
+        func d2(_ i: Int, _ t: CGFloat) -> CGFloat {
+            let v = segs[i].strokePoint(at: t)
+            return (v.x - q.x) * (v.x - q.x) + (v.y - q.y) * (v.y - q.y)
+        }
+        // a coarse scan, then a golden-section refine around the best sample
+        let steps = 64
+        var best: (i: Int, t: CGFloat, d: CGFloat)?
+        for i in segs.indices {
+            for k in 0...steps {
+                let t = CGFloat(k) / CGFloat(steps), d = d2(i, t)
+                if best.map({ d < $0.d }) ?? true { best = (i, t, d) }
+            }
+        }
+        guard let b = best else { return nil }
+        var lo = max(0, b.t - 1 / CGFloat(steps)), hi = min(1, b.t + 1 / CGFloat(steps))
+        let g = (sqrt(5) - 1) / 2
+        for _ in 0..<40 {
+            let m1 = hi - g * (hi - lo), m2 = lo + g * (hi - lo)
+            if d2(b.i, m1) < d2(b.i, m2) { hi = m2 } else { lo = m1 }
+        }
+        return .segment(b.i, t: (lo + hi) / 2)
+    }
+
+    /// the attachable path node nearest screen point `p`, named as an
+    /// attachment names it: an open path's ends as start and end
+    func nearestNode(to p: CGPoint) -> AttachPoint? {
+        guard case let .path(d) = kind else { return nil }
+        let m = affineTransform
+        guard let i = d.nodes.indices.min(by: {
+            let a = d.nodes[$0].anchor.applying(m), b = d.nodes[$1].anchor.applying(m)
+            return hypot(a.x - p.x, a.y - p.y) < hypot(b.x - p.x, b.y - p.y)
+        }) else { return nil }
+        if !d.closed, i == 0 { return .start }
+        if !d.closed, i == d.nodes.count - 1 { return .end }
+        return .node(i)
+    }
+
+    /// the rotation an attached whole Annotation turns with: its own, or 0
+    /// for kinds that never rotate (Magnify)
+    var attachRotation: CGFloat { kind.transforms ? transform.rotation : 0 }
+}
+
+extension Segment {
+    /// the point at parameter t as the stroke is drawn: a straight segment
+    /// interpolates its ends evenly, a curve is the cubic
+    func strokePoint(at t: CGFloat) -> CGPoint {
+        straight ? CGPoint(x: p0.x + (p3.x - p0.x) * t, y: p0.y + (p3.y - p0.y) * t) : point(at: t)
+    }
+}

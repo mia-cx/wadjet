@@ -16,8 +16,8 @@ A still of every screen, cursor included, taken the moment a Shortcut or the men
 _Avoid_: Frozen screen, snapshot
 
 **Tool**:
-One thing to do on the Freeze Frame, picked from the toolbar: Capture region, window, or screen; Record region, window, or screen; Pick colour; Copy text; or Measure.
-Capture and Record Tools produce a Capture for a Workflow. The other Tools put their result on the clipboard and run no Workflow.
+One thing to do on the Freeze Frame, picked from the toolbar: Capture region, window, or screen; Record region, window, or screen; Pick colour; Copy text; Measure; or a Markup Tool.
+Capture and Record Tools produce a Capture for a Workflow. Pick colour, Copy text, and Measure put their result on the clipboard and run no Workflow; Markup Tools draw Annotations.
 _Avoid_: Capture Mode, mode
 
 **Screenshot**:
@@ -39,9 +39,25 @@ _Avoid_: Drawing tool, annotation tool
 One object drawn or pasted with Markup, such as a shape, line, text, step counter, pasted image, or pasted Canvas. Annotations stack as layers; each stays on screen until erased or cleared, and stays editable inside a Canvas.
 _Avoid_: A markup, drawing, mark
 
+**Select**:
+The Markup Tool that works on whole Annotations: click to select one, then move, resize, or rotate it through its bounding box.
+_Avoid_: Selection tool, Move tool, arrow
+
+**Direct Select**:
+The Markup Tool that works on an Annotation's points: a Line's ends and bend, a path's anchors and bezier handles, a Shape's vertices and corner radius. Anchors are selected by click, Shift-click, or marquee, across Annotations.
+_Avoid_: Node tool, point tool, Direct Selection
+
+**Anchor**:
+One point Direct Select edits: a Line's end, a path's node, or a Shape's outline vertex. A Shape whose anchor moves becomes a path.
+_Avoid_: Node, vertex, point
+
+**Attach**:
+To pin a Line's or path's end, a point along it, or a whole Annotation to a spot on another Annotation, so it follows when that one moves, resizes, rotates, or reshapes. An end dropped inside the other Annotation, away from its spots, attaches loosely: it points at that Annotation's centre and stops at its edge. Dragging it away detaches it; deleting the other Annotation leaves it where it was.
+_Avoid_: Bind, binding, connect, glue, stick
+
 **Canvas**:
 wadjet's editable image document, saved as a `.wadjet` file: every uncropped display, the crop and its corner radius, optionally each window as a layer, and every Annotation as its own layer.
-History keeps a Canvas for each Screenshot; the clipboard and the Workflow get the flattened image.
+History keeps a Canvas for each Screenshot in the screenshots folder's `original/`; the clipboard and the Workflow get the flattened image, which Save file writes to `flattened/` under the same name.
 _Avoid_: Project, document, layered image
 
 **Editor**:

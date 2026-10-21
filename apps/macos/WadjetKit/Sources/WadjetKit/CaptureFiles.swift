@@ -21,22 +21,13 @@ public struct CaptureFiles: Sendable {
         self.now = now
     }
 
-    /// `Wadjet 2026-10-17 at 14.03.22.<ext>`; adds ` 2`, ` 3`, … on collision.
-    public func newFile(ext: String) throws -> URL {
+    /// `Wadjet 2026-10-17 at 14.03.22.<ext>`, or `<name>.<ext>`; adds ` 2`, ` 3`, … on collision.
+    public func newFile(ext: String, name: String? = nil) throws -> URL {
         try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let f = DateFormatter()
-        f.locale = Locale(identifier: "en_US_POSIX") // names never vary with region
-        f.calendar = Calendar(identifier: .gregorian)
-        f.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let base = directory.appendingPathComponent("Wadjet \(f.string(from: now()))")
-        var url = base.appendingPathExtension(ext)
-        var n = 2
-        while FileManager.default.fileExists(atPath: url.path) {
-            url = base.deletingLastPathComponent()
-                .appendingPathComponent("\(base.lastPathComponent) \(n).\(ext)")
-            n += 1
+        let base = CaptureName.unique(name ?? CaptureName.base(for: now())) {
+            FileManager.default.fileExists(atPath: directory.appendingPathComponent("\($0).\(ext)").path)
         }
-        return url
+        return directory.appendingPathComponent("\(base).\(ext)")
     }
 
     /// Deletes files inside `directory` whose modification date is older than

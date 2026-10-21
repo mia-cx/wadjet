@@ -1,0 +1,146 @@
+import AppKit
+import ScreenCaptureKit
+import WadjetKit
+
+extension AppDelegate {
+    /// Snapshots capture options and Markup before closing the overlay. Full clean
+    /// displays become the editable Canvas; only its flattened crop enters the Workflow.
+    func captureScreenshot(rect: CGRect, on display: Int, windowID: CGWindowID? = nil) {
+        let state = AppState.shared
+        let frozen = Freeze.shared.displays
+        guard let tool = state.tool, display < frozen.count else { return }
+        let screen = frozen[display].screen
+        let crop = rect.offsetBy(dx: screen.frame.minX, dy: screen.frame.minY)
+        let radius = windowID.flatMap { overlayCtrl.cornerRadii[$0] }
+        let scale = screen.backingScaleFactor
+        let annotations = MarkupController.shared.stack
+        // pasted/dropped assets leave with the Annotations — snapshot them before closeAll or Clear can drop them
+        let images = MarkupController.shared.assets.images, canvases = MarkupController.shared.assets.canvases
+        let embedded = MarkupController.shared.assets.embedded
+        let workflow = takeShotWorkflow()
+        let cursor = state.shotCursor, wadjet = state.shotWadjet
+        let keepWindows = tool.captureSettings.map { state.config.value.tools[keyPath: $0].windowLayers } ?? false
+        let clear = state.config.value.markup.clearAfterScreenshot
+        let live = !overlayCtrl.showsFrozen
+        let redact = tool.captureSettings.map { state.config.value.tools[keyPath: $0].smartRedact } ?? false
+        let categories = smartRedactCategories
+        let redactStyle = MarkupStyles.shared.style(for: .censor)
+        let capturedAt = Date()
+        let screens = frozen.map(\.screen)
+        let displays = frozen.compactMap(\.canvasDisplay)
+        var excluded = Set(overlayCtrl.panels.map(\.windowNumber))
+        excluded.formUnion(overlayCtrl.toolbarPanels.values.map(\.windowNumber))
+        excluded.formUnion(overlayCtrl.recBubblePanels.values.map(\.windowNumber))
+        excluded.formUnion(overlayCtrl.dyingBubbles.values.map(\.windowNumber))
+        excluded.formUnion(MarkupController.shared.windowNumbers)
+        if let menu = overlayCtrl.menuPanel { excluded.insert(menu.windowNumber) }
+        overlayCtrl.closeAll()
+        Task { @MainActor in
+            do {
+                let displays = live
+                    ? try await overlayCtrl.captureCanvasDisplays(screens, excluding: excluded, cursor: cursor, wadjet: wadjet)
+                    : displays
+                var canvas = CanvasDocument(capturedDisplays: displays, crop: crop, cornerRadius: radius ?? 0,
+                    annotations: annotations, windowCapture: windowID != nil,
+                    images: images, canvases: canvases, embedded: embedded)
+                if keepWindows {
+                    // a capture failure keeps the window's flat pixels, so it
+                    // still occludes what the flat displays show behind it
+                    let flat = { () -> CanvasDocument in
+                        var c = canvas; c.layerStack = LayerStack(); c.cornerRadius = 0; return c
+                    }()
+                    var windows = await overlayCtrl.captureWindowLayers(over: screens, cursor: cursor,
+                        wadjet: wadjet) { frame, scale in
+                        do { return try flat.flatten(crop: frame, scale: scale) }
+                        catch {
+                            AppLog.line("window layers: flat fallback: \(error.localizedDescription)")
+                            return nil
+                        }
+                    }
+                    if let windowID {
+                        // the captured window stays topmost so the output
+                        // matches a plain Capture Window
+                        if let i = windows.firstIndex(where: { $0.id == windowID }) {
+                            windows.insert(windows.remove(at: i), at: 0)
+                        } else {
+                            AppLog.line("window \(windowID) not capturable; falling back to clean display crop")
+                        }
+                    }
+                    canvas.addWindowLayers(windows.map(\.window))
+                } else if let windowID {
+                    if let image = await captureWindow(id: windowID, screen: screen, cursor: cursor) {
+                        // A window capture keeps its unobscured contents, including
+                        // portions offscreen. The clean displays remain available for recropping.
+                        canvas.setCapturedWindow(image, cornerRadius: radius)
+                    } else {
+                        AppLog.line("window \(windowID) not capturable; falling back to clean display crop")
+                    }
+                }
+                if redact {
+                    let boxes = try await SmartRedact.boxes(
+                        in: [.init(image: canvas.flatten(scale: scale), frame: canvas.crop)],
+                        categories: categories)
+                    SmartRedact.censors(covering: boxes, style: redactStyle, existing: canvas.layerStack)
+                        .forEach { canvas.layerStack.add($0) }
+                }
+                let writing = Date()
+                let package = try writeScreenshot(canvas, scale: scale, capturedAt: capturedAt, clear: clear,
+                    label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: workflow)
+                if keepWindows {
+                    let written = Int(Date().timeIntervalSince(writing) * 1000)
+                    func mb(_ bytes: Int) -> String { String(format: "%.1f", Double(bytes) / 1_000_000) }
+                    let decoded = canvas.windowLayers.reduce(0) { $0 + $1.image.bytesPerRow * $1.image.height }
+                    AppLog.line("window layers: Canvas \(mb(packageSizeOnDisk(package))) MB on disk, written in \(written) ms; window images \(mb(decoded)) MB decoded; footprint \(mb(processFootprint())) MB")
+                }
+            } catch {
+                AppLog.line("Screenshot Canvas: \(error.localizedDescription)")
+            }
+        }
+    }
+
+    /// Writes both outputs before Clear after Screenshot can discard the editable
+    /// layers. Returns the Canvas package's URL in the store.
+    @discardableResult
+    func writeScreenshot(_ canvas: CanvasDocument, scale: CGFloat, capturedAt: Date, clear: Bool,
+                         label: String, workflow: String) throws -> URL {
+        let shot = try canvasStore.addScreenshot(canvas, files: captureFiles, scale: scale,
+            createdAt: capturedAt, pairedWith: [screenshotFolders.flattened])
+        if clear { clearAnnotations() }
+        runCapture(file: shot.file, kind: .screenshot, label: label, workflow: workflow,
+            runID: shot.id, capturedAt: capturedAt, canvas: shot.package)
+        return shot.package
+    }
+}
+
+extension OverlayController {
+    /// Live-screen Screenshots refresh every display at confirm, leaving Markup
+    /// panels out even when closeAll has rebuilt the desktop chrome.
+    func captureCanvasDisplays(_ screens: [NSScreen], excluding: Set<Int>, cursor: Bool,
+                               wadjet: Bool) async throws -> [CapturedCanvasDisplay] {
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
+        var captures: [CapturedCanvasDisplay] = []
+        for screen in screens {
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+                  let display = content.displays.first(where: { $0.displayID == id }) else {
+                throw CaptureError("no shareable display for \(screen.localizedName)")
+            }
+            let filter: SCContentFilter
+            if wadjet {
+                let excluded = excluding.union(toolbarPanels.values.map(\.windowNumber))
+                    .union(MarkupController.shared.windowNumbers)
+                filter = SCContentFilter(display: display, excludingWindows: content.windows.filter { excluded.contains(Int($0.windowID)) })
+            } else {
+                filter = SCContentFilter(display: display,
+                    excludingApplications: content.applications.filter { $0.bundleIdentifier == Bundle.main.bundleIdentifier },
+                    exceptingWindows: [])
+            }
+            let scale = screen.backingScaleFactor
+            let output = try await screenshot(display, width: Int((screen.frame.width * scale).rounded()),
+                height: Int((screen.frame.height * scale).rounded()), cursor: cursor,
+                hdr: screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1, filter: filter)
+            guard let image = output.hdr ?? output.sdr else { throw CaptureError("display capture returned no image") }
+            captures.append(.init(display: .init(id: id, frame: screen.frame, scaleFactor: scale), image: image))
+        }
+        return captures
+    }
+}

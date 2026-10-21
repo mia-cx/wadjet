@@ -28,5 +28,55 @@
     <true/>
     <key>NSScreenCaptureUsageDescription</key>
     <string>Wadjet captures a Freeze Frame of the screen.</string>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Wadjet Canvas</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array><string>cx.mia.wadjet.canvas</string></array>
+            <key>LSTypeIsPackage</key>
+            <true/>
+            <key>NSDocumentClass</key>
+            <string>CanvasEditorDocument</string>
+            <key>NSIsRelatedItemType</key>
+            <true/>
+        </dict>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Image</string>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Alternate</string>
+            <key>LSItemContentTypes</key>
+            <array><string>public.image</string></array>
+            <key>NSDocumentClass</key>
+            <string>CanvasEditorDocument</string>
+        </dict>
+    </array>
+    <key>UTExportedTypeDeclarations</key>
+    <array>
+        <dict>
+            <key>UTTypeIdentifier</key>
+            <string>cx.mia.wadjet.canvas</string>
+            <key>UTTypeDescription</key>
+            <string>Wadjet Canvas</string>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.apple.package</string>
+                <string>public.composite-content</string>
+            </array>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array><string>wadjet</string></array>
+            </dict>
+        </dict>
+    </array>
 </dict>
 </plist>

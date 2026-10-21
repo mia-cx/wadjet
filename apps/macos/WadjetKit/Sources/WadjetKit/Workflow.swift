@@ -10,10 +10,14 @@ public enum CaptureKind: String, Codable, CaseIterable, Sendable {
     }
 }
 
-/// One action in a Workflow. Steps run in order on the captured file; a Step
-/// that throws is reported and skipped.
+/// Save file's output; image keeps the capture format, Canvas keeps editable layers.
+public enum SaveFileFormat: String, Codable, CaseIterable, Sendable {
+    case image, canvas
+}
+
+/// One action in a Workflow. Steps run in order; a failing Step is reported and skipped.
 public enum Step: Equatable, Sendable {
-    case saveFile(folder: String?) // nil = the default folder for the kind
+    case saveFile(folder: String?, format: SaveFileFormat = .image) // nil = the default folder for the kind
     case copyImage
     case copyFile
     case openIn(app: String?) // bundle identifier; nil = the file type's default app
@@ -40,12 +44,14 @@ public enum Step: Equatable, Sendable {
     /// Steps that only make sense on a Screenshot get this as their config error.
     var worksOnRecordings: Bool {
         switch self {
+        case .saveFile(_, .canvas): return false
         case .copyImage, .pin: return false
         default: return true
         }
     }
     var recordingsError: String {
         switch self {
+        case .saveFile(_, .canvas): return "Canvas format only works on Screenshots"
         case .copyImage: return "Copy image only works on Screenshots; use Copy file for Recordings"
         case .pin: return "Pin to screen only works on Screenshots"
         default: return ""
@@ -54,12 +60,13 @@ public enum Step: Equatable, Sendable {
 }
 
 extension Step: Codable {
-    private enum CodingKeys: String, CodingKey { case type, folder, app }
+    private enum CodingKeys: String, CodingKey { case type, folder, format, app }
     private enum Kind: String, Codable { case saveFile, copyImage, copyFile, openIn, pin, showToast }
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         switch try c.decode(Kind.self, forKey: .type) {
-        case .saveFile: self = .saveFile(folder: try c.decodeIfPresent(String.self, forKey: .folder))
+        case .saveFile: self = .saveFile(folder: try c.decodeIfPresent(String.self, forKey: .folder),
+            format: try c.decodeIfPresent(SaveFileFormat.self, forKey: .format) ?? .image)
         case .copyImage: self = .copyImage
         case .copyFile: self = .copyFile
         case .openIn: self = .openIn(app: try c.decodeIfPresent(String.self, forKey: .app))
@@ -70,9 +77,10 @@ extension Step: Codable {
     public func encode(to encoder: Encoder) throws {
         var c = encoder.container(keyedBy: CodingKeys.self)
         switch self {
-        case .saveFile(let folder):
+        case .saveFile(let folder, let format):
             try c.encode(Kind.saveFile, forKey: .type)
             if let folder { try c.encode(folder, forKey: .folder) }
+            if format != .image { try c.encode(format, forKey: .format) }
         case .copyImage: try c.encode(Kind.copyImage, forKey: .type)
         case .copyFile: try c.encode(Kind.copyFile, forKey: .type)
         case .openIn(let app):
@@ -127,7 +135,9 @@ public protocol WorkflowEffects: Sendable {
     func copyImage(_ file: URL, run: UUID) async throws
     func copyFile(_ file: URL, run: UUID) async throws
     func open(_ file: URL, app: String?, run: UUID) async throws
-    func pin(_ file: URL, run: UUID) async throws
+    /// Pin gets the run's current image and its Canvas (the package the run
+    /// was started with, never a Save file copy); nil when the run has none.
+    func pin(_ file: URL, canvas: URL?, run: UUID) async throws
     func showToast(_ file: URL, run: UUID) async throws
 }
 
@@ -137,27 +147,44 @@ public protocol WorkflowEffects: Sendable {
 ///
 /// Every effect receives the run's *current* file — `saved.last` once a Save
 /// file Step has run, else the temp capture. A Workflow that saves first hands
-/// later Steps (Copy file, Open in an app, Pin, Show toast) the copy outside
+/// later Steps (Copy file, Open in an app) the copy outside
 /// the sandbox container, which other apps can read without a prompt.
+/// Copy image, Pin and Show toast always use the latest image copy, even after
+/// Save Canvas. The Canvas URL travels alongside the image, never replacing it;
+/// Pin receives it too.
 public struct WorkflowRunner: Sendable {
     let effects: any WorkflowEffects
     public init(effects: any WorkflowEffects) { self.effects = effects }
-    public func run(_ file: URL, through workflow: Workflow, defaultFolder: URL, id: UUID = UUID()) -> AsyncStream<RunEvent> {
+    /// `defaultFolder` takes Save file's images; `canvasFolder`, when given,
+    /// takes its Canvases (a Screenshot's image goes to `flattened/`, a saved
+    /// Canvas to the screenshots folder itself).
+    public func run(_ file: URL, through workflow: Workflow, defaultFolder: URL, canvasFolder: URL? = nil,
+                    id: UUID = UUID(), canvas: URL? = nil) -> AsyncStream<RunEvent> {
         AsyncStream { continuation in
             Task {
                 var saved: [URL] = [], errors: [String] = []
+                var currentImage = file
                 for (i, step) in workflow.steps.enumerated() {
                     continuation.yield(.started(i, step))
                     let current = saved.last ?? file
                     do {
                         switch step {
-                        case .saveFile(let folder):
-                            saved.append(try Self.save(file, into: folder.map { expandingTilde($0) } ?? defaultFolder))
-                        case .copyImage: try await effects.copyImage(current, run: id)
+                        case .saveFile(let folder, let format):
+                            if format == .canvas {
+                                let directory = folder.map { expandingTilde($0) } ?? canvasFolder ?? defaultFolder
+                                guard let canvas else { throw CanvasDocumentError.invalidPackage("Screenshot has no Canvas") }
+                                saved.append(try Self.save(canvas, into: directory,
+                                    name: file.deletingPathExtension().lastPathComponent + ".wadjet", preserveCanvasLinks: true))
+                            } else {
+                                let directory = folder.map { expandingTilde($0) } ?? defaultFolder
+                                currentImage = try Self.save(file, into: directory)
+                                saved.append(currentImage)
+                            }
+                        case .copyImage: try await effects.copyImage(currentImage, run: id)
                         case .copyFile: try await effects.copyFile(current, run: id)
                         case .openIn(let app): try await effects.open(current, app: app, run: id)
-                        case .pin: try await effects.pin(current, run: id)
-                        case .showToast: try await effects.showToast(current, run: id)
+                        case .pin: try await effects.pin(currentImage, canvas: canvas, run: id)
+                        case .showToast: try await effects.showToast(currentImage, run: id)
                         }
                         continuation.yield(.finished(i, step))
                     } catch {
@@ -172,15 +199,17 @@ public struct WorkflowRunner: Sendable {
         }
     }
     /// Copy `file` into `dir` under its own name (` 2`, ` 3`, … on collision).
-    static func save(_ file: URL, into dir: URL) throws -> URL {
+    static func save(_ file: URL, into dir: URL, name: String? = nil, preserveCanvasLinks: Bool = false) throws -> URL {
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        var dst = dir.appendingPathComponent(file.lastPathComponent)
+        let base = dir.appendingPathComponent(name ?? file.lastPathComponent)
+        var dst = base
         var n = 2
         while FileManager.default.fileExists(atPath: dst.path) {
-            dst = dir.appendingPathComponent("\(file.deletingPathExtension().lastPathComponent) \(n).\(file.pathExtension)")
+            dst = dir.appendingPathComponent("\(base.deletingPathExtension().lastPathComponent) \(n).\(base.pathExtension)")
             n += 1
         }
-        try FileManager.default.copyItem(at: file, to: dst)
+        if preserveCanvasLinks { try CanvasDocument.saveCopy(from: file, to: dst) }
+        else { try FileManager.default.copyItem(at: file, to: dst) }
         return dst
     }
 }
