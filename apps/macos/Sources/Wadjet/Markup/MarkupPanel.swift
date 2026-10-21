@@ -198,6 +198,12 @@ final class MarkupView: NSView {
                 }
             }
             for h in hs {
+                // the Draw Tool's anchors are Direct Select's hollow squares
+                if controller.gripSet == .drawing, case .vertex = h.handle {
+                    let r = 3 / controller.zoom
+                    grips.addRect(CGRect(x: h.at.x - r, y: h.at.y - r, width: 2 * r, height: 2 * r))
+                    continue
+                }
                 // tangent grips read as satellites of their node: smaller
                 let base: CGFloat = switch h.handle {
                 case .tangent: 2.5

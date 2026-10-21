@@ -163,8 +163,9 @@ final class MarkupController {
     var directSelecting: Bool { armed == .directSelect }
     /// the grips the selection shows and takes presses on: Direct Select's
     /// points, Select's bounding box, or the bounding box and a Line's bend
-    /// for what a placing Tool just placed
-    var gripSet: GripSet { directSelecting ? .points : selecting ? .frame : .placed }
+    /// for what a placing Tool just placed — the Draw Tool's adds every
+    /// anchor of a Line or path, so a node it inserted drags later too
+    var gripSet: GripSet { directSelecting ? .points : selecting ? .frame : armed == .draw ? .drawing : .placed }
 
     /// the gesture's snapping state; nil between gestures and while Snapping is off
     @ObservationIgnored var snapper: MarkupSnapper?

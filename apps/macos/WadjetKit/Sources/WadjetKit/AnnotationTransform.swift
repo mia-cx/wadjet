@@ -26,6 +26,9 @@ public enum GripSet: Sendable {
     /// a Line's ends and bend, a Pen path's nodes and handles; other kinds
     /// fall back to the bounding box
     case points
+    /// the Draw Tool's: `.placed` plus every anchor of a Line or path, a
+    /// Brush stroke's included (DrawGrips.swift)
+    case drawing
 }
 
 /// a grip on a selected Annotation
@@ -235,6 +238,9 @@ extension Annotation {
                 }
                 let delta = CGPoint(x: anchor.x - data.nodes[i].anchor.x,
                                     y: anchor.y - data.nodes[i].anchor.y)
+                // a hand-moved node no longer matches the Brush samples a refit reads
+                data.rawPoints = nil
+                data.smoothing = nil
                 // the node's handles ride along with its anchor
                 data.nodes[i].anchor = anchor
                 data.nodes[i].handleIn = data.nodes[i].handleIn.map {
@@ -284,6 +290,8 @@ extension Annotation {
                             y: (old?.y ?? n.anchor.y) + point.y - start.y)
             if constrained { h = PathGeometry.snapAngle(h, from: n.anchor) }
             if outgoing { data.nodes[i].handleOut = h } else { data.nodes[i].handleIn = h }
+            data.rawPoints = nil
+            data.smoothing = nil
             // a smooth node stays smooth: the opposite handle turns to stay
             // collinear through the anchor at its own length; a nil one stays nil
             if !breaking, let other = outgoing ? n.handleIn : n.handleOut {
@@ -576,6 +584,7 @@ extension Annotation {
             return handles(minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
                 + frameHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         case .points: return handles(minExtent: minExtent, rotateOffset: rotateOffset)
+        case .drawing: return drawingHandles(minExtent: minExtent, rotateOffset: rotateOffset)
         }
     }
 
@@ -583,10 +592,12 @@ extension Annotation {
     /// crowded closer than `radius` resolve to the one the press meant
     public func handle(at p: CGPoint, radius: CGFloat, minExtent: CGFloat,
                        rotateOffset: CGFloat, set: GripSet = .points) -> SelectionHandle? {
-        handles(set, minExtent: minExtent, rotateOffset: rotateOffset)
+        let near = handles(set, minExtent: minExtent, rotateOffset: rotateOffset)
             .map { ($0.handle, hypot($0.at.x - p.x, $0.at.y - p.y)) }
             .filter { $0.1 <= radius }
-            .min { $0.1 < $1.1 }?.0
+        // the Draw Tool grabs an anchor or bend in reach before a frame grip
+        if set == .drawing, let h = near.filter({ !$0.0.isFrame }).min(by: { $0.1 < $1.1 }) { return h.0 }
+        return near.min { $0.1 < $1.1 }?.0
     }
 }
 
