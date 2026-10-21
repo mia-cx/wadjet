@@ -119,4 +119,28 @@ struct DrawCurveHandlesTests {
         #expect(d.rawPoints == nil)
         #expect(d.smoothing == nil)
     }
+
+    // Proves a handle edit on a path attached whole, stored the way the Draw
+    // Tool stores it, keeps the other anchors and the dragged handle where
+    // the drag left them, and the path stays attached
+    @Test func handleEditOnAWholeAttachedPathStaysPut() throws {
+        let target = Annotation(kind: .shape(.rectangle(cornerRadius: 0), rect: CGRect(x: 300, y: 0, width: 20, height: 20)),
+                                style: Self.style)
+        let path = Annotation(kind: .path(PathData(nodes: [
+            PathNode(anchor: .zero, handleOut: CGPoint(x: 0, y: 100)),
+            PathNode(anchor: CGPoint(x: 100, y: 0), handleIn: CGPoint(x: 100, y: 100)),
+        ])), style: Self.style)
+        var stack = LayerStack([target, path])
+        stack.attach(path.id, .whole, to: target.id, at: .frame(.zero))
+        let start = try #require(stack.annotations.first { $0.id == path.id })
+        stack.replaceRebasing(start.dragging(.tangent(0, outgoing: true), from: CGPoint(x: 0, y: 100),
+                                             to: CGPoint(x: 0, y: 200)))
+        let a = try #require(stack.annotations.first { $0.id == path.id })
+        guard case let .path(d) = a.kind else { Issue.record(); return }
+        let m = a.affineTransform
+        #expect(Self.near(d.nodes[0].anchor.applying(m), .zero))
+        #expect(Self.near(d.nodes[1].anchor.applying(m), CGPoint(x: 100, y: 0)))
+        #expect(Self.near(d.nodes[0].handleOut?.applying(m), CGPoint(x: 0, y: 200)))
+        #expect(a.attachments.contains { $0.point == .whole })
+    }
 }

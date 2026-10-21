@@ -1050,10 +1050,11 @@ final class MarkupController {
             gesture = .marquee(from: from, to: p, adding: adding)
         case let .handle(.tangent(i, out), start, from):
             // ⌥ breaks a smooth node into a corner; a Shape reshapes into its
-            // outline path as the handle moves
-            stack.replace(start.outlinePath.dragging(.tangent(i, outgoing: out), from: from, to: p,
-                                                     constrained: constrained,
-                                                     breaking: NSEvent.modifierFlags.contains(.option)))
+            // outline path as the handle moves. An Annotation attached whole
+            // stays attached where the edit leaves it
+            stack.replaceRebasing(start.outlinePath.dragging(.tangent(i, outgoing: out), from: from, to: p,
+                                                             constrained: constrained,
+                                                             breaking: NSEvent.modifierFlags.contains(.option)))
         case let .handle(h, start, from):
             // Shift's 45° constraint wins on point handles: a point snap
             // would leave the ray — vertex ends and Pen tangents both;
