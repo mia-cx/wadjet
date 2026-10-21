@@ -288,7 +288,7 @@ extension ToolbarView {
     /// stays collapsed under the pointer until it leaves
     var undoRingButton: some View {
         Button {
-            _ = ringPointer.clickedRing()
+            if ringPointer.clickedRing() { UndoRingHold.displays.insert(displayIndex) }
             AppLog.line("markup: Undo ring clicked d\(displayIndex)")
             AppDelegate.shared?.undoClear()
         } label: {
@@ -309,6 +309,12 @@ extension ToolbarView {
             .onChange(of: ringPointer) { syncExpanded() }
             .onChange(of: ringPointer.onRing) { undoRingTip() }
             .onChange(of: islandShowsRing) { trackUndoRing() }
+            .onAppear {
+                // Undo rebuilt the island under the pointer: it keeps the ring click's hold
+                guard UndoRingHold.displays.contains(displayIndex) else { return }
+                if pointerInside() { ringPointer = UndoRingPointer(held: true) }
+                else { UndoRingHold.displays.remove(displayIndex) }
+            }
     }
 
     /// re-reads the pointer against the ring: on its target the island
@@ -323,6 +329,7 @@ extension ToolbarView {
             onRing = UndoRingPointer.target(ring: ring, island: shapeRectInView).contains(q)
         }
         ringPointer.moved(inside: hoverInside, onRing: onRing)
+        if !ringPointer.held { UndoRingHold.displays.remove(displayIndex) }
     }
 
     /// the pointer on the ring names it, since hover there doesn't open the bar
@@ -333,6 +340,12 @@ extension ToolbarView {
             TipPanel.hide()
         }
     }
+}
+
+/// the displays whose ring click holds the island collapsed until the pointer
+/// leaves. Undo rebuilds the toolbar panels, so the hold outlives the view
+@MainActor enum UndoRingHold {
+    static var displays: Set<Int> = []
 }
 
 /// The collapsed island's Undo ring after a Clear, trailing on its own or

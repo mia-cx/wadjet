@@ -4,8 +4,9 @@ import CoreGraphics
 /// (ClearUndo). Elsewhere on the island hover expands it as always; on the
 /// ring it stays collapsed, so a click there can undo the Clear. After that
 /// click the island holds collapsed until the pointer leaves, so the restored
-/// count island doesn't open under a resting pointer. Any pointer on the
-/// island still pauses the ring.
+/// count island doesn't open under a resting pointer; Undo rebuilds the
+/// island's view, so the caller carries that hold into the new one with
+/// `init(held:)`. Any pointer on the island still pauses the ring.
 public struct UndoRingPointer: Equatable, Sendable {
     /// the pointer is on the island (its hover rect)
     public private(set) var inside = false
@@ -14,7 +15,11 @@ public struct UndoRingPointer: Equatable, Sendable {
     /// a ring click undid the Clear and the pointer hasn't left since
     private var spent = false
 
-    public init() {}
+    /// `held`: a ring click's hold carried over from the view this one replaced
+    public init(held: Bool = false) { spent = held }
+
+    /// a ring click holds the island collapsed until the pointer leaves
+    public var held: Bool { spent }
 
     /// the pointer moved; `onRing` only while the collapsed island shows a ring
     public mutating func moved(inside: Bool, onRing: Bool) {

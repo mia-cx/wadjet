@@ -28,6 +28,19 @@ struct UndoRingPointerTests {
         #expect(p.expands)
     }
 
+    // Proves a hold carried into a fresh pointer (Undo rebuilt the island) lasts until the pointer leaves.
+    @Test func heldAcrossARebuild() {
+        var p = UndoRingPointer(held: true)
+        #expect(p.held)
+        p.moved(inside: true, onRing: false)
+        #expect(!p.expands && p.held)
+        p.moved(inside: false, onRing: false)
+        #expect(!p.held)
+        p.moved(inside: true, onRing: false)
+        #expect(p.expands)
+        #expect(!UndoRingPointer().held)
+    }
+
     // Proves a click off the ring is not an undo and leaves hover alone.
     @Test func clickOffTheRing() {
         var p = UndoRingPointer()
