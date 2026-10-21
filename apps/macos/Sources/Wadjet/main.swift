@@ -279,12 +279,12 @@ final class Freeze {
 // Private API, so only CLEAR_GLASS_PATCH builds (run.sh) compile it; store builds leave it out.
 enum ClearGlassPatch {
     static let identityFill = CGColor(red: 1, green: 1, blue: 1, alpha: 0)
-    /// does this filter's face fill still read as untinted clear glass?
+    /// does this filter's face fill still read as untinted clear glass? Only
+    /// alpha decides: the toolbar's Light Mode tint is white, so its fill
+    /// shares identity's RGB, and may arrive as a 2-component grey
     static func isIdentityFill(_ v: Any?) -> Bool {
         guard let v else { return true } // unset on the first frame: let it pass
-        let cg = v as! CGColor
-        guard let c = cg.components, c.count >= 4 else { return true }
-        return c[0] == 1 && c[1] == 1 && c[2] == 1 && c[3] == 0
+        return (v as! CGColor).alpha == 0
     }
     static func install() {
         guard let cls = NSClassFromString("CABackdropLayer") else { return }
@@ -2848,6 +2848,14 @@ struct ToolbarView: View {
     @ObservedObject var s = AppState.shared
     var expanded: Bool { s.expandedDisplay == displayIndex }
     @Namespace var ns
+    @Environment(\.colorScheme) var colorScheme
+    /// the expanded bar's scrim, the one tint both bar paths use: the system
+    /// glass's tint on the live desktop, and barSurface's over the Freeze
+    /// Frame crop. Darkens in Dark Mode, lightens in Light Mode
+    var barTint: Color { colorScheme == .dark ? .black.opacity(0.35) : .white.opacity(0.3) }
+    /// icons, labels, dividers and highlights on the expanded bar, contrasting
+    /// barTint. The collapsed island stays black, so its contents stay white
+    var barInk: Color { colorScheme == .dark ? .white : .black }
     var screen: NSScreen? {
         displayIndex < ctrl.chromeScreens.count ? ctrl.chromeScreens[displayIndex] : NSScreen.main
     }
@@ -3037,7 +3045,8 @@ struct ToolbarView: View {
                     snapLens(to: c); pressing = true
                 } else if s.debugHold == nil { pressing = false }
             }
-            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit(); syncExpanded() }
+            // a Tool switch can freeze or unfreeze the screen (Freeze Frame precedence)
+            .onChange(of: s.tool) { s.openMenu = nil; ctrl.hideMenu(); TipPanel.hide(); syncHit(); syncLensBg(); syncExpanded() }
     }
 
     var shape: UnevenRoundedRectangle {
@@ -3067,7 +3076,7 @@ struct ToolbarView: View {
         }
         .frame(width: shapeW, height: shapeH)
         .clipShape(shape) // nothing may draw outside the island/toolbar shape
-        .glassEffect(ownBar ? .identity : .clear.tint(.black.opacity(0.35)).interactive(), in: shape)
+        .glassEffect(ownBar ? .identity : .clear.tint(barTint).interactive(), in: shape)
         .glassEffectID("pill", in: ns)
         .contentShape(shape)
         .offset(x: barDX) // Steady's shift; 0 in every other layout
@@ -3151,7 +3160,7 @@ struct ToolbarView: View {
     }
 
     @ViewBuilder var expandedContent: some View {
-        if recording { recControls } else { toolRow }
+        if recording { recControls.foregroundStyle(barInk) } else { toolRow }
     }
 
     @State var recRowSize = CGSize(width: 220, height: 64)
@@ -3380,7 +3389,7 @@ struct ToolbarView: View {
         HStack(spacing: twoRows ? 0 : cellGap) { // Two Rows' hidden groups take no gap either
             ForEach(Tool.Kind.allCases, id: \.self) { k in
                 if k != Tool.Kind.allCases.first, !twoRows { // thin divider between groups, clear of the highlight capsule
-                    Rectangle().fill(.white.opacity(0.14))
+                    Rectangle().fill(barInk.opacity(0.14))
                         .frame(width: 1, height: selH * 0.6)
                         .padding(.horizontal, (selW - toolD) / 2 + sepMargin - cellGap)
                 }
@@ -3446,14 +3455,19 @@ struct ToolbarView: View {
     /// pixel-res Freeze Frame crop under the whole toolbar panel — the
     /// layer's stand-in for the world behind the bar
     @State var lensBg: CGImage?
+    /// re-crops lensBg, or clears it on the live desktop so the bar never
+    /// shows (and the lens never bends) a Freeze Frame that's no longer up
     func syncLensBg() {
         #if CLEAR_GLASS_PATCH
-        guard ctrl.showsFrozen, let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
-              displayIndex < Freeze.shared.displays.count else { return }
-        let local = CGRect(x: p.frame.minX - sc.frame.minX, y: p.frame.minY - sc.frame.minY,
-                           width: p.frame.width, height: p.frame.height)
-        lensBg = Freeze.shared.crop(rect: local, on: displayIndex)
+        if !ctrl.showsFrozen { lensBg = nil }
+        else if let p = ctrl.toolbarPanels[displayIndex], let sc = screen,
+                displayIndex < Freeze.shared.displays.count {
+            let local = CGRect(x: p.frame.minX - sc.frame.minX, y: p.frame.minY - sc.frame.minY,
+                               width: p.frame.width, height: p.frame.height)
+            lensBg = Freeze.shared.crop(rect: local, on: displayIndex)
+        }
         #endif
+        AppLog.line("bar d\(displayIndex) \(ownBar ? "own" : "system") tint=\(colorScheme) frozen=\(ctrl.showsFrozen) expanded=\(expanded)")
     }
     #if CLEAR_GLASS_PATCH
     /// the lens capsule's centre in panel coords
@@ -3468,7 +3482,7 @@ struct ToolbarView: View {
         rowContent { t, collapsed in
             iconCell(t, collapsed: collapsed).scaleEffect((1 + lensIconBoost) / lensSqueeze)
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(barInk)
         .frame(width: shapeW, height: shapeH, alignment: .top)
         .padding(.top, shapeTop + rowTop)
         .offset(x: barDX)
@@ -3487,6 +3501,9 @@ struct ToolbarView: View {
                     .resizable()
                     .frame(width: panelW, height: panelH)
                     .blur(radius: 5)
+                // the scrim under the edge work, so the lens bends the tinted
+                // surface and its inside matches the bar around it
+                Rectangle().fill(barTint).frame(width: panelW, height: panelH)
             }
         }
         // under a notch the bar hangs from the screen's top edge: extend the
@@ -3589,18 +3606,18 @@ struct ToolbarView: View {
                     }
                 }
         }
-        .foregroundStyle(marked && !lensActive ? Color.wadjetAccent : .white)
+        .foregroundStyle(marked && !lensActive ? Color.wadjetAccent : barInk)
             .frame(width: toolD, height: selH)
             // the rest highlight rides the selected cell, so group reflows
             // carry it with layout instead of chasing it in row space. Colour
             // icons can't take the accent, so an accent ring marks the cell
             .background {
                 if marked, !lensActive {
-                    Capsule().fill(.white.opacity(0.10))
+                    Capsule().fill(barInk.opacity(0.10))
                         .overlay(Capsule().strokeBorder(Color.wadjetAccent, lineWidth: 1.5))
                         .frame(width: selW, height: selH)
                 } else if collapsed, hoverKind == t.kind { // Steady: the group a click or dwell opens
-                    Capsule().fill(.white.opacity(0.10)).frame(width: selW, height: selH)
+                    Capsule().fill(barInk.opacity(0.10)).frame(width: selW, height: selH)
                 }
             }
             .contentShape(Rectangle()) // whole cell, not just the glyph
@@ -3880,7 +3897,7 @@ struct RecControlsView: View {
                 recButton("arrow.uturn.backward", label: "Undo Clear") { AppDelegate.shared?.undoClear() }
             }
         }
-        .foregroundStyle(.white)
+        // no foreground here: the caller sets it (barInk on the bar, white on the black bubble)
         // the outer circles' edges sit so their centres meet the corner
         // centres (radius 32 + 10) — concentric, like the tool capsule
         .padding(.horizontal, 18)

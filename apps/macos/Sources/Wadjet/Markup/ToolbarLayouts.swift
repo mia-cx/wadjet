@@ -127,7 +127,7 @@ extension ToolbarView {
             .padding(.horizontal, headerGeo.edge)
             .frame(height: headerH)
             // the line between the strip and the shown group's bar
-            Rectangle().fill(.white.opacity(0.14))
+            Rectangle().fill(barInk.opacity(0.14))
                 .frame(width: stripWidth - 2 * headerGeo.edge, height: 1)
                 .offset(y: rowsGap / 2)
                 .frame(height: 0)
@@ -150,6 +150,7 @@ extension ToolbarView {
                 .overlay(alignment: .bottomTrailing) {
                     if let t = sel { // the selected Tool's symbol as the badge
                         t.iconImage.scaledToFit().frame(width: 11, height: 11)
+                            .foregroundStyle(.white) // on its own black disc
                             .frame(width: 16, height: 16)
                             .background(Circle().fill(.black.opacity(0.85)))
                             .overlay(Circle().strokeBorder(Color.wadjetAccent, lineWidth: 1))
@@ -158,10 +159,10 @@ extension ToolbarView {
                 }
             Text(k.groupTitle).font(.system(size: 10, weight: .medium)).lineLimit(1).fixedSize()
         }
-        .foregroundStyle(.white)
+        .foregroundStyle(barInk)
         .frame(width: headerGeo.cell, height: headerH)
         .background {
-            if shown { Capsule().fill(.white.opacity(0.10)).frame(width: 92, height: headerH) }
+            if shown { Capsule().fill(barInk.opacity(0.10)).frame(width: 92, height: headerH) }
         }
         .animation(.smooth(duration: 0.15), value: shown)
         .opacity(s.recActive && k == .rec ? 0.35 : 1) // a Recording greys the video group
