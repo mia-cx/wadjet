@@ -30,9 +30,11 @@ extension Annotation {
     /// by exactly the drag. A straight segment's handles start at the chord's
     /// thirds, so it bends into the same arc a Line's bend draws. An end node
     /// whose two handles were collinear stays smooth: its other handle turns
-    /// with this one, at its own length. Dragged back to straight (both handles within
-    /// `bendStraightenRadius` of the chord), the segment becomes straight
-    /// again. A Brush stroke drops its samples, because a refit would undo it.
+    /// with this one, at its own length. Dragged back to straight (both
+    /// handles within `bendStraightenRadius` of the chord), the segment
+    /// becomes straight again, and a smooth end's other handle turns onto
+    /// the chord's line. A Brush stroke drops its samples, because a refit
+    /// would undo it.
     public func bendingSegment(_ i: Int, from start: CGPoint, to point: CGPoint) -> Annotation {
         var a = baked
         guard case var .path(data) = a.kind else { return a }
@@ -52,6 +54,10 @@ extension Annotation {
         if Self.liesOnChord(c1, p0, p3), Self.liesOnChord(c2, p0, p3) {
             data.nodes[i].handleOut = nil
             data.nodes[j].handleIn = nil
+            // a straight segment leaves each end along the chord: a smooth
+            // end's other handle lines up with it
+            data.nodes[i].handleIn = Self.keptSmooth(data.nodes[i].handleIn, anchor: p0, was: old1, now: p3)
+            data.nodes[j].handleOut = Self.keptSmooth(data.nodes[j].handleOut, anchor: p3, was: old2, now: p0)
         } else {
             data.nodes[i].handleOut = c1
             data.nodes[j].handleIn = c2

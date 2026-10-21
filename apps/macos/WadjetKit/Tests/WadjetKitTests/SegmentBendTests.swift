@@ -75,6 +75,25 @@ struct SegmentBendTests {
         #expect(abs(hypot(v.x, v.y) - hypot(was.x - n.anchor.x, was.y - n.anchor.y)) < 1e-6)
     }
 
+    // Proves snapping a segment straight keeps a smooth join smooth: the
+    // neighbour's handle turns onto the straight segment's line
+    @Test func snappingStraightKeepsASmoothJoin() throws {
+        let curve = Annotation(kind: .line(start: .zero, end: CGPoint(x: 200, y: 0), bend: CGPoint(x: 100, y: 40)),
+                               style: Self.style)
+        let split = try #require(curve.insertingNode(near: CGPoint(x: 100, y: 40))).annotation
+        let mid = try #require(Self.bends(split).first { $0.handle == .segmentBend(0) }).at
+        // the straight chord's midpoint is (50,20)
+        let straight = split.dragging(.segmentBend(0), from: mid, to: CGPoint(x: 50, y: 20))
+        #expect(straight.kind.segments[0].straight)
+        let n = Self.nodes(straight)[1]
+        let ho = try #require(n.handleOut)
+        let u = CGPoint(x: n.anchor.x - 0, y: n.anchor.y - 0), v = CGPoint(x: ho.x - n.anchor.x, y: ho.y - n.anchor.y)
+        #expect(abs(u.x * v.y - u.y * v.x) / (hypot(u.x, u.y) * hypot(v.x, v.y)) < 1e-6)
+        #expect(u.x * v.x + u.y * v.y > 0)
+        let was = try #require(Self.nodes(split)[1].handleOut)
+        #expect(abs(hypot(v.x, v.y) - hypot(was.x - n.anchor.x, was.y - n.anchor.y)) < 1e-6)
+    }
+
     // Proves a corner stays a corner: bending one segment of a corner node
     // leaves the other segment's handle where it was
     @Test func aCornerNodeStaysACorner() {
