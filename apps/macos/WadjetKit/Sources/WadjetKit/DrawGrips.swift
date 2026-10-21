@@ -3,7 +3,8 @@ import Foundation
 
 /// The Draw Tool's grips on the Line or path it selects, after Illustrator's
 /// Pen with a path selected: every anchor shows and drags, beside the
-/// placing Tool's bounding box and a Line's bend grip.
+/// placing Tool's bounding box, a Line's bend grip, and a bend grip on each
+/// segment of a path (SegmentBend.swift).
 extension Annotation {
     /// one `.vertex` grip per anchor, on screen: a Line's two ends, every
     /// node of a path — the ones the Draw Tool inserted included, and a Brush
@@ -27,22 +28,44 @@ extension Annotation {
                              minExtent: CGFloat, rotateOffset: CGFloat) -> CGPoint? {
         (handles(.points, minExtent: minExtent, rotateOffset: rotateOffset)
             + handles(.frame, minExtent: minExtent, rotateOffset: rotateOffset)
-            + anchorGrips)
+            + anchorGrips + segmentBendGrips(spacing: 0))
             .filter { $0.handle == handle }
             .min { hypot($0.at.x - press.x, $0.at.y - press.y) < hypot($1.at.x - press.x, $1.at.y - press.y) }?.at
     }
 
-    /// `.drawing`'s grips: a Line's bend, then the anchors, then the frame
-    /// grips not sitting on an anchor — a Line's ends are two of its frame's
-    /// corners, and the anchor would win every press there anyway
+    /// `.drawing`'s grips: a Line's bend, then the anchors, then each path
+    /// segment's bend grip at least `minExtent` from its anchors, then the
+    /// frame grips not sitting on an anchor — a Line's ends are two of its
+    /// frame's corners, and the anchor would win every press there anyway
     func drawingHandles(minExtent: CGFloat, rotateOffset: CGFloat) -> [(handle: SelectionHandle, at: CGPoint)] {
         let anchors = anchorGrips
         let frame = frameHandles(minExtent: minExtent, rotateOffset: rotateOffset).filter { f in
             !anchors.contains { hypot($0.at.x - f.at.x, $0.at.y - f.at.y) < 0.5 }
         }
         return handles(.placed, minExtent: minExtent, rotateOffset: rotateOffset).filter { $0.handle == .bend }
-            + anchors + frame
+            + anchors + segmentBendGrips(spacing: minExtent) + frame
     }
+
+    /// what a Draw Tool press on this selected Annotation grabs, in order:
+    /// an anchor within `radius`, then a bend grip, then the stroke within
+    /// `tolerance` (a new node there), then a frame grip. nil when it
+    /// reaches none of them; the body may still take the press as a move.
+    public func drawPress(at p: CGPoint, radius: CGFloat, tolerance: CGFloat,
+                          minExtent: CGFloat, rotateOffset: CGFloat) -> DrawPress? {
+        let grip = handle(at: p, radius: radius, minExtent: minExtent, rotateOffset: rotateOffset, set: .drawing)
+        if let grip, !grip.isFrame { return .grip(grip) }
+        if kind.insertsNodes, let (a, i, t) = insertingNodeSplit(near: p, within: tolerance) {
+            return .insert(a, node: i, t: t)
+        }
+        return grip.map { .grip($0) }
+    }
+}
+
+/// a Draw Tool press on its selection: a grip to drag, or a node the press
+/// adds to the stroke (the Annotation with it, its index, and the split's t)
+public enum DrawPress: Equatable, Sendable {
+    case grip(SelectionHandle)
+    case insert(Annotation, node: Int, t: CGFloat)
 }
 
 extension SelectionHandle {
@@ -53,6 +76,17 @@ extension SelectionHandle {
         switch self {
         case .resize, .rotate: true
         default: false
+        }
+    }
+
+    /// the Draw Tool's press order within reach: anchors, bend grips, any
+    /// other point grip, the frame
+    var drawingRank: Int {
+        switch self {
+        case .vertex: 0
+        case .bend, .segmentBend: 1
+        case .resize, .rotate: 3
+        default: 2
         }
     }
 }

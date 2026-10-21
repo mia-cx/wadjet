@@ -51,17 +51,21 @@ struct DirectSelectTests {
     }
 
     // Proves bezier handles show only on selected anchors and their
-    // neighbours, and anchors draw filled only once selected
+    // neighbours, and anchors draw filled only once selected (every
+    // segment's bend grip shows regardless)
     @Test func handlesOnlyNearSelection() {
+        func tangents(_ c: DirectSelectChrome) -> Set<SelectionHandle> {
+            Set(c.grips.map(\.handle).filter { if case .tangent = $0 { true } else { false } })
+        }
         var s = NodeSelection()
         s.press(AnchorRef(id: Self.curve.id, index: 3), adding: false)
         let chrome = DirectSelectChrome([Self.curve], selection: s, inset: 8)
         #expect(chrome.anchors.map(\.selected) == [false, false, false, true])
-        #expect(Set(chrome.grips.map(\.handle)) == [.tangent(3, outgoing: false)])
+        #expect(tangents(chrome) == [.tangent(3, outgoing: false)])
         s.press(AnchorRef(id: Self.curve.id, index: 0), adding: false)
         let first = DirectSelectChrome([Self.curve], selection: s, inset: 8)
-        #expect(Set(first.grips.map(\.handle)) == [.tangent(0, outgoing: true), .tangent(1, outgoing: false),
-                                                    .tangent(1, outgoing: true)])
+        #expect(tangents(first) == [.tangent(0, outgoing: true), .tangent(1, outgoing: false),
+                                       .tangent(1, outgoing: true)])
     }
 
     // Proves moving selected anchors carries their handles and leaves the

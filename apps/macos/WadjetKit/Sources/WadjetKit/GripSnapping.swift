@@ -3,7 +3,7 @@ import CoreGraphics
 extension Annotation {
     /// a grip drag that snaps: a resize or vertex grip follows the pointer's delta
     /// from `from` (an off-centre press doesn't jump) and snaps only along the
-    /// screen axes it can move; `.rotate`, `.bend`, `.tangent`, and `.cornerRadius` are unsnapped.
+    /// screen axes it can move; `.rotate`, `.bend`, `.segmentBend`, `.tangent`, and `.cornerRadius` are unsnapped.
     /// `stretch` (⇧) frees an image kind from its aspect ratio. Returns the
     /// result and the guides it reached.
     public func dragging(_ handle: SelectionHandle, from: CGPoint, to: CGPoint, stretch: Bool = false,
@@ -11,7 +11,7 @@ extension Annotation {
                          targets: [SnapTarget], range: CGFloat, skip: Bool)
         -> (annotation: Annotation, guides: [SnapGuide]) {
         switch handle {
-        case .rotate, .bend, .tangent, .cornerRadius:
+        case .rotate, .bend, .segmentBend, .tangent, .cornerRadius:
             return (dragging(handle, from: from, to: to, stretch: stretch), [])
         default: break
         }

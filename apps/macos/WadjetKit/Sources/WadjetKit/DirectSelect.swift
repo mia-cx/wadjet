@@ -226,7 +226,7 @@ extension AnnotationKind {
 /// What Direct Select draws and takes presses on, from the Annotations whose
 /// anchors show: hollow anchors, filled once selected; bezier handles only
 /// on selected anchors and their neighbours (Illustrator's rule); a Line's
-/// bend grip; a rectangle's corner-radius widget.
+/// bend grip and one on each path segment; a rectangle's corner-radius widget.
 public struct DirectSelectChrome: Sendable {
     public struct Anchor: Sendable {
         public let ref: AnchorRef
@@ -248,7 +248,8 @@ public struct DirectSelectChrome: Sendable {
     public let anchors: [Anchor]
     public let grips: [Grip]
 
-    /// `inset` keeps the corner widget clear of its corner anchor, in screen points
+    /// `inset` keeps the corner widget clear of its corner anchor, and a
+    /// segment's bend grip as far from its anchors, in screen points
     public init(_ annotations: [Annotation], selection: NodeSelection, inset: CGFloat) {
         var anchors: [Anchor] = [], grips: [Grip] = []
         for id in selection.shown {
@@ -263,6 +264,10 @@ public struct DirectSelectChrome: Sendable {
                 let mid = b ?? CGPoint(x: (s.x + e.x) / 2, y: (s.y + e.y) / 2)
                 grips.append(Grip(id: id, handle: .bend, at: mid.applying(m), stem: nil))
             case .path, .shape:
+                // a path's segments; a Shape's sides get none until it is a path
+                for g in a.segmentBendGrips(spacing: inset) {
+                    grips.append(Grip(id: id, handle: g.handle, at: g.at, stem: nil))
+                }
                 let data: PathData
                 if case let .path(d) = a.kind { data = d }
                 else if case let .shape(k, r) = a.kind { data = PathData(outline: k.path(in: r)) }
@@ -295,11 +300,14 @@ public struct DirectSelectChrome: Sendable {
     }
 
     /// the anchor or grip nearest `p` within `radius`; an anchor wins a tie
-    /// with a grip sitting on it, so a collapsed handle never hides its node
+    /// with a grip sitting on it, so a collapsed handle never hides its node.
+    /// A bend grip takes the press only when no anchor or other grip is in reach.
     public func hit(at p: CGPoint, radius: CGFloat) -> Hit? {
         func d(_ q: CGPoint) -> CGFloat { hypot(q.x - p.x, q.y - p.y) }
         let a = anchors.map { (Hit.anchor($0.ref), d($0.at)) }
-        let g = grips.map { (Hit.grip($0.id, $0.handle), d($0.at)) }
-        return (a + g).filter { $0.1 <= radius }.min { $0.1 < $1.1 }?.0
+        let g = grips.filter { !$0.handle.isBend }.map { (Hit.grip($0.id, $0.handle), d($0.at)) }
+        let b = grips.filter(\.handle.isBend).map { (Hit.grip($0.id, $0.handle), d($0.at)) }
+        return ((a + g).filter { $0.1 <= radius }.min { $0.1 < $1.1 }
+            ?? b.filter { $0.1 <= radius }.min { $0.1 < $1.1 })?.0
     }
 }
