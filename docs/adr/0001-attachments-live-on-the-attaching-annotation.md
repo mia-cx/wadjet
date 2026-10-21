@@ -14,6 +14,10 @@ A spot is either a position in the target's untransformed bounds, normalised 0â€
 
 A Line's or path's end can also attach loosely, as tldraw's imprecise binding does: the attachment is marked `loose` and its spot is the target's centre. The re-solve aims the end from its neighbouring point (the Line's other end, or the path's next node) at that centre and stops it where it crosses the target's outline. It aims from the neighbour, not from a Line's bend, because the bend is re-solved from the ends and the two would never settle.
 
+An end dropped inside an Annotation that has an inside attaches loosely unless it lands on one of the highlighted spots. Its outline snaps an end to an exact spot only from outside, so a small Text, whose inside is all within snapping distance of its edge, still takes a loose end.
+
+An exact end on an Annotation with an inside wraps around it, as Excalidraw's and tldraw's arrows do. The end keeps its spot while the segment from its neighbour (chosen as for a loose end) to the spot stays outside the target. Once that segment would cut into the target, the end slides along the outline toward the facing point: the first place where a line from the neighbour, aimed at the focus halfway between the target's centre and the spot, meets the outline. It reaches the facing point once the segment to the spot would reach 6 pt inside. Short of that it sits partway, so the end slides instead of jumping when a flat edge holding the spot turns away all at once. The focus keeps the end on the spot's side of the target, as Excalidraw's focus does. The re-solve computes this from the stored spot every time and never rewrites the attachment, so turning the target back returns the end to its spot. An end whose neighbour is inside the target, or attached to it, keeps its spot, because there is no outside to come from.
+
 ## Consequences
 
 - An attachment that would close a cycle is refused. A file with a cycle (only a hand edit can make one) loads with the closing attachment dropped.
