@@ -148,7 +148,7 @@ extension Annotation {
     /// The centre lands exactly where the scale takes it. A negative scale
     /// mirrors the Annotation on screen as Flip does. A Line or path at an
     /// angle the scale would skew takes the scale into its points exactly,
-    /// upright afterwards, as Illustrator bakes a group scale into its paths.
+    /// keeping its rotation, as Illustrator bakes a group scale into its paths.
     /// Any other kind scales along its own axes: exactly when it's upright,
     /// quarter-turned, or scaled evenly; otherwise by how much each of its
     /// axes stretches, since a box can't skew. Kinds that keep their aspect
@@ -158,15 +158,18 @@ extension Annotation {
         let target = CGPoint(x: anchor.x + (c.x - anchor.x) * sx, y: anchor.y + (c.y - anchor.y) * sy)
         let r = kind.transforms ? transform.rotation : 0
         if kind.isPoints, abs(sx) != abs(sy), abs(sin(2 * r)) > 1e-9 {
-            // the screen-space scale applied to the drawn points: exact, skew included
-            let m = affineTransform
+            // the screen-space scale applied to the drawn points, then taken
+            // back into geometry under the same rotation and flips: exact,
+            // skew included, and a whole follower's frame doesn't jump
+            let m = affineTransform, inv = m.inverted()
+            let s = CGAffineTransform(translationX: anchor.x, y: anchor.y)
+                .scaledBy(x: sx, y: sy).translatedBy(x: -anchor.x, y: -anchor.y)
             var a = self
-            a.transform = .identity
-            a.kind = kind.mapPoints {
-                let p = $0.applying(m)
-                return CGPoint(x: anchor.x + (p.x - anchor.x) * sx, y: anchor.y + (p.y - anchor.y) * sy)
-            }
-            return a
+            a.kind = kind.mapPoints { $0.applying(m).applying(s).applying(inv) }
+            // the bounds centre is the pivot and it moved: pin one point back
+            guard let p0 = kind.points.first, let g0 = a.kind.points.first else { return a }
+            let want = p0.applying(m).applying(s), now = g0.applying(a.affineTransform)
+            return a.moved(by: CGVector(dx: want.x - now.x, dy: want.y - now.y))
         }
         // the lengths the scale gives the Annotation's own unit axes
         var lx = hypot(sx * cos(r), sy * sin(r)), ly = hypot(sx * sin(r), sy * cos(r))

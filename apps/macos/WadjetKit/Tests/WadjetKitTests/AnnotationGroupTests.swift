@@ -88,16 +88,35 @@ struct AnnotationGroupTests {
 
     // Proves a rotated Line in a non-proportional group resize skews exactly,
     // as Illustrator's does: its drawn ends land where the screen-space scale
-    // puts them, and it comes out upright.
+    // puts them, and it keeps its rotation so what follows it doesn't jump.
     @Test func resizeSkewsLines() {
-        var line = Annotation(kind: .line(start: CGPoint(x: 0, y: 0), end: CGPoint(x: 10, y: 0)), style: Self.style)
+        var line = Annotation(kind: .line(start: CGPoint(x: 0, y: 0), end: CGPoint(x: 10, y: 0),
+                                          bend: CGPoint(x: 5, y: 4)), style: Self.style)
         line.transform.rotation = .pi / 4
-        let ends = [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0)].map { $0.applying(line.affineTransform) }
+        let pts = [CGPoint(x: 0, y: 0), CGPoint(x: 10, y: 0), CGPoint(x: 5, y: 4)]
+        let want = pts.map { $0.applying(line.affineTransform) }.map { CGPoint(x: $0.x * 2, y: $0.y) }
         let r = AnnotationGroup.scaled([line], x: 2, y: 1, about: .zero)[0]
-        guard case let .line(start, end, _) = r.kind else { Issue.record("not a line"); return }
-        #expect(r.transform == .identity)
-        #expect(near(start.x, ends[0].x * 2) && near(start.y, ends[0].y))
-        #expect(near(end.x, ends[1].x * 2) && near(end.y, ends[1].y))
+        guard case let .line(start, end, bend?) = r.kind else { Issue.record("not a bent line"); return }
+        let got = [start, end, bend].map { $0.applying(r.affineTransform) }
+        #expect(near(r.transform.rotation, .pi / 4))
+        #expect(zip(got, want).allSatisfy { near($0.x, $1.x) && near($0.y, $1.y) })
+    }
+
+    // Proves a whole follower of a rotated Line stays put when a group resize
+    // barely skews the Line: the follower's frame doesn't jump.
+    @Test func skewKeepsWholeFollower() {
+        var line = Annotation(kind: .line(start: CGPoint(x: 0, y: 0), end: CGPoint(x: 100, y: 0)), style: Self.style)
+        line.transform.rotation = .pi / 4
+        let label = Self.rect(CGRect(x: 45, y: 15, width: 10, height: 10))
+        var stack = LayerStack([line, label, Self.left])
+        let attached = stack.attach(label.id, .whole, to: line.id, at: .segment(0, t: 0.5))
+        #expect(attached)
+        let before = stack.annotations[1].frameCorners
+        let members = AnnotationGroup.scaled([stack.annotations[0], stack.annotations[2]],
+                                             x: 1.000001, y: 1, about: .zero)
+        stack.replaceGroup(members)
+        let after = stack.annotations[1].frameCorners
+        #expect(zip(before, after).allSatisfy { hypot($0.x - $1.x, $0.y - $1.y) < 0.01 })
     }
 
     // Proves a rotated Annotation in a proportional resize keeps its rotation
