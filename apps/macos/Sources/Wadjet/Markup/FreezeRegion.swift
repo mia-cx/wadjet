@@ -95,7 +95,7 @@ extension OverlayController {
             for ov in p.contentView?.subviews.compactMap({ $0 as? OverlayNSView }) ?? [] {
                 ov.sel = nil; ov.dragStart = nil; ov.hoverWin = nil
                 ov.confirming = false; ov.selOp = nil
-                ov.confirmHost?.removeFromSuperview(); ov.confirmHost = nil
+                ov.hideConfirmChrome()
                 ov.needsDisplay = true
             }
         }
