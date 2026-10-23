@@ -11,24 +11,24 @@
     "start": "node dist/node.js"
   },
   "dependencies": {
-    "@hono/node-server": "2.1.4",
+    "@hono/node-server": "2.1.5",
     "@wadjet/protocol": "workspace:*",
     "aws4fetch": "1.0.20",
     "better-sqlite3": "13.0.3",
     "drizzle-orm": "0.45.4",
-    "effect": "4.0.2",
+    "effect": "4.0.5",
     "hono": "4.13.13",
     "pg": "8.23.1"
   },
   "devDependencies": {
-    "@cloudflare/vitest-plugin": "1.4.0",
-    "@cloudflare/workers-types": "5.20261010.1",
+    "@cloudflare/vitest-plugin": "1.4.3",
+    "@cloudflare/workers-types": "5.20261016.1",
     "@types/better-sqlite3": "9.6.0",
     "@types/node": "24.19.2",
     "@types/pg": "8.23.1",
     "drizzle-kit": "0.31.11",
     "typescript": "7.0.2",
-    "vitest": "5.0.3",
-    "wrangler": "4.149.0"
+    "vitest": "5.0.5",
+    "wrangler": "4.151.0"
   }
 }
