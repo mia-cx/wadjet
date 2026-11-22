@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "$schema": "./node_modules/@biomejs/biome/configuration_schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -17,6 +17,7 @@
   },
   "formatter": {
     "enabled": true,
+    "includes": ["**", "!**/*.{md,yaml,yml}"],
     "indentStyle": "space",
     "indentWidth": 2,
     "lineWidth": 100
