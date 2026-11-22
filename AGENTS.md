@@ -1,5 +1,7 @@
 # wadjet
 
+The README and CONTRIBUTING.md carry the 0rwx AI:W disclosure.
+
 ## Building and testing the app
 
 - Build through `apps/macos/run.sh`, not Xcode's Run button or a bare `xcodebuild`: macOS ties the Screen Recording grant to the bundle's signing identity, and only run.sh signs with Apple Development (the project defaults to ad-hoc). An ad-hoc build re-prompts every time.
