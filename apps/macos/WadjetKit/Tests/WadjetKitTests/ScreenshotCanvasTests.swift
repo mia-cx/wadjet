@@ -201,7 +201,7 @@ struct ScreenshotCanvasTests {
         let save = Step.saveFile(folder: nil, format: .canvas)
         let workflow = Workflow(name: "Canvas", takes: .screenshot, steps: [save, .copyImage, save, .pin, .showToast, .copyFile])
         var events: [RunEvent] = []
-        for await event in WorkflowRunner(effects: effects).run(file, through: workflow, defaultFolder: directory, canvas: packageURL) {
+        for await event in WorkflowRunner(effects: effects).run(file, through: workflow, defaultFolder: directory, canvas: Task { packageURL }) {
             events.append(event)
         }
         let first = directory.appendingPathComponent("Screenshot.wadjet")

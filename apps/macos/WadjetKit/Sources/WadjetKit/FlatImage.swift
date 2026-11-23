@@ -36,16 +36,22 @@ extension CanvasStore {
     /// that is also free in `pairedWith` (the folder Save file copies the image
     /// to), so the Canvas and its saved image pair up. The Editor's Run Workflow
     /// uses it so the new History entry gets its own Canvas.
+    ///
+    /// The image is written before this returns. The package, whose display
+    /// images still need encoding, is written in the background: `package`
+    /// finishes with its URL once it is on disk, so the image can reach the
+    /// clipboard without waiting for it.
     @discardableResult
     public func addScreenshot(_ canvas: CanvasDocument, files: CaptureFiles, scale: CGFloat? = nil,
-                              createdAt: Date, pairedWith: [URL] = []) throws -> (id: UUID, file: URL, package: URL) {
+                              createdAt: Date, pairedWith: [URL] = [])
+        throws -> (id: UUID, file: URL, package: Task<URL, any Error>) {
         let flat = try canvas.flatImage(scale: scale)
         let taken = CaptureName.takenBaseNames(in: [directory, files.directory] + pairedWith)
         let name = CaptureName.unique(CaptureName.base(for: createdAt), isTaken: taken.contains)
         let file = try files.newFile(ext: flat.type.preferredFilenameExtension!, name: name)
         try flat.data.write(to: file, options: .atomic)
         let id = UUID()
-        let package = try add(canvas, for: id, createdAt: createdAt, name: name)
+        let package = Task.detached { try add(canvas, for: id, createdAt: createdAt, name: name) }
         return (id, file, package)
     }
 }

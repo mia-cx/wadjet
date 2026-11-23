@@ -170,7 +170,8 @@ struct WorkflowTests {
         let wf = Workflow(name: "w", takes: .screenshot, steps: [
             .pin, .saveFile(folder: a.path), .pin, .saveFile(folder: b.path, format: .canvas), .pin])
         var last: RunEvent?
-        for await e in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir(), canvas: package) { last = e }
+        for await e in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir(),
+                                                       canvas: Task { package }) { last = e }
         #expect(fx.pinnedCanvases.map { $0?.path } == [package.path, package.path, package.path])
         let saved = a.appendingPathComponent("in.png")
         #expect(fx.files == [file, saved, saved])
@@ -182,6 +183,24 @@ struct WorkflowTests {
         let wf2 = Workflow(name: "w", takes: .screenshot, steps: [.pin])
         for await _ in WorkflowRunner(effects: fx2).run(file, through: wf2, defaultFolder: tempDir()) {}
         #expect(fx2.pinnedCanvases == [nil])
+    }
+
+    // Proves Copy image runs while the Canvas package is still being written,
+    // and Pin waits for the package.
+    @Test(.timeLimit(.minutes(1))) func copyImageDoesNotWaitForTheCanvas() async throws {
+        let file = try mkFile(tempDir())
+        let package = tempDir().appendingPathComponent("shot.wadjet")
+        let (written, write) = AsyncStream<Void>.makeStream()
+        let canvas = Task<URL, any Error> { for await _ in written { break }; return package }
+        let fx = FakeEffects()
+        let wf = Workflow(name: "w", takes: .screenshot, steps: [.copyImage, .pin])
+        for await e in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir(), canvas: canvas) {
+            guard e == .finished(0, .copyImage) else { continue }
+            #expect(fx.order == ["copy"])
+            write.yield()
+        }
+        #expect(fx.order == ["copy", "pin"])
+        #expect(fx.pinnedCanvases == [package])
     }
 
     @Test func newStepsRoundTrip() throws {

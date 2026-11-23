@@ -1011,19 +1011,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var runner = WorkflowRunner(effects: workflowEffects)
 
     /// the Screenshot Workflow for the current Tool, resolved at confirm —
-    /// consumes the Shortcut's one-shot pick
+    /// consumes the Shortcut's one-shot pick. When it copies, the pasteboard is
+    /// emptied now: the Copy Step lands only after the capture is flattened,
+    /// and a paste in between would send the previous image.
     func takeShotWorkflow() -> String {
         let s = AppState.shared
         defer { s.triggerWorkflow = nil }
-        return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+        let name = s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+        if workflow(named: name, takes: .screenshot).steps.contains(where: { $0 == .copyImage || $0 == .copyFile }) {
+            NSPasteboard.general.clearContents()
+            s.lastClipboard = ""
+        }
+        return name
+    }
+    /// the Workflow called `name` for `kind`, else the built-in one for that kind
+    func workflow(named name: String, takes kind: CaptureKind) -> Workflow {
+        AppState.shared.config.value.workflows.first { $0.name == name && $0.takes == kind }
+            ?? WadjetConfig().workflows.first { $0.takes == kind }!
     }
     /// Run a finished capture file through `workflow` (resolved by the caller
     /// at capture time), record it in history, and finish any showToast items.
+    /// `canvas` is the Screenshot's package write, still running.
     func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String,
-                    runID: UUID = UUID(), capturedAt: Date = Date(), canvas: URL? = nil) {
+                    runID: UUID = UUID(), capturedAt: Date = Date(), canvas: Task<URL, any Error>? = nil) {
         let state = AppState.shared
-        let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
-            ?? WadjetConfig().workflows.first { $0.takes == kind }!
+        let wf = self.workflow(named: workflow, takes: kind)
         // Screenshot images go to flattened/, beside their Canvases in original/
         let folders = screenshotFolders
         let defaultFolder = kind.isRecording ? expandingTilde(state.config.value.folders.recordings) : folders.flattened
@@ -4362,7 +4374,8 @@ struct MenuTile: View {
 @MainActor
 final class AppWorkflowEffects: WorkflowEffects {
     let toast: ToastController
-    var canvases: [UUID: URL] = [:]
+    /// each run's Canvas package write, for Copy image's wadjet-only types
+    var canvases: [UUID: Task<URL, any Error>] = [:]
     init(toast: ToastController) { self.toast = toast }
 
     func copyImage(_ file: URL, run: UUID) async throws {
@@ -4406,7 +4419,9 @@ final class AppWorkflowEffects: WorkflowEffects {
     func showToast(_ file: URL, run: UUID) async throws {
         let img = await captureThumbnail(file, maxPixels: 400)
         let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent,
-                                     url: file, duration: nil, canvas: canvases[run]))
+                                     url: file, duration: nil))
+        // the Canvas link follows its package write; a failed write is logged by writeScreenshot
+        if let canvas = canvases[run] { Task { t.cap.canvas = try? await canvas.value } }
         t.title = "Captured"
         toast.items.insert(t, at: 0)
         toast.relayout()

@@ -61,9 +61,10 @@ struct ScreenshotFoldersTests {
             if case let .done(urls, _) = event { saved = urls }
         }
         let base = "\(CaptureName.base(for: created)) 2"
-        #expect(shot.package.path == folders.original.appendingPathComponent("\(base).wadjet").path)
+        let package = try await shot.package.value
+        #expect(package.path == folders.original.appendingPathComponent("\(base).wadjet").path)
         #expect(saved.map(\.path) == [folders.flattened.appendingPathComponent("\(base).png").path])
-        #expect(try store.url(for: shot.id)?.path == shot.package.path)
+        #expect(try store.url(for: shot.id)?.path == package.path)
     }
 
     // Proves migration moves container Canvases into original/ by capture date,
@@ -147,7 +148,7 @@ struct ScreenshotFoldersTests {
 
         #expect(try await store.sweep().map(\.actions) == [[.delete]])
         #expect(try store.url(for: shot.id) == nil)
-        #expect(!FileManager.default.fileExists(atPath: shot.package.path))
+        #expect(!FileManager.default.fileExists(atPath: try await shot.package.value.path))
         for url in saved { #expect(FileManager.default.fileExists(atPath: url.path)) }
         #expect(try await store.sweep().isEmpty)
     }
