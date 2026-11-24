@@ -1,5 +1,11 @@
 # @wadjet/macos
 
+## 0.0.1-alpha.3
+
+### Patch Changes
+
+- 86b5993: A Screenshot that copies to the clipboard clears it the moment you confirm, so pasting too early can no longer send the previous image.
+
 ## 0.0.1-alpha.2
 
 ### Patch Changes
