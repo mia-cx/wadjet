@@ -56,7 +56,7 @@ struct CanvasStoreTests {
             steps: [.saveFile(folder: nil, format: .canvas)])
         var events: [RunEvent] = []
         for await event in WorkflowRunner(effects: FakeEffects()).run(image, through: workflow,
-            defaultFolder: savedDirectory, canvas: hostURL) { events.append(event) }
+            defaultFolder: savedDirectory, canvas: Task { hostURL }) { events.append(event) }
         guard case let .done(saved, errors) = events.last else { Issue.record("no completion"); return }
         #expect(errors.isEmpty)
         let savedURL = try #require(saved.first)
@@ -383,7 +383,7 @@ struct CanvasStoreTests {
     // Proves Run Workflow's new entry is independent: its own ID and package,
     // holding the Editor's changes while the source Canvas keeps none, with the
     // flattened PNG on disk at crop × outputScale pixels.
-    @Test func runWorkflowFilesTheEditedCanvasAsItsOwnEntry() throws {
+    @Test func runWorkflowFilesTheEditedCanvasAsItsOwnEntry() async throws {
         let root = temporaryCanvasDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = CanvasStore(directory: root.appendingPathComponent("Canvases"))
@@ -400,7 +400,8 @@ struct CanvasStoreTests {
             style: .init(colour: .init(red: 1, green: 0, blue: 0, alpha: 1), width: 2))])
         let shot = try store.addScreenshot(edited, files: files, createdAt: Date())
 
-        #expect(shot.id != sourceID && shot.package != sourcePackage)
+        let package = try await shot.package.value
+        #expect(shot.id != sourceID && package != sourcePackage)
         #expect(try store.canvas(for: shot.id)?.layerStack.annotations.count == 1)
         #expect(try store.canvas(for: sourceID)?.layerStack.annotations.isEmpty == true)
         #expect(shot.file.pathExtension == "png")

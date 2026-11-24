@@ -87,6 +87,7 @@ extension AppDelegate {
                 let package = try writeScreenshot(canvas, scale: scale, capturedAt: capturedAt, clear: clear,
                     label: "\(tool.title) \(Int(rect.width))×\(Int(rect.height))", workflow: workflow)
                 if keepWindows {
+                    let package = try await package.value
                     let written = Int(Date().timeIntervalSince(writing) * 1000)
                     func mb(_ bytes: Int) -> String { String(format: "%.1f", Double(bytes) / 1_000_000) }
                     let decoded = canvas.windowLayers.reduce(0) { $0 + $1.image.bytesPerRow * $1.image.height }
@@ -98,11 +99,13 @@ extension AppDelegate {
         }
     }
 
-    /// Writes both outputs before Clear after Screenshot can discard the editable
-    /// layers. Returns the Canvas package's URL in the store.
+    /// Flattens the Screenshot and starts its Workflow at once, so Copy image
+    /// never waits on the Canvas package; the package writes in the background.
+    /// `canvas` is a snapshot, so Clear after Screenshot can't reach it.
+    /// Returns the package write, which finishes with its URL in the store.
     @discardableResult
     func writeScreenshot(_ canvas: CanvasDocument, scale: CGFloat, capturedAt: Date, clear: Bool,
-                         label: String, workflow: String) throws -> URL {
+                         label: String, workflow: String) throws -> Task<URL, any Error> {
         let shot = try canvasStore.addScreenshot(canvas, files: captureFiles, scale: scale,
             createdAt: capturedAt, pairedWith: [screenshotFolders.flattened])
         if clear { clearAnnotations() }

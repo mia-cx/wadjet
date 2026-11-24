@@ -21,7 +21,7 @@ public struct CanvasDisplay: Codable, Equatable, Sendable {
 /// A nil `id` is a backdrop layer (old Canvases and the standalone Capture
 /// Window image), drawn beneath every Annotation by zOrder as before; a
 /// non-nil `id` draws only through the `.window` Annotation naming it.
-public struct CanvasWindowLayer {
+public struct CanvasWindowLayer: Sendable {
     public var frame: CGRect
     public var zOrder: Int
     public var imageFileName: String
@@ -61,7 +61,7 @@ public struct CanvasLink: Codable, Hashable, Sendable {
 /// All geometry is in AppKit global points, including Annotations outside the crop.
 /// The app must export this identifier with `com.apple.package` and
 /// `public.composite-content` conformance in its exported type declaration.
-public struct CanvasDocument {
+public struct CanvasDocument: Sendable {
     public static let contentType = UTType(exportedAs: "cx.mia.wadjet.canvas", conformingTo: .package)
     public static let version = 1
 

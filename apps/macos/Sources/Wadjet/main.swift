@@ -1011,33 +1011,53 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var runner = WorkflowRunner(effects: workflowEffects)
 
     /// the Screenshot Workflow for the current Tool, resolved at confirm —
-    /// consumes the Shortcut's one-shot pick
+    /// consumes the Shortcut's one-shot pick. When it copies, the pasteboard is
+    /// emptied now: the Copy Step lands only after the capture is flattened,
+    /// and a paste in between would send the previous image.
     func takeShotWorkflow() -> String {
         let s = AppState.shared
         defer { s.triggerWorkflow = nil }
-        return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+        let name = s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+        if workflow(named: name, takes: .screenshot).steps.contains(where: { $0 == .copyImage || $0 == .copyFile }) {
+            NSPasteboard.general.clearContents()
+            s.lastClipboard = ""
+        }
+        return name
+    }
+    /// the Workflow called `name` for `kind`, else the built-in one for that kind
+    func workflow(named name: String, takes kind: CaptureKind) -> Workflow {
+        AppState.shared.config.value.workflows.first { $0.name == name && $0.takes == kind }
+            ?? WadjetConfig().workflows.first { $0.takes == kind }!
     }
     /// Run a finished capture file through `workflow` (resolved by the caller
     /// at capture time), record it in history, and finish any showToast items.
+    /// `canvas` is the Screenshot's package write, still running.
     func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String,
-                    runID: UUID = UUID(), capturedAt: Date = Date(), canvas: URL? = nil) {
+                    runID: UUID = UUID(), capturedAt: Date = Date(), canvas: Task<URL, any Error>? = nil) {
         let state = AppState.shared
-        let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
-            ?? WadjetConfig().workflows.first { $0.takes == kind }!
+        let wf = self.workflow(named: workflow, takes: kind)
         // Screenshot images go to flattened/, beside their Canvases in original/
         let folders = screenshotFolders
         let defaultFolder = kind.isRecording ? expandingTilde(state.config.value.folders.recordings) : folders.flattened
         workflowEffects.canvases[runID] = canvas
+        runsInFlight.insert(runID)
         AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
         Task { @MainActor in
+            defer { finishRun(runID) }
             for await e in runner.run(file, through: wf, defaultFolder: defaultFolder,
                                       canvasFolder: folders.root, id: runID, canvas: canvas) {
                 switch e {
                 case .started(let i, let s): AppLog.line("workflow \(wf.name): started \(i) \(s.title)")
                 case .finished(let i, let s): AppLog.line("workflow \(wf.name): finished \(i) \(s.title)")
                 case .failed(let i, _, let m): AppLog.line("workflow \(wf.name): failed \(i) \(m)")
-                case .done(let saved, let errors):
-                    AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)")
+                case .done(let saved, var errors):
+                    // the run is finished once its Canvas is on disk too, so
+                    // History and the toast never point at a package still
+                    // writing, and a failed write reports like a failed Step
+                    do { _ = try await canvas?.value } catch {
+                        errors.append("Canvas: \(error.localizedDescription)")
+                    }
+                    AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)\(errors.isEmpty ? "" : " — \(errors.joined(separator: "; "))")")
                     let entry: HistoryEntry?
                     do {
                         entry = try self.history?.record(
@@ -1072,6 +1092,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+    }
+
+    /// Workflow runs still going. A Screenshot's Canvas writes in the
+    /// background and History records it at the run's end, so Quit waits for
+    /// them, up to `quitGrace`, in case a Step never returns.
+    var runsInFlight: Set<UUID> = []
+    private var quitPending = false
+    private static let quitGrace: Duration = .seconds(10)
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !runsInFlight.isEmpty else { return .terminateNow }
+        AppLog.line("quit: waiting for \(runsInFlight.count) Workflow run(s)")
+        quitPending = true
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.quitGrace)
+            guard quitPending else { return }
+            AppLog.line("quit: \(runsInFlight.count) Workflow run(s) still going after \(Self.quitGrace); quitting")
+            quitPending = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    private func finishRun(_ id: UUID) {
+        runsInFlight.remove(id)
+        guard quitPending, runsInFlight.isEmpty else { return }
+        quitPending = false
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     // MARK: recording
@@ -4362,7 +4410,8 @@ struct MenuTile: View {
 @MainActor
 final class AppWorkflowEffects: WorkflowEffects {
     let toast: ToastController
-    var canvases: [UUID: URL] = [:]
+    /// each run's Canvas package write, for Copy image's wadjet-only types
+    var canvases: [UUID: Task<URL, any Error>] = [:]
     init(toast: ToastController) { self.toast = toast }
 
     func copyImage(_ file: URL, run: UUID) async throws {
@@ -4439,8 +4488,9 @@ func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
 
 struct Capture {
     let thumb: CGImage?; let label: String; var url: URL?; let duration: TimeInterval?
-    /// the capture's editable Canvas package — a Screenshot toast opens it in the Editor
-    var canvas: URL? = nil
+    /// the capture's editable Canvas package, still writing when the toast
+    /// appears — a Screenshot toast opens it in the Editor once it lands
+    var canvas: Task<URL, any Error>? = nil
     var kindShot: Bool { duration == nil }
 }
 
@@ -4683,12 +4733,16 @@ struct ToastView: View {
             }
         }
     }
-    /// a Screenshot's Canvas opens in the Editor; anything else opens its file
+    /// a Screenshot's Canvas opens in the Editor, once its package is written;
+    /// anything else, or a Canvas that failed to write, opens its file
     func open() {
-        if let u = item.cap.canvas, FileManager.default.fileExists(atPath: u.path) {
-            AppDelegate.shared?.openCanvas(u)
-        } else if let u = item.cap.url {
-            NSWorkspace.shared.open(u)
+        let canvas = item.cap.canvas, file = item.cap.url
+        Task {
+            if let u = try? await canvas?.value, FileManager.default.fileExists(atPath: u.path) {
+                AppDelegate.shared?.openCanvas(u)
+            } else if let file {
+                NSWorkspace.shared.open(file)
+            }
         }
     }
     func retry() {

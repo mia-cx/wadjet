@@ -157,9 +157,10 @@ public struct WorkflowRunner: Sendable {
     public init(effects: any WorkflowEffects) { self.effects = effects }
     /// `defaultFolder` takes Save file's images; `canvasFolder`, when given,
     /// takes its Canvases (a Screenshot's image goes to `flattened/`, a saved
-    /// Canvas to the screenshots folder itself).
+    /// Canvas to the screenshots folder itself). `canvas` is the package still
+    /// being written: only Save Canvas and Pin wait for it.
     public func run(_ file: URL, through workflow: Workflow, defaultFolder: URL, canvasFolder: URL? = nil,
-                    id: UUID = UUID(), canvas: URL? = nil) -> AsyncStream<RunEvent> {
+                    id: UUID = UUID(), canvas: Task<URL, any Error>? = nil) -> AsyncStream<RunEvent> {
         AsyncStream { continuation in
             Task {
                 var saved: [URL] = [], errors: [String] = []
@@ -173,7 +174,7 @@ public struct WorkflowRunner: Sendable {
                             if format == .canvas {
                                 let directory = folder.map { expandingTilde($0) } ?? canvasFolder ?? defaultFolder
                                 guard let canvas else { throw CanvasDocumentError.invalidPackage("Screenshot has no Canvas") }
-                                saved.append(try Self.save(canvas, into: directory,
+                                saved.append(try Self.save(try await canvas.value, into: directory,
                                     name: file.deletingPathExtension().lastPathComponent + ".wadjet", preserveCanvasLinks: true))
                             } else {
                                 let directory = folder.map { expandingTilde($0) } ?? defaultFolder
@@ -183,7 +184,8 @@ public struct WorkflowRunner: Sendable {
                         case .copyImage: try await effects.copyImage(currentImage, run: id)
                         case .copyFile: try await effects.copyFile(current, run: id)
                         case .openIn(let app): try await effects.open(current, app: app, run: id)
-                        case .pin: try await effects.pin(currentImage, canvas: canvas, run: id)
+                        // a failed package write pins the image; the caller reports that failure
+                        case .pin: try await effects.pin(currentImage, canvas: try? await canvas?.value, run: id)
                         case .showToast: try await effects.showToast(currentImage, run: id)
                         }
                         continuation.yield(.finished(i, step))
