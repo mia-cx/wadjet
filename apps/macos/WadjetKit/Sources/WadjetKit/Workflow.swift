@@ -184,7 +184,8 @@ public struct WorkflowRunner: Sendable {
                         case .copyImage: try await effects.copyImage(currentImage, run: id)
                         case .copyFile: try await effects.copyFile(current, run: id)
                         case .openIn(let app): try await effects.open(current, app: app, run: id)
-                        case .pin: try await effects.pin(currentImage, canvas: try await canvas?.value, run: id)
+                        // a failed package write pins the image; the caller reports that failure
+                        case .pin: try await effects.pin(currentImage, canvas: try? await canvas?.value, run: id)
                         case .showToast: try await effects.showToast(currentImage, run: id)
                         }
                         continuation.yield(.finished(i, step))

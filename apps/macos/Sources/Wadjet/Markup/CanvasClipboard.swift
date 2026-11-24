@@ -22,7 +22,10 @@ enum CanvasClipboard {
                 let url = try await canvas.value
                 let package = try await Task.detached { try CanvasDocument.read(from: url).serializedPackage() }.value
                 let pasteboard = NSPasteboard.general
-                guard pasteboard.changeCount == copied else { return }
+                guard pasteboard.changeCount == copied else {
+                    AppLog.line("copy image: clipboard changed before the Canvas landed; image only")
+                    return
+                }
                 pasteboard.addTypes([packageType, linkType], owner: nil)
                 pasteboard.setData(package, forType: packageType)
                 pasteboard.setString(url.absoluteString, forType: linkType)

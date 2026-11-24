@@ -203,6 +203,18 @@ struct WorkflowTests {
         #expect(fx.pinnedCanvases == [package])
     }
 
+    // Proves a failed Canvas package write still pins the image, without a Step error.
+    @Test func pinFallsBackToTheImageWhenTheCanvasFails() async throws {
+        let file = try mkFile(tempDir())
+        let canvas = Task<URL, any Error> { throw CocoaError(.fileWriteOutOfSpace) }
+        let fx = FakeEffects()
+        let wf = Workflow(name: "w", takes: .screenshot, steps: [.pin])
+        var last: RunEvent?
+        for await e in WorkflowRunner(effects: fx).run(file, through: wf, defaultFolder: tempDir(), canvas: canvas) { last = e }
+        #expect(fx.pinnedCanvases == [nil])
+        #expect(last == .done(saved: [], errors: []))
+    }
+
     @Test func newStepsRoundTrip() throws {
         let steps: [Step] = [.copyFile, .openIn(app: "com.apple.Preview"), .openIn(app: nil), .pin]
         let back = try JSONDecoder().decode([Step].self, from: JSONEncoder().encode(steps))
