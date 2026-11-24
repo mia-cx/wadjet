@@ -951,11 +951,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     lazy var runner = WorkflowRunner(effects: AppWorkflowEffects(toast: toastCtrl))
 
     /// the Screenshot Workflow for the current Tool, resolved at confirm —
-    /// consumes the Shortcut's one-shot pick
+    /// consumes the Shortcut's one-shot pick. When it copies, the pasteboard is
+    /// emptied now: the Copy Step lands only after encode and save, and a paste
+    /// in between would send the previous image.
     func takeShotWorkflow() -> String {
         let s = AppState.shared
         defer { s.triggerWorkflow = nil }
-        return s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+        let name = s.workflowFor(s.tool) ?? s.config.value.defaultWorkflows.screenshot
+        if workflow(named: name, takes: .screenshot).steps.contains(where: { $0 == .copyImage || $0 == .copyFile }) {
+            NSPasteboard.general.clearContents()
+            s.lastClipboard = ""
+        }
+        return name
+    }
+    /// the Workflow called `name` for `kind`, else the built-in one for that kind
+    func workflow(named name: String, takes kind: CaptureKind) -> Workflow {
+        AppState.shared.config.value.workflows.first { $0.name == name && $0.takes == kind }
+            ?? WadjetConfig().workflows.first { $0.takes == kind }!
     }
     // Screenshots write a temp file, then run the Workflow picked for the Tool —
     // the Steps do the rest (save, copy, toast). Recordings pass their finished MP4.
@@ -982,8 +994,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     /// at capture time), record it in history, and finish any showToast items.
     func runCapture(file: URL, kind: CaptureKind, label: String, workflow: String) {
         let state = AppState.shared
-        let wf = state.config.value.workflows.first { $0.name == workflow && $0.takes == kind }
-            ?? WadjetConfig().workflows.first { $0.takes == kind }!
+        let wf = self.workflow(named: workflow, takes: kind)
         let defaultFolder = expandingTilde(kind.isRecording
             ? state.config.value.folders.recordings
             : state.config.value.folders.screenshots)
