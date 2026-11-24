@@ -1040,8 +1040,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         let folders = screenshotFolders
         let defaultFolder = kind.isRecording ? expandingTilde(state.config.value.folders.recordings) : folders.flattened
         workflowEffects.canvases[runID] = canvas
+        runsInFlight.insert(runID)
         AppLog.line("workflow \(wf.name): \(file.lastPathComponent)")
         Task { @MainActor in
+            defer { finishRun(runID) }
             for await e in runner.run(file, through: wf, defaultFolder: defaultFolder,
                                       canvasFolder: folders.root, id: runID, canvas: canvas) {
                 switch e {
@@ -1090,6 +1092,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 }
             }
         }
+    }
+
+    /// Workflow runs still going. A Screenshot's Canvas writes in the
+    /// background and History records it at the run's end, so Quit waits for
+    /// them, up to `quitGrace`, in case a Step never returns.
+    var runsInFlight: Set<UUID> = []
+    private var quitPending = false
+    private static let quitGrace: Duration = .seconds(10)
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard !runsInFlight.isEmpty else { return .terminateNow }
+        AppLog.line("quit: waiting for \(runsInFlight.count) Workflow run(s)")
+        quitPending = true
+        Task { @MainActor in
+            try? await Task.sleep(for: Self.quitGrace)
+            guard quitPending else { return }
+            AppLog.line("quit: \(runsInFlight.count) Workflow run(s) still going after \(Self.quitGrace); quitting")
+            quitPending = false
+            sender.reply(toApplicationShouldTerminate: true)
+        }
+        return .terminateLater
+    }
+
+    private func finishRun(_ id: UUID) {
+        runsInFlight.remove(id)
+        guard quitPending, runsInFlight.isEmpty else { return }
+        quitPending = false
+        NSApp.reply(toApplicationShouldTerminate: true)
     }
 
     // MARK: recording
