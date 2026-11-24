@@ -4419,9 +4419,7 @@ final class AppWorkflowEffects: WorkflowEffects {
     func showToast(_ file: URL, run: UUID) async throws {
         let img = await captureThumbnail(file, maxPixels: 400)
         let t = ToastItem(cap: Capture(thumb: img, label: file.deletingPathExtension().lastPathComponent,
-                                     url: file, duration: nil))
-        // the Canvas link follows its package write; a failed write is logged by writeScreenshot
-        if let canvas = canvases[run] { Task { t.cap.canvas = try? await canvas.value } }
+                                     url: file, duration: nil, canvas: canvases[run]))
         t.title = "Captured"
         toast.items.insert(t, at: 0)
         toast.relayout()
@@ -4454,8 +4452,9 @@ func captureThumbnail(_ file: URL, maxPixels: Int = 64) async -> CGImage? {
 
 struct Capture {
     let thumb: CGImage?; let label: String; var url: URL?; let duration: TimeInterval?
-    /// the capture's editable Canvas package — a Screenshot toast opens it in the Editor
-    var canvas: URL? = nil
+    /// the capture's editable Canvas package, still writing when the toast
+    /// appears — a Screenshot toast opens it in the Editor once it lands
+    var canvas: Task<URL, any Error>? = nil
     var kindShot: Bool { duration == nil }
 }
 
@@ -4698,12 +4697,16 @@ struct ToastView: View {
             }
         }
     }
-    /// a Screenshot's Canvas opens in the Editor; anything else opens its file
+    /// a Screenshot's Canvas opens in the Editor, once its package is written;
+    /// anything else, or a Canvas that failed to write, opens its file
     func open() {
-        if let u = item.cap.canvas, FileManager.default.fileExists(atPath: u.path) {
-            AppDelegate.shared?.openCanvas(u)
-        } else if let u = item.cap.url {
-            NSWorkspace.shared.open(u)
+        let canvas = item.cap.canvas, file = item.cap.url
+        Task {
+            if let u = try? await canvas?.value, FileManager.default.fileExists(atPath: u.path) {
+                AppDelegate.shared?.openCanvas(u)
+            } else if let file {
+                NSWorkspace.shared.open(file)
+            }
         }
     }
     func retry() {
