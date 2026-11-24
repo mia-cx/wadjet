@@ -111,10 +111,6 @@ extension AppDelegate {
         if clear { clearAnnotations() }
         runCapture(file: shot.file, kind: .screenshot, label: label, workflow: workflow,
             runID: shot.id, capturedAt: capturedAt, canvas: shot.package)
-        Task {
-            do { _ = try await shot.package.value }
-            catch { AppLog.line("Screenshot Canvas: package write failed: \(error.localizedDescription)") }
-        }
         return shot.package
     }
 }

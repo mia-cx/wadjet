@@ -1048,8 +1048,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                 case .started(let i, let s): AppLog.line("workflow \(wf.name): started \(i) \(s.title)")
                 case .finished(let i, let s): AppLog.line("workflow \(wf.name): finished \(i) \(s.title)")
                 case .failed(let i, _, let m): AppLog.line("workflow \(wf.name): failed \(i) \(m)")
-                case .done(let saved, let errors):
-                    AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)")
+                case .done(let saved, var errors):
+                    // the run is finished once its Canvas is on disk too, so
+                    // History and the toast never point at a package still
+                    // writing, and a failed write reports like a failed Step
+                    do { _ = try await canvas?.value } catch {
+                        errors.append("Canvas: \(error.localizedDescription)")
+                    }
+                    AppLog.line("workflow \(wf.name): done saved=\(saved.count) errors=\(errors.count)\(errors.isEmpty ? "" : " — \(errors.joined(separator: "; "))")")
                     let entry: HistoryEntry?
                     do {
                         entry = try self.history?.record(
